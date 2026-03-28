@@ -209,12 +209,8 @@ fn read_u32_le(data: &[u8], offset: usize) -> u32 {
 
 fn interpret_value(raw: &[u8], dtype: Option<&DataType>) -> SdoValue {
     match dtype {
-        Some(DataType::Boolean) => {
-            SdoValue::Bool(raw.first().copied().unwrap_or(0) != 0)
-        }
-        Some(DataType::Integer8) => {
-            SdoValue::I8(raw.first().copied().unwrap_or(0) as i8)
-        }
+        Some(DataType::Boolean) => SdoValue::Bool(raw.first().copied().unwrap_or(0) != 0),
+        Some(DataType::Integer8) => SdoValue::I8(raw.first().copied().unwrap_or(0) as i8),
         Some(DataType::Integer16) if raw.len() >= 2 => {
             SdoValue::I16(i16::from_le_bytes([raw[0], raw[1]]))
         }
@@ -225,9 +221,7 @@ fn interpret_value(raw: &[u8], dtype: Option<&DataType>) -> SdoValue {
             let b: [u8; 8] = raw[..8].try_into().unwrap();
             SdoValue::I64(i64::from_le_bytes(b))
         }
-        Some(DataType::Unsigned8) => {
-            SdoValue::U8(raw.first().copied().unwrap_or(0))
-        }
+        Some(DataType::Unsigned8) => SdoValue::U8(raw.first().copied().unwrap_or(0)),
         Some(DataType::Unsigned16) if raw.len() >= 2 => {
             SdoValue::U16(u16::from_le_bytes([raw[0], raw[1]]))
         }
@@ -252,7 +246,7 @@ fn interpret_value(raw: &[u8], dtype: Option<&DataType>) -> SdoValue {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::eds::types::{AccessType, OdEntry, ObjectDictionary};
+    use crate::eds::types::{AccessType, ObjectDictionary, OdEntry};
 
     fn od_with_u16(index: u16, sub: u8, name: &str) -> ObjectDictionary {
         let mut od = ObjectDictionary::new();

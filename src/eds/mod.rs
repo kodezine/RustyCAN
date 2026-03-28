@@ -4,7 +4,7 @@ use std::collections::HashMap;
 use std::io::{self, BufRead};
 use std::path::Path;
 
-use types::{AccessType, DataType, OdEntry, ObjectDictionary};
+use types::{AccessType, DataType, ObjectDictionary, OdEntry};
 
 /// Parse a CANopen EDS file and return an `ObjectDictionary`.
 ///
@@ -67,7 +67,10 @@ fn parse_section(name: &str) -> Option<(u16, u8)> {
     } else {
         // Only treat as object section if it is a pure hex number 1–4 digits.
         let trimmed = upper.trim();
-        if trimmed.len() >= 1 && trimmed.len() <= 4 && trimmed.chars().all(|c| c.is_ascii_hexdigit()) {
+        if !trimmed.is_empty()
+            && trimmed.len() <= 4
+            && trimmed.chars().all(|c| c.is_ascii_hexdigit())
+        {
             let index = u16::from_str_radix(trimmed, 16).ok()?;
             Some((index, 0))
         } else {
@@ -87,7 +90,7 @@ fn build_entry(fields: &HashMap<String, String>) -> Option<OdEntry> {
         .unwrap_or(DataType::Unknown(0));
     let access = fields
         .get("accesstype")
-        .map(|v| AccessType::from_str(v))
+        .map(|v| AccessType::parse(v))
         .unwrap_or(AccessType::Unknown);
     let default_value = fields.get("defaultvalue").cloned();
 

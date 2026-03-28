@@ -72,7 +72,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let node_specs: Vec<(u8, PathBuf)> = cli
         .nodes
         .iter()
-        .map(|s| parse_node_arg(s).unwrap_or_else(|e| { eprintln!("Error: {e}"); std::process::exit(1); }))
+        .map(|s| {
+            parse_node_arg(s).unwrap_or_else(|e| {
+                eprintln!("Error: {e}");
+                std::process::exit(1);
+            })
+        })
         .collect();
 
     // Load EDS files and build per-node state.
@@ -90,7 +95,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             std::process::exit(1);
         });
 
-        println!("Loaded EDS for node {node_id} ({label}): {} OD entries", od.len());
+        println!(
+            "Loaded EDS for node {node_id} ({label}): {} OD entries",
+            od.len()
+        );
         node_labels.push((*node_id, label));
         node_ods.push((*node_id, od));
     }
@@ -121,15 +129,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let pdo_for_thread: Vec<(u8, PdoDecoder)> = pdo_decoders;
 
     thread::spawn(move || {
-        let adapter = host_can::adapter::get_adapter(&port, baud)
-            .unwrap_or_else(|e| {
-                eprintln!(
-                    "\nFailed to open PCAN-USB channel {port}: {e}\n\
+        let adapter = host_can::adapter::get_adapter(&port, baud).unwrap_or_else(|e| {
+            eprintln!(
+                "\nFailed to open PCAN-USB channel {port}: {e}\n\
                      Make sure the PCUSB library is installed from https://mac-can.com\n\
                      and the adapter is connected.\n"
-                );
-                std::process::exit(1);
-            });
+            );
+            std::process::exit(1);
+        });
         eprintln!("Adapter open on channel {port}.");
         recv_loop(adapter, &ods_for_thread, &pdo_for_thread, tx, logger);
     });
@@ -181,7 +188,11 @@ fn recv_loop(
                     logger.log_nmt(ts, &ev);
                     // Heartbeat / command events don't carry a specific node_id here;
                     // emit separate state updates if target_node is specified.
-                    if let canopen::nmt::NmtEvent::Command { command: _, target_node } = &ev {
+                    if let canopen::nmt::NmtEvent::Command {
+                        command: _,
+                        target_node,
+                    } = &ev
+                    {
                         // If the command targets a specific node, update its state.
                         // We don't know the new state from a command alone; the
                         // node's next heartbeat will confirm it.
@@ -244,7 +255,11 @@ fn recv_loop(
                 let decoder = find_pdo_decoder(pdo_decoders, node_id);
                 if let Some(values) = decoder.and_then(|d| d.decode(cob_id, data)) {
                     logger.log_pdo(ts, node_id, pdo_num, &values, data);
-                    let _ = tx.send(CanEvent::Pdo { node_id, pdo_num, values });
+                    let _ = tx.send(CanEvent::Pdo {
+                        node_id,
+                        pdo_num,
+                        values,
+                    });
                 }
             }
 
@@ -266,7 +281,7 @@ fn recv_loop(
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
-fn find_od<'a>(ods: &'a [(u8, ObjectDictionary)], node_id: u8) -> &'a ObjectDictionary {
+fn find_od(ods: &[(u8, ObjectDictionary)], node_id: u8) -> &ObjectDictionary {
     ods.iter()
         .find(|(id, _)| *id == node_id)
         .map(|(_, od)| od)
@@ -278,10 +293,7 @@ fn find_od<'a>(ods: &'a [(u8, ObjectDictionary)], node_id: u8) -> &'a ObjectDict
         })
 }
 
-fn find_pdo_decoder<'a>(
-    decoders: &'a [(u8, PdoDecoder)],
-    node_id: u8,
-) -> Option<&'a PdoDecoder> {
+fn find_pdo_decoder(decoders: &[(u8, PdoDecoder)], node_id: u8) -> Option<&PdoDecoder> {
     decoders
         .iter()
         .find(|(id, _)| *id == node_id)

@@ -1,0 +1,32 @@
+# https://pre-commit.com
+#
+# Setup (run once after cloning):
+#   brew install pre-commit   # or: pip install pre-commit
+#   pre-commit install
+#
+# Run manually against all files:
+#   pre-commit run --all-files
+
+default_install_hook_types: [pre-commit]
+default_stages: [pre-commit]
+
+repos:
+  - repo: local
+    hooks:
+      # ── Formatting ──────────────────────────────────────────────────────────
+      - id: cargo-fmt
+        name: cargo fmt
+        description: Enforce Rust code style via rustfmt.
+        language: system
+        entry: cargo fmt --
+        pass_filenames: false
+        types: [rust]
+
+      # ── Linting ─────────────────────────────────────────────────────────────
+      - id: cargo-clippy
+        name: cargo clippy
+        description: Lint Rust code with Clippy, treating warnings as errors.
+        language: system
+        entry: cargo clippy --all-targets -- -D warnings
+        pass_filenames: false
+        types: [rust]

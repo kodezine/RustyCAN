@@ -36,7 +36,10 @@ impl EventLogger {
 
     pub fn log_nmt(&mut self, ts: DateTime<Utc>, event: &NmtEvent) {
         let entry = match event {
-            NmtEvent::Command { command, target_node } => json!({
+            NmtEvent::Command {
+                command,
+                target_node,
+            } => json!({
                 "ts": ts.to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
                 "type": "NMT_COMMAND",
                 "command": format_nmt_command(command),

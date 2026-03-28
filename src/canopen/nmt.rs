@@ -102,7 +102,10 @@ mod tests {
     fn decode_start_all() {
         let ev = decode_nmt_command(&[0x01, 0x00]).unwrap();
         match ev {
-            NmtEvent::Command { command, target_node } => {
+            NmtEvent::Command {
+                command,
+                target_node,
+            } => {
                 assert_eq!(command, NmtCommand::StartRemoteNode);
                 assert_eq!(target_node, 0);
             }
@@ -125,13 +128,25 @@ mod tests {
     #[test]
     fn decode_operational() {
         let ev = decode_heartbeat(1, &[0x05]).unwrap();
-        assert!(matches!(ev, NmtEvent::Heartbeat { state: NmtState::Operational, .. }));
+        assert!(matches!(
+            ev,
+            NmtEvent::Heartbeat {
+                state: NmtState::Operational,
+                ..
+            }
+        ));
     }
 
     #[test]
     fn decode_pre_op() {
         let ev = decode_heartbeat(3, &[0x7F]).unwrap();
-        assert!(matches!(ev, NmtEvent::Heartbeat { state: NmtState::PreOperational, .. }));
+        assert!(matches!(
+            ev,
+            NmtEvent::Heartbeat {
+                state: NmtState::PreOperational,
+                ..
+            }
+        ));
     }
 
     #[test]

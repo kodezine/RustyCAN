@@ -9,9 +9,13 @@ use chrono::{DateTime, Utc};
 use crossterm::{
     event::{self, Event, KeyCode, KeyModifiers},
     execute,
-    terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
+    terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
-use ratatui::{Terminal, backend::CrosstermBackend, layout::{Constraint, Direction, Layout}};
+use ratatui::{
+    backend::CrosstermBackend,
+    layout::{Constraint, Direction, Layout},
+    Terminal,
+};
 
 use crate::canopen::nmt::NmtState;
 use crate::canopen::pdo::PdoValue;
@@ -88,9 +92,10 @@ impl AppState {
     }
 
     pub fn update_nmt(&mut self, node_id: u8, state: NmtState) {
-        let entry = self.node_map.entry(node_id).or_insert_with(|| {
-            (format!("node{node_id}"), NmtState::Unknown(0xFF), None)
-        });
+        let entry = self
+            .node_map
+            .entry(node_id)
+            .or_insert_with(|| (format!("node{node_id}"), NmtState::Unknown(0xFF), None));
         entry.1 = state;
         entry.2 = Some(Instant::now());
     }
@@ -192,32 +197,34 @@ fn event_loop(
 fn apply_event(state: &mut AppState, ev: CanEvent) {
     state.record_frame();
     match ev {
-        CanEvent::Nmt { node_id, state: nmt_state } => {
+        CanEvent::Nmt {
+            node_id,
+            state: nmt_state,
+        } => {
             state.update_nmt(node_id, nmt_state);
         }
         CanEvent::Sdo(entry) => state.push_sdo(entry),
-        CanEvent::Pdo { node_id, pdo_num, values } => {
+        CanEvent::Pdo {
+            node_id,
+            pdo_num,
+            values,
+        } => {
             state.update_pdo(node_id, pdo_num, values);
         }
     }
 }
 
-fn draw(
-    terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
-    state: &AppState,
-) -> io::Result<()> {
+fn draw(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>, state: &AppState) -> io::Result<()> {
     terminal.draw(|f| {
         let size = f.area();
 
         // Vertical split: NMT  |  PDO
         // Then SDO log + stats bar below.
-        let top_height = (state.node_map.len() as u16 + 4).min(size.height / 3).max(6);
+        let top_height = (state.node_map.len() as u16 + 4)
+            .min(size.height / 3)
+            .max(6);
         let stats_height = 1u16;
-        let sdo_height = size
-            .height
-            .saturating_sub(top_height + stats_height)
-            .max(4)
-            / 2;
+        let sdo_height = size.height.saturating_sub(top_height + stats_height).max(4) / 2;
         let pdo_height = size
             .height
             .saturating_sub(top_height + stats_height + sdo_height)
