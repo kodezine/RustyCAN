@@ -232,7 +232,7 @@ fn extract_bits(
         }
         _ => {
             // Generic: copy byte range
-            let byte_len = (bit_length + 7) / 8;
+            let byte_len = bit_length.div_ceil(8);
             let end = (byte_offset + byte_len).min(data.len());
             PdoRawValue::Bytes(data[byte_offset..end].to_vec())
         }
@@ -291,7 +291,9 @@ mod tests {
 
     #[test]
     fn decoder_unknown_cob_returns_none() {
-        let decoder = PdoDecoder { mappings: HashMap::new() };
+        let decoder = PdoDecoder {
+            mappings: HashMap::new(),
+        };
         assert!(decoder.decode(0x181, &[0; 8]).is_none());
     }
 

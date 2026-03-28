@@ -1,0 +1,87 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v[0-9]*.*'
+
+env:
+  CARGO_TERM_COLOR: always
+
+# Needed to create the GitHub Release and upload assets
+permissions:
+  contents: write
+
+jobs:
+  # ─── Build a release binary for each macOS architecture ───────────────────
+  build:
+    name: Build – ${{ matrix.target }}
+    runs-on: ${{ matrix.runner }}
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-13        # last Intel runner
+            target: x86_64-apple-darwin
+          - runner: macos-latest    # Apple Silicon (M-series)
+            target: aarch64-apple-darwin
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          # Don't poison the shared cache with release-profile artifacts
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+
+      - name: Build release binary
+        run: cargo build --release
+
+      - name: Strip binary
+        run: strip target/release/rustycan
+
+      - name: Package archive
+        id: package
+        shell: bash
+        run: |
+          TAG="${GITHUB_REF_NAME}"
+          TARGET="${{ matrix.target }}"
+          STAGEDIR="rustycan-${TAG}-${TARGET}"
+          ARCHIVE="${STAGEDIR}.tar.gz"
+
+          mkdir -p "${STAGEDIR}"
+          cp target/release/rustycan README.md LICENSE "${STAGEDIR}/"
+          tar -czf "${ARCHIVE}" "${STAGEDIR}/"
+
+          echo "archive=${ARCHIVE}" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-${{ matrix.target }}
+          path: ${{ steps.package.outputs.archive }}
+          if-no-files-found: error
+          retention-days: 1
+
+  # ─── Assemble the GitHub Release from all architecture archives ───────────
+  publish:
+    name: Publish GitHub Release
+    needs: build
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Download all build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: release-*
+          merge-multiple: true
+          path: dist/
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          fail_on_unmatched_files: true
+          files: dist/*.tar.gz

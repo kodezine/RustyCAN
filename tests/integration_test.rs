@@ -13,8 +13,7 @@ fn fixture(name: &str) -> PathBuf {
 
 #[test]
 fn eds_parse_device_type() {
-    let od = rustycan::eds::parse_eds(fixture("sample_drive.eds"))
-        .expect("failed to parse EDS");
+    let od = rustycan::eds::parse_eds(fixture("sample_drive.eds")).expect("failed to parse EDS");
 
     let entry = od.get(&(0x1000, 0)).expect("0x1000/0 missing");
     assert_eq!(entry.name, "Device Type");
@@ -24,8 +23,7 @@ fn eds_parse_device_type() {
 
 #[test]
 fn eds_parse_controlword() {
-    let od = rustycan::eds::parse_eds(fixture("sample_drive.eds"))
-        .expect("failed to parse EDS");
+    let od = rustycan::eds::parse_eds(fixture("sample_drive.eds")).expect("failed to parse EDS");
 
     let entry = od.get(&(0x6040, 0)).expect("0x6040/0 missing");
     assert_eq!(entry.name, "ControlWord");
@@ -35,16 +33,12 @@ fn eds_parse_controlword() {
 
 #[test]
 fn eds_parse_tpdo1_sub_objects() {
-    let od = rustycan::eds::parse_eds(fixture("sample_drive.eds"))
-        .expect("failed to parse EDS");
+    let od = rustycan::eds::parse_eds(fixture("sample_drive.eds")).expect("failed to parse EDS");
 
     // Comm params entry for TPDO1
     let cob_entry = od.get(&(0x1800, 1)).expect("0x1800/1 missing");
     assert_eq!(cob_entry.name, "COB-ID use by TPDO 1");
-    assert_eq!(
-        cob_entry.default_value.as_deref(),
-        Some("0x00000181")
-    );
+    assert_eq!(cob_entry.default_value.as_deref(), Some("0x00000181"));
 
     // Mapping entries
     let num = od.get(&(0x1A00, 0)).expect("0x1A00/0 missing");
@@ -63,8 +57,7 @@ fn eds_parse_tpdo1_sub_objects() {
 fn pdo_decoder_builds_from_eds() {
     use rustycan::canopen::pdo::{PdoDecoder, PdoRawValue};
 
-    let od = rustycan::eds::parse_eds(fixture("sample_drive.eds"))
-        .expect("failed to parse EDS");
+    let od = rustycan::eds::parse_eds(fixture("sample_drive.eds")).expect("failed to parse EDS");
 
     let decoder = PdoDecoder::from_od(1, &od);
 
@@ -94,10 +87,9 @@ fn pdo_decoder_builds_from_eds() {
 
 #[test]
 fn sdo_decodes_controlword_with_eds() {
-    use rustycan::canopen::sdo::{SdoValue, decode_sdo};
+    use rustycan::canopen::sdo::{decode_sdo, SdoValue};
 
-    let od = rustycan::eds::parse_eds(fixture("sample_drive.eds"))
-        .expect("failed to parse EDS");
+    let od = rustycan::eds::parse_eds(fixture("sample_drive.eds")).expect("failed to parse EDS");
 
     // Expedited upload response: server sends ControlWord = 0x000F
     // cs=0x4B (2 bytes), index=0x6040 LE, subindex=0, data=[0x0F, 0x00, ...]
@@ -113,7 +105,7 @@ fn sdo_decodes_controlword_with_eds() {
 
 #[test]
 fn classify_heartbeat_frame() {
-    use rustycan::canopen::{FrameType, classify_frame};
+    use rustycan::canopen::{classify_frame, FrameType};
 
     assert_eq!(classify_frame(0x701), FrameType::Heartbeat(1));
     assert_eq!(classify_frame(0x702), FrameType::Heartbeat(2));
@@ -121,7 +113,7 @@ fn classify_heartbeat_frame() {
 
 #[test]
 fn classify_tpdo_rpdo() {
-    use rustycan::canopen::{FrameType, classify_frame};
+    use rustycan::canopen::{classify_frame, FrameType};
 
     assert_eq!(classify_frame(0x181), FrameType::Tpdo(1, 1));
     assert_eq!(classify_frame(0x201), FrameType::Rpdo(1, 1));

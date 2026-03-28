@@ -214,7 +214,9 @@ pub fn render_sdo_log(f: &mut Frame, state: &AppState, area: Rect) {
                 Span::raw(format!("[{ts}] ")),
                 Span::styled(
                     format!("N{:02} ", entry.node_id),
-                    Style::default().fg(Color::White).add_modifier(Modifier::BOLD),
+                    Style::default()
+                        .fg(Color::White)
+                        .add_modifier(Modifier::BOLD),
                 ),
                 dir,
                 Span::raw(format!(" {:04X}h/{:02X} ", entry.index, entry.subindex)),
@@ -245,7 +247,6 @@ pub fn render_stats_bar(f: &mut Frame, state: &AppState, area: Rect) {
         " Frames/s: {:>6.1}  Total: {:>10}  Log: {}  Press 'q' to quit ",
         state.fps, state.total_frames, state.log_path
     );
-    let para = Paragraph::new(text)
-        .style(Style::default().bg(Color::DarkGray).fg(Color::White));
+    let para = Paragraph::new(text).style(Style::default().bg(Color::DarkGray).fg(Color::White));
     f.render_widget(para, area);
 }

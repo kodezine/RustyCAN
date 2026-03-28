@@ -61,8 +61,16 @@ pub enum AccessType {
     Unknown,
 }
 
+impl std::str::FromStr for AccessType {
+    type Err = std::convert::Infallible;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Ok(Self::parse(s))
+    }
+}
+
 impl AccessType {
-    pub fn from_str(s: &str) -> Self {
+    pub fn parse(s: &str) -> Self {
         match s.to_lowercase().trim() {
             "ro" | "read" => AccessType::ReadOnly,
             "wo" | "write" => AccessType::WriteOnly,
