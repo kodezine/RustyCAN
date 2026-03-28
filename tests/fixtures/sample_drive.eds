@@ -1,0 +1,158 @@
+; Sample CANopen EDS file for testing — generic servo drive (CiA 402 DS)
+; Used by RustyCAN integration tests.
+
+[FileInfo]
+FileName=sample_drive.eds
+FileVersion=1
+FileRevision=1
+EDSVersion=4.0
+Description=Sample servo drive for RustyCAN tests
+CreationTime=10:00AM
+CreationDate=03-28-2026
+CreatedBy=RustyCAN
+ModificationTime=10:00AM
+ModificationDate=03-28-2026
+ModifiedBy=RustyCAN
+
+[DeviceInfo]
+VendorName=TestVendor
+VendorNumber=0x00000001
+ProductName=SampleDrive
+ProductNumber=0x00000001
+RevisionNumber=0x00010001
+OrderCode=TEST-001
+BaudRate_10=1
+BaudRate_20=1
+BaudRate_50=1
+BaudRate_125=1
+BaudRate_250=1
+BaudRate_500=1
+BaudRate_800=1
+BaudRate_1000=1
+SimpleBootUpMaster=0
+SimpleBootUpSlave=1
+Granularity=0
+DynamicChannelsSupported=0
+GroupMessaging=0
+NrOfRXPDO=1
+NrOfTXPDO=1
+LSS_Supported=0
+
+[DummyUsage]
+Dummy0001=0
+Dummy0002=0
+Dummy0003=0
+Dummy0004=0
+Dummy0005=0
+Dummy0006=0
+Dummy0007=0
+
+[Comments]
+Lines=0
+
+[Objects]
+SupportedObjects=6
+1=0x1000
+2=0x6040
+3=0x6041
+4=0x6044
+5=0x1800
+6=0x1A00
+
+; ─── Communication objects ──────────────────────────────────────────────────
+
+[1000]
+ParameterName=Device Type
+ObjectType=0x7
+DataType=0x0007
+AccessType=ro
+DefaultValue=0x00000000
+PDOMapping=0
+
+; ─── CiA 402 objects ────────────────────────────────────────────────────────
+
+[6040]
+ParameterName=ControlWord
+ObjectType=0x7
+DataType=0x0006
+AccessType=rw
+DefaultValue=0x0000
+PDOMapping=1
+
+[6041]
+ParameterName=StatusWord
+ObjectType=0x7
+DataType=0x0006
+AccessType=ro
+DefaultValue=0x0000
+PDOMapping=1
+
+[6044]
+ParameterName=VelocityActualValue
+ObjectType=0x7
+DataType=0x0006
+AccessType=ro
+DefaultValue=0x0000
+PDOMapping=1
+
+; ─── TPDO1 communication parameters (0x1800) ────────────────────────────────
+
+[1800]
+ParameterName=Transmit PDO Communication Parameter 1
+ObjectType=0x9
+SubNumber=3
+
+[1800sub0]
+ParameterName=Highest Sub-Index Supported
+ObjectType=0x7
+DataType=0x0005
+AccessType=ro
+DefaultValue=0x02
+PDOMapping=0
+
+[1800sub1]
+ParameterName=COB-ID use by TPDO 1
+ObjectType=0x7
+DataType=0x0007
+AccessType=rw
+DefaultValue=0x00000181
+PDOMapping=0
+
+[1800sub2]
+ParameterName=Transmission Type
+ObjectType=0x7
+DataType=0x0005
+AccessType=rw
+DefaultValue=0xFF
+PDOMapping=0
+
+; ─── TPDO1 mapping parameters (0x1A00) ──────────────────────────────────────
+
+[1A00]
+ParameterName=Transmit PDO Mapping Parameter 1
+ObjectType=0x9
+SubNumber=3
+
+[1A00sub0]
+ParameterName=Number of Mapped Objects
+ObjectType=0x7
+DataType=0x0005
+AccessType=rw
+DefaultValue=2
+PDOMapping=0
+
+[1A00sub1]
+ParameterName=First mapped object
+ObjectType=0x7
+DataType=0x0007
+AccessType=rw
+DefaultValue=0x60410010
+PDOMapping=0
+
+[1A00sub2]
+ParameterName=Second mapped object
+ObjectType=0x7
+DataType=0x0007
+AccessType=rw
+DefaultValue=0x60440010
+PDOMapping=0
