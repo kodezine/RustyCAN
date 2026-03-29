@@ -4,13 +4,20 @@
 /// Deliberately free of any UI framework imports.
 use std::collections::{HashMap, VecDeque};
 use std::sync::mpsc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use chrono::{DateTime, Utc};
 
 use crate::canopen::nmt::NmtState;
 use crate::canopen::pdo::PdoValue;
 use crate::canopen::sdo::{SdoDirection, SdoValue};
+
+// ─── Type aliases ─────────────────────────────────────────────────────────────
+
+/// `(last seen monotonic, inter-event period)` stored per node in the NMT map.
+type NmtTimestamp = (Instant, Option<Duration>);
+/// `(live signal values, last-update monotonic, inter-event period)` per PDO.
+type PdoEntry = (Vec<PdoValue>, Instant, Option<Duration>);
 
 // ─── Event types ─────────────────────────────────────────────────────────────
 
@@ -47,10 +54,10 @@ pub enum CanEvent {
 
 /// Application state updated by incoming decoded events.
 pub struct AppState {
-    /// node_id → (eds basename, nmt state, last heartbeat time)
-    pub node_map: HashMap<u8, (String, NmtState, Option<Instant>)>,
-    /// (node_id, pdo_num) → (live values, last-update time)
-    pub pdo_values: HashMap<(u8, u8), (Vec<PdoValue>, Instant)>,
+    /// node_id → (eds basename, nmt state, last heartbeat (monotonic, inter-event period))
+    pub node_map: HashMap<u8, (String, NmtState, Option<NmtTimestamp>)>,
+    /// (node_id, pdo_num) → live values + timing
+    pub pdo_values: HashMap<(u8, u8), PdoEntry>,
     /// Ring buffer of recent SDO events.
     pub sdo_log: VecDeque<SdoLogEntry>,
     /// Total CAN frames received.
@@ -108,7 +115,8 @@ impl AppState {
             .entry(node_id)
             .or_insert_with(|| (format!("node{node_id}"), NmtState::Unknown(0xFF), None));
         entry.1 = state;
-        entry.2 = Some(Instant::now());
+        let period = entry.2.as_ref().map(|(prev, _)| prev.elapsed());
+        entry.2 = Some((Instant::now(), period));
     }
 
     pub fn push_sdo(&mut self, entry: SdoLogEntry) {
@@ -119,8 +127,12 @@ impl AppState {
     }
 
     pub fn update_pdo(&mut self, node_id: u8, pdo_num: u8, values: Vec<PdoValue>) {
+        let period = self
+            .pdo_values
+            .get(&(node_id, pdo_num))
+            .map(|(_, prev, _)| prev.elapsed());
         self.pdo_values
-            .insert((node_id, pdo_num), (values, Instant::now()));
+            .insert((node_id, pdo_num), (values, Instant::now(), period));
     }
 }
 

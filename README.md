@@ -129,24 +129,40 @@ and the active log file path.
 
 ## JSONL log format
 
-Each line is a self-contained JSON object flushed immediately to disk:
+Each line is a self-contained JSON object flushed immediately to disk.
+All CAN data bytes are written as `"0x##"` hex strings.
 
 ```jsonl
-{"ts":"2026-03-28T12:01:01.234Z","type":"NMT_STATE","node":1,"state":"OPERATIONAL"}
-{"ts":"2026-03-28T12:01:01.235Z","type":"SDO_READ","node":1,"index":24640,"subindex":0,"name":"ControlWord","value":15,"raw":[75,64,96,0,15,0,0,0]}
-{"ts":"2026-03-28T12:01:01.300Z","type":"PDO","node":1,"pdo_num":1,"signals":{"StatusWord":39,"VelocityActualValue":1234},"raw":[39,0,210,4,0,0,0,0]}
-{"ts":"2026-03-28T12:01:01.400Z","type":"NMT_COMMAND","command":"START","target_node":0}
-{"ts":"2026-03-28T12:01:01.401Z","type":"NMT_COMMAND_SENT","command":"START","target_node":1}
+{"ts":"2026-03-28T12:01:01.234Z","type":"NMT_STATE","cob_id":"0x720","node":32,"state":"PRE-OPERATIONAL","raw":["0x7F"]}
+{"ts":"2026-03-28T12:01:01.235Z","type":"SDO_READ","cob_id":"0x5A0","node":32,"index":"0x3000","subindex":"0x01","name":"Status Word","value":255,"raw":["0x4B","0x00","0x30","0x01","0xFF","0x00","0x00","0x00"]}
+{"ts":"2026-03-28T12:01:01.300Z","type":"PDO","cob_id":"0x201","node":32,"pdo_num":1,"signals":{"Status Word":43,"Digital Inputs":0,"Current Segment Index":0},"raw":["0x2B","0x00","0x00","0x00"]}
+{"ts":"2026-03-28T12:01:01.400Z","type":"NMT_COMMAND","cob_id":"0x000","command":"START","target_node":0,"raw":["0x01","0x00"]}
+{"ts":"2026-03-28T12:01:01.401Z","type":"NMT_COMMAND_SENT","cob_id":"0x000","command":"START","target_node":1,"raw":["0x01","0x01"]}
 ```
 
-| `type` | Trigger |
-|---|---|
-| `NMT_STATE` | Heartbeat or bootup frame received |
-| `NMT_COMMAND` | NMT command frame observed on the bus |
-| `NMT_COMMAND_SENT` | NMT command sent by RustyCAN itself |
-| `SDO_READ` | SDO upload response decoded |
-| `SDO_WRITE` | SDO download request decoded |
-| `PDO` | TPDO or RPDO frame decoded |
+### Common fields
+
+| Field | Present in | Description |
+|---|---|---|
+| `ts` | all | ISO 8601 timestamp with millisecond precision |
+| `type` | all | Entry type (see table below) |
+| `cob_id` | all | CAN Object Identifier as `"0xNNN"` hex string |
+| `raw` | all | Full CAN data bytes as `["0x##", …]` hex strings |
+
+### Entry types
+
+| `type` | Trigger | Key fields |
+|---|---|---|
+| `NMT_STATE` | Heartbeat or bootup frame received | `node`, `state` |
+| `NMT_COMMAND` | NMT command frame observed on bus | `command`, `target_node` |
+| `NMT_COMMAND_SENT` | NMT command sent by RustyCAN | `command`, `target_node` |
+| `SDO_READ` | SDO upload response decoded | `node`, `index` (hex), `subindex` (hex), `name`, `value` |
+| `SDO_WRITE` | SDO download request decoded | `node`, `index` (hex), `subindex` (hex), `name`, `value` |
+| `PDO` | TPDO or RPDO frame decoded | `node`, `pdo_num` (EDS-derived), `signals` (name→value map) |
+
+**PDO notes:**
+- `node` and `pdo_num` are resolved from the EDS mapping for the matching COB-ID; if no EDS is loaded for the sending node, `node` is derived from the COB-ID range and signals fall back to `{"Byte0": "0x##", …}`.
+- `signals` preserves EDS declaration order; typed values match the EDS `DataType` (integer, unsigned, float, or string).
 
 ## Project structure
 

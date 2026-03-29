@@ -25,6 +25,7 @@ pub enum PdoRawValue {
     Integer(i64),
     Unsigned(u64),
     Float(f64),
+    Text(String),
     /// Fallback for non-standard bit widths.
     Bytes(Vec<u8>),
 }
@@ -35,6 +36,7 @@ impl std::fmt::Display for PdoRawValue {
             PdoRawValue::Integer(v) => write!(f, "{v}"),
             PdoRawValue::Unsigned(v) => write!(f, "{v}"),
             PdoRawValue::Float(v) => write!(f, "{v:.4}"),
+            PdoRawValue::Text(s) => write!(f, "{s}"),
             PdoRawValue::Bytes(b) => {
                 write!(f, "[")?;
                 for (i, byte) in b.iter().enumerate() {
@@ -61,8 +63,8 @@ pub struct PdoSignal {
 
 /// Holds all TPDO decoders for a single node, keyed by COB-ID.
 pub struct PdoDecoder {
-    /// COB-ID → ordered list of signals.
-    pub mappings: HashMap<u16, Vec<PdoSignal>>,
+    /// COB-ID → (EDS 1-based pdo_num, ordered list of signals).
+    pub mappings: HashMap<u16, (u8, Vec<PdoSignal>)>,
 }
 
 impl PdoDecoder {
@@ -155,7 +157,7 @@ impl PdoDecoder {
                 }
 
                 if !signals.is_empty() {
-                    mappings.insert(cob_id, signals);
+                    mappings.insert(cob_id, ((pdo_num as u8) + 1, signals));
                 }
             }
         }
@@ -167,7 +169,7 @@ impl PdoDecoder {
     ///
     /// Returns `None` if COB-ID is not in the mapping table.
     pub fn decode(&self, cob_id: u16, data: &[u8]) -> Option<Vec<PdoValue>> {
-        let signals = self.mappings.get(&cob_id)?;
+        let (_, signals) = self.mappings.get(&cob_id)?;
         let values = signals
             .iter()
             .map(|sig| PdoValue {
@@ -176,6 +178,11 @@ impl PdoDecoder {
             })
             .collect();
         Some(values)
+    }
+
+    /// Return the EDS-derived 1-based PDO number for a given COB-ID, if known.
+    pub fn pdo_num_for_cob_id(&self, cob_id: u16) -> Option<u8> {
+        self.mappings.get(&cob_id).map(|(pdo_num, _)| *pdo_num)
     }
 }
 
@@ -199,6 +206,18 @@ fn extract_bits(
     if byte_offset >= data.len() {
         return PdoRawValue::Bytes(vec![]);
     }
+
+    // VisibleString / OctetString: treat bytes directly as text/bytes.
+    if matches!(dtype, DataType::VisibleString | DataType::OctetString) {
+        let byte_len = bit_length.div_ceil(8);
+        let end = (byte_offset + byte_len).min(data.len());
+        let bytes = &data[byte_offset..end];
+        return match std::str::from_utf8(bytes) {
+            Ok(s) => PdoRawValue::Text(s.trim_end_matches('\0').to_string()),
+            Err(_) => PdoRawValue::Bytes(bytes.to_vec()),
+        };
+    }
+
     let rest = &data[byte_offset..];
 
     match bit_length {

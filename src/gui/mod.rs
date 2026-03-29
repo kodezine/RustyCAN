@@ -555,12 +555,18 @@ fn nmt_section(
                     for id in ids {
                         let (eds_name, nmt_state, last_seen) = &state.node_map[&id];
                         let age = last_seen
-                            .map(|t| {
+                            .map(|(t, period)| {
                                 let s = t.elapsed().as_secs_f64();
-                                if s < 60.0 {
+                                let age_str = if s < 60.0 {
                                     format!("{s:.1}s ago")
                                 } else {
                                     format!("{:.0}m ago", s / 60.0)
+                                };
+                                match period {
+                                    Some(p) => {
+                                        format!("{age_str}  [Δ {:.0}ms]", p.as_secs_f64() * 1000.0)
+                                    }
+                                    None => age_str,
                                 }
                             })
                             .unwrap_or_else(|| "—".into());
@@ -625,12 +631,20 @@ fn pdo_section(ui: &mut egui::Ui, state: &AppState) {
                     keys.sort();
 
                     for (node_id, pdo_num) in keys {
-                        if let Some((values, updated)) = state.pdo_values.get(&(node_id, pdo_num)) {
+                        if let Some((values, updated, period)) =
+                            state.pdo_values.get(&(node_id, pdo_num))
+                        {
                             let age_secs = updated.elapsed().as_secs_f64();
                             let age_str = if age_secs < 60.0 {
                                 format!("{age_secs:.2}s ago")
                             } else {
                                 format!("{:.0}m ago", age_secs / 60.0)
+                            };
+                            let age_str = match period {
+                                Some(p) => {
+                                    format!("{age_str}  [Δ {:.0}ms]", p.as_secs_f64() * 1000.0)
+                                }
+                                None => age_str,
                             };
 
                             for (i, v) in values.iter().enumerate() {
