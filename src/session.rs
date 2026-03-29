@@ -212,7 +212,7 @@ fn recv_loop(
             // ── NMT command (COB-ID 0x000) ────────────────────────────────
             FrameType::NmtCommand => {
                 if let Some(ev) = decode_nmt_command(data) {
-                    logger.log_nmt(ts, &ev, data);
+                    logger.log_nmt(ts, &ev, data, cob_id);
                     if let canopen::nmt::NmtEvent::Command {
                         command: _,
                         target_node,
@@ -226,7 +226,7 @@ fn recv_loop(
             // ── NMT heartbeat / bootup ────────────────────────────────────
             FrameType::Heartbeat(node_id) => {
                 if let Some(ev) = decode_heartbeat(node_id, data) {
-                    logger.log_nmt(ts, &ev, data);
+                    logger.log_nmt(ts, &ev, data, cob_id);
                     if let canopen::nmt::NmtEvent::Heartbeat { node_id, ref state } = ev {
                         if tx
                             .send(CanEvent::Nmt {
@@ -246,7 +246,7 @@ fn recv_loop(
                 let empty_od = ObjectDictionary::new();
                 let od = find_od(ods, node_id).unwrap_or(&empty_od);
                 if let Some(sdo_ev) = decode_sdo(node_id, data, od, true) {
-                    logger.log_sdo(ts, &sdo_ev, data);
+                    logger.log_sdo(ts, &sdo_ev, data, cob_id);
                     if tx
                         .send(CanEvent::Sdo(SdoLogEntry {
                             ts,
@@ -270,7 +270,7 @@ fn recv_loop(
                 let empty_od = ObjectDictionary::new();
                 let od = find_od(ods, node_id).unwrap_or(&empty_od);
                 if let Some(sdo_ev) = decode_sdo(node_id, data, od, false) {
-                    logger.log_sdo(ts, &sdo_ev, data);
+                    logger.log_sdo(ts, &sdo_ev, data, cob_id);
                     if tx
                         .send(CanEvent::Sdo(SdoLogEntry {
                             ts,
@@ -290,15 +290,26 @@ fn recv_loop(
             }
 
             // ── TPDO ─────────────────────────────────────────────────────
-            FrameType::Tpdo(pdo_num, node_id) => {
-                let decoder = find_pdo_decoder(pdo_decoders, node_id);
-                let values_opt = decoder.and_then(|d| d.decode(cob_id, data));
-                let values = values_opt.unwrap_or_else(|| raw_pdo_signals(data));
-                logger.log_pdo(ts, node_id, pdo_num, &values, data);
+            FrameType::Tpdo(frame_pdo_num, frame_node_id) => {
+                let (node_id, eff_pdo_num, values) = if let Some((actual_id, d)) =
+                    find_pdo_decoder_for_cob_id(pdo_decoders, cob_id)
+                {
+                    let pn = d.pdo_num_for_cob_id(cob_id).unwrap_or(frame_pdo_num);
+                    let vals = d
+                        .decode(cob_id, data)
+                        .unwrap_or_else(|| raw_pdo_signals(data));
+                    (actual_id, pn, vals)
+                } else {
+                    let vals = find_pdo_decoder(pdo_decoders, frame_node_id)
+                        .and_then(|d| d.decode(cob_id, data))
+                        .unwrap_or_else(|| raw_pdo_signals(data));
+                    (frame_node_id, frame_pdo_num, vals)
+                };
+                logger.log_pdo(ts, node_id, eff_pdo_num, &values, data, cob_id);
                 if tx
                     .send(CanEvent::Pdo {
                         node_id,
-                        pdo_num,
+                        pdo_num: eff_pdo_num,
                         values,
                     })
                     .is_err()
@@ -308,15 +319,26 @@ fn recv_loop(
             }
 
             // ── RPDO (master → device) ────────────────────────────────────
-            FrameType::Rpdo(pdo_num, node_id) => {
-                let decoder = find_pdo_decoder(pdo_decoders, node_id);
-                let values_opt = decoder.and_then(|d| d.decode(cob_id, data));
-                let values = values_opt.unwrap_or_else(|| raw_pdo_signals(data));
-                logger.log_pdo(ts, node_id, pdo_num, &values, data);
+            FrameType::Rpdo(frame_pdo_num, frame_node_id) => {
+                let (node_id, eff_pdo_num, values) = if let Some((actual_id, d)) =
+                    find_pdo_decoder_for_cob_id(pdo_decoders, cob_id)
+                {
+                    let pn = d.pdo_num_for_cob_id(cob_id).unwrap_or(frame_pdo_num);
+                    let vals = d
+                        .decode(cob_id, data)
+                        .unwrap_or_else(|| raw_pdo_signals(data));
+                    (actual_id, pn, vals)
+                } else {
+                    let vals = find_pdo_decoder(pdo_decoders, frame_node_id)
+                        .and_then(|d| d.decode(cob_id, data))
+                        .unwrap_or_else(|| raw_pdo_signals(data));
+                    (frame_node_id, frame_pdo_num, vals)
+                };
+                logger.log_pdo(ts, node_id, eff_pdo_num, &values, data, cob_id);
                 if tx
                     .send(CanEvent::Pdo {
                         node_id,
-                        pdo_num,
+                        pdo_num: eff_pdo_num,
                         values,
                     })
                     .is_err()
@@ -344,6 +366,18 @@ fn find_pdo_decoder(decoders: &[(u8, PdoDecoder)], node_id: u8) -> Option<&PdoDe
         .iter()
         .find(|(id, _)| *id == node_id)
         .map(|(_, d)| d)
+}
+
+/// Find a PDO decoder by searching all loaded decoders' COB-ID mapping tables.
+/// This correctly handles custom COB-IDs that don't match the default range.
+fn find_pdo_decoder_for_cob_id(
+    decoders: &[(u8, PdoDecoder)],
+    cob_id: u16,
+) -> Option<(u8, &PdoDecoder)> {
+    decoders
+        .iter()
+        .find(|(_, d)| d.mappings.contains_key(&cob_id))
+        .map(|(id, d)| (*id, d))
 }
 
 /// Build synthesised PDO signals from raw frame bytes when no EDS decoder exists.
