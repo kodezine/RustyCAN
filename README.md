@@ -1,30 +1,38 @@
 # RustyCAN
 
-CANopen viewer for macOS — log and analyze SDO, PDO, and NMT events from
-multiple devices described by EDS files.
+A native macOS GUI for monitoring, decoding, and controlling CANopen networks.
+Connect a **PEAK PCAN-USB** adapter, optionally provide EDS device-description
+files, and get live NMT state, PDO signal values, and SDO transactions — all
+stored to a newline-delimited JSON log.
 
 ## Features
 
-- **Multi-device** — map any number of EDS files to Node-IDs at startup
-- **NMT tracking** — live Bootup / Pre-Operational / Operational / Stopped state per node
-- **SDO decode** — expedited upload and download transactions with name lookup from EDS
-- **PDO live values** — decode all signals from TPDO/RPDO frames using EDS object mappings
-- **Terminal TUI** — ratatui split-panel interface with NMT status, PDO live values, SDO log
-- **JSONL logging** — every decoded event is appended to a newline-delimited JSON file
+| Feature | Details |
+|---|---|
+| **Native GUI** | egui/eframe window — no terminal required |
+| **Dongle detection** | Connect button enabled only when a PCAN-USB adapter is found; re-checked every 2 s |
+| **EDS optional** | Per-node EDS files are optional; PDO frames without EDS show raw byte values |
+| **Node ID from EDS** | Browsing to an EDS file auto-fills the Node ID from `[DeviceComissioning] NodeId` |
+| **Multi-node** | Configure any number of nodes at startup; new nodes appear dynamically from heartbeats |
+| **NMT monitoring** | Live Bootup / Pre-Operational / Operational / Stopped state per node with age |
+| **NMT commands** | Send Start / Stop / Enter Pre-Op / Reset Node / Reset Comm to any node or broadcast all |
+| **PDO live values** | Decode TPDO/RPDO signals from EDS mappings; raw hex bytes when no EDS is loaded |
+| **SDO decode** | Expedited upload/download with EDS name lookup; abort codes displayed |
+| **JSONL logging** | Every event (received and sent) appended to a newline-delimited JSON file |
 
 ## Prerequisites
 
 ### Hardware
 
-A **PEAK PCAN-USB** adapter is required on macOS.
+A **PEAK PCAN-USB** adapter is required. Other adapters are not supported yet.
 
-### PCUSB library
+### PCUSB driver library
 
 Install the PCANBasic userspace library from **<https://mac-can.com>**:
 
-1. Download the latest *PCUSB* `.pkg` for macOS from the mac-can.com downloads page.
+1. Download the latest *PCUSB* `.pkg` from the mac-can.com downloads page.
 2. Run the installer — it places `libPCBUSB.dylib` in `/usr/local/lib/`.
-3. Connect your PCAN-USB adapter; it will appear as channel `1`.
+3. Connect your PCAN-USB adapter; it appears as channel `1` by default.
 
 ### Rust toolchain
 
@@ -32,88 +40,137 @@ Install the PCANBasic userspace library from **<https://mac-can.com>**:
 rustup update stable  # MSRV: 1.85+
 ```
 
-## Build
+## Build & run
 
 ```sh
 git clone https://github.com/kodezine/RustyCAN
 cd RustyCAN
-cargo build --release
+cargo run --release
 ```
 
-## Run
+The GUI window opens immediately. No command-line flags are required.
 
-```sh
-# One device — node 1 described by motor.eds, 250 kbps
-cargo run --release -- --port 1 --baud 250000 --node 1:motor.eds
+## Using the GUI
 
-# Multiple devices
-cargo run --release -- \
-    --port 1 --baud 250000 \
-    --node 1:motor.eds \
-    --node 2:sensor.eds \
-    --node 3:io_module.eds \
-    --log session.jsonl
-```
-
-| Flag | Default | Description |
-|------|---------|-------------|
-| `--port` | `1` | PCAN-USB channel (1–8) |
-| `--baud` | `250000` | CAN baud rate in bps (e.g. 125000, 250000, 500000, 1000000) |
-| `--node ID:PATH` | _(required)_ | Map Node-ID to EDS file; repeat for each device |
-| `--log` | `rustycan.jsonl` | Output JSONL log file |
-
-Press **`q`** or **Ctrl-C** to exit.
-
-## TUI layout
+### Connect screen
 
 ```
-┌─ NMT Status ──────────────────────────────────────────────┐
-│  Node  EDS               State            Last seen       │
-│     1  motor.eds         OPERATIONAL      0.3s ago        │
-│     2  sensor.eds        PRE-OPERATIONAL  1.1s ago        │
-├─ PDO Live Values ─────────────────────────────────────────┤
-│  Node  PDO  Signal             Value      Updated         │
-│     1    1  StatusWord         0x0027     0.05s ago       │
-│     1    1  VelocityActualValue 1234      0.05s ago       │
-├─ SDO Log (last 50) ───────────────────────────────────────┤
-│ [12:01:01.234] N01 READ  6040h/00 ControlWord = 0x000F    │
-│ [12:01:01.456] N01 WRITE 6040h/00 ControlWord = 0x000F    │
-└─ Frames/s:  234.0  Total:     45231  Log: session.jsonl ──┘
+┌─ Connection ──────────────────────────────────────────────┐
+│  Port:  [ 1 ]  ● Dongle: Connected                       │
+│  Baud:  [ 250000 ▼ ]                                      │
+│  Log:   [ rustycan.jsonl              ] [Browse…]         │
+├─ Nodes ───────────────────────────────────────────────────┤
+│  Node ID   EDS file path                                  │
+│  [ 1     ] [ /path/to/motor.eds    ] [Browse…] [✕]        │
+│  [ 2     ] [                       ] [Browse…] [✕]        │
+│                                      [+ Add node]         │
+├───────────────────────────────────────────────────────────┤
+│                              [  Connect  ]  (greyed out   │
+│                               until dongle found)         │
+└───────────────────────────────────────────────────────────┘
 ```
+
+**Port** — PCAN-USB channel number (typically `1`).  
+**Baud rate** — drop-down: 125000 / 250000 / 500000 / 1000000 bps.  
+**Log file** — path to the `.jsonl` output; defaults to `rustycan.jsonl` in the
+current directory.  
+**Dongle indicator** — polled every 2 s; the Connect button stays disabled
+(greyed) until the adapter is found on the given port/baud.  
+**Nodes** — each row is a CANopen node:
+- *Node ID* — decimal (`5`) or hex with `0x`/`H` prefix/suffix
+  (`0x05`, `05H`); valid range 1–127.
+- *EDS file* — optional; click **Browse…** to pick a file. If the EDS
+  contains `[DeviceComissioning] NodeId`, the Node ID box is pre-filled
+  automatically. Leave the EDS blank to monitor the node without decoding.
+- Zero nodes configured is valid — the monitor will still show any node
+  that sends a heartbeat frame.
+
+### Monitor screen
+
+```
+ RustyCAN  ·  Port 1  ·  250000 bps  ·  2 node(s)        [Disconnect]
+┌─ NMT Status ──────────────────────────────────────────────────────────┐
+│ Broadcast: [Start] [Stop] [Pre-Op] [Reset] [Reset Comm]               │
+│ Node  EDS            State           Last seen  Actions               │
+│    1  motor.eds      OPERATIONAL     0.3s ago   [Start][Stop]…        │
+│    2  (no EDS)       PRE-OPERATIONAL 1.1s ago   [Start][Stop]…        │
+├─ PDO Live Values ─────────────────────────────────────────────────────┤
+│ Node  PDO  Signal              Value       Updated                    │
+│    1    1  StatusWord          39          0.05s ago                  │
+│    1    1  VelocityActualValue 1234        0.05s ago                  │
+│    2    1  Byte0               [AB]        0.12s ago                  │
+│    2    1  Byte1               [CD]        0.12s ago                  │
+├─ SDO Log (last N) ────────────────────────────────────────────────────┤
+│ [12:01:01.234] N01 READ  6040h/00 ControlWord = 15                    │
+│ [12:01:01.456] N01 WRITE 6040h/00 ControlWord = 15                    │
+└─ Frames/s: 234.0   Total: 45231   Log: rustycan.jsonl ────────────────┘
+```
+
+**NMT Status** — one row per node. States are colour-coded:
+- 🟢 `OPERATIONAL`
+- 🟡 `PRE-OPERATIONAL`
+- 🔴 `STOPPED`
+- 🔵 `BOOTUP`
+
+*Broadcast* strip — five buttons that send the NMT command to **all nodes**
+(`target_node = 0x00`).  
+*Actions* column — the same five buttons per row, addressed to **that node only**.  
+State transitions in the table are confirmed by the next incoming heartbeat;
+there is no optimistic update.
+
+**PDO Live Values** — signals decoded from EDS mappings. For nodes without an
+EDS the raw frame bytes appear as `Byte0`, `Byte1`, … in hex.
+
+**SDO Log** — scrollable ring buffer (last 50 entries). `READ` entries are
+coloured cyan; `WRITE` entries magenta. Abort codes appear in red.
+
+**Status bar** — current decoded frame rate, total frame count since connect,
+and the active log file path.
 
 ## JSONL log format
 
-Each line is a self-contained JSON object:
+Each line is a self-contained JSON object flushed immediately to disk:
 
 ```jsonl
 {"ts":"2026-03-28T12:01:01.234Z","type":"NMT_STATE","node":1,"state":"OPERATIONAL"}
 {"ts":"2026-03-28T12:01:01.235Z","type":"SDO_READ","node":1,"index":24640,"subindex":0,"name":"ControlWord","value":15,"raw":[75,64,96,0,15,0,0,0]}
 {"ts":"2026-03-28T12:01:01.300Z","type":"PDO","node":1,"pdo_num":1,"signals":{"StatusWord":39,"VelocityActualValue":1234},"raw":[39,0,210,4,0,0,0,0]}
 {"ts":"2026-03-28T12:01:01.400Z","type":"NMT_COMMAND","command":"START","target_node":0}
+{"ts":"2026-03-28T12:01:01.401Z","type":"NMT_COMMAND_SENT","command":"START","target_node":1}
 ```
+
+| `type` | Trigger |
+|---|---|
+| `NMT_STATE` | Heartbeat or bootup frame received |
+| `NMT_COMMAND` | NMT command frame observed on the bus |
+| `NMT_COMMAND_SENT` | NMT command sent by RustyCAN itself |
+| `SDO_READ` | SDO upload response decoded |
+| `SDO_WRITE` | SDO download request decoded |
+| `PDO` | TPDO or RPDO frame decoded |
 
 ## Project structure
 
 ```
 src/
-  lib.rs                  public library surface
-  main.rs                 CLI entry-point, CAN recv thread, wiring
+  lib.rs          public library surface
+  main.rs         binary entry-point (launches GUI)
+  app.rs          AppState, CanEvent enum, event application logic
+  session.rs      SessionConfig, CanCommand, adapter lifecycle, recv thread
+  logger.rs       EventLogger — JSONL line writer
   eds/
-    mod.rs                EDS INI file parser
-    types.rs              ObjectDictionary, DataType, AccessType
+    mod.rs        EDS INI parser; parse_node_id, parse_node_id_str
+    types.rs      ObjectDictionary, OdEntry, DataType, AccessType
   canopen/
-    mod.rs                COB-ID classification (classify_frame)
-    nmt.rs                NMT command and heartbeat decoding
-    sdo.rs                Expedited SDO decode (upload/download/abort)
-    pdo.rs                PDO decoder built from EDS object mappings
-  logger.rs               JSONL event logger (EventLogger)
-  tui/
-    mod.rs                ratatui terminal app loop, AppState
-    widgets.rs            NMT, PDO, SDO, stats panel renderers
+    mod.rs        COB-ID classification (classify_frame / extract_cob_id)
+    nmt.rs        NMT decode (heartbeat, command) + encode_nmt_command
+    sdo.rs        Expedited SDO decode (upload / download / abort)
+    pdo.rs        PdoDecoder built from EDS TPDO/RPDO mapping objects
+  gui/
+    mod.rs        egui application — Connect & Monitor screens
 tests/
-  integration_test.rs     End-to-end EDS + PDO + SDO + NMT tests
+  integration_test.rs   end-to-end EDS + PDO + SDO + NMT tests
   fixtures/
-    sample_drive.eds      CiA 402 servo drive fixture
+    sample_drive.eds    CiA 402 servo drive test fixture
 ```
 
 ## Testing
@@ -122,26 +179,31 @@ tests/
 cargo test
 ```
 
-34 tests (27 unit + 7 integration) covering the EDS parser, PDO bit extraction,
-SDO command-specifier decode, and NMT state machine.
+36 tests (29 unit + 7 integration) covering the EDS parser, node-ID string
+parsing, PDO bit extraction, SDO command-specifier decode, NMT encode/decode,
+and the COB-ID classifier.
 
-## Scope (v0.1)
+## Feature status
 
 | Feature | Status |
-|---------|--------|
-| NMT command decode | ✅ |
-| NMT heartbeat / bootup decode | ✅ |
+|---|---|
+| Native egui GUI | ✅ |
+| Dongle detection polling | ✅ |
+| EDS optional per node | ✅ |
+| Node ID from EDS `[DeviceComissioning]` | ✅ |
+| NMT heartbeat / bootup monitoring | ✅ |
+| NMT command sending (per-node + broadcast) | ✅ |
 | SDO expedited upload / download | ✅ |
-| SDO abort | ✅ |
+| SDO abort codes | ✅ |
 | TPDO / RPDO live decode from EDS | ✅ |
+| Raw PDO bytes for nodes without EDS | ✅ |
 | Multi-node EDS mapping | ✅ |
-| ratatui TUI | ✅ |
-| JSONL logging | ✅ |
-| SDO segmented transfers | planned |
-| EMCY messages | planned |
-| Heartbeat monitoring / timeout | planned |
-| CAN FD | planned |
-| Replay from candump log | planned |
+| JSONL logging (received + sent) | ✅ |
+| SDO segmented / block transfers | planned |
+| EMCY message decode | planned |
+| Heartbeat timeout / watchdog | planned |
+| CAN FD support | planned |
+| Replay from saved JSONL log | planned |
 
 ## License
 

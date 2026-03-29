@@ -60,6 +60,22 @@ pub enum NmtEvent {
     Heartbeat { node_id: u8, state: NmtState },
 }
 
+/// Encode an NMT master command frame payload.
+///
+/// Returns `[command_specifier, target_node_id]` suitable for a COB-ID 0x000 CAN frame.
+/// `target_node == 0` means broadcast to all nodes.
+pub fn encode_nmt_command(cmd: &NmtCommand, target_node: u8) -> [u8; 2] {
+    let cs: u8 = match cmd {
+        NmtCommand::StartRemoteNode => 0x01,
+        NmtCommand::StopRemoteNode => 0x02,
+        NmtCommand::EnterPreOperational => 0x80,
+        NmtCommand::ResetNode => 0x81,
+        NmtCommand::ResetCommunication => 0x82,
+        NmtCommand::Unknown(b) => *b,
+    };
+    [cs, target_node]
+}
+
 /// Decode an NMT master command frame (COB-ID 0x000).
 pub fn decode_nmt_command(data: &[u8]) -> Option<NmtEvent> {
     if data.len() < 2 {
@@ -153,5 +169,33 @@ mod tests {
     fn returns_none_on_empty() {
         assert!(decode_nmt_command(&[0x01]).is_none()); // only 1 byte
         assert!(decode_heartbeat(1, &[]).is_none());
+    }
+
+    #[test]
+    fn encode_all_commands() {
+        assert_eq!(
+            encode_nmt_command(&NmtCommand::StartRemoteNode, 0x00),
+            [0x01, 0x00]
+        );
+        assert_eq!(
+            encode_nmt_command(&NmtCommand::StopRemoteNode, 0x01),
+            [0x02, 0x01]
+        );
+        assert_eq!(
+            encode_nmt_command(&NmtCommand::EnterPreOperational, 0x05),
+            [0x80, 0x05]
+        );
+        assert_eq!(
+            encode_nmt_command(&NmtCommand::ResetNode, 0x0A),
+            [0x81, 0x0A]
+        );
+        assert_eq!(
+            encode_nmt_command(&NmtCommand::ResetCommunication, 0x7F),
+            [0x82, 0x7F]
+        );
+        assert_eq!(
+            encode_nmt_command(&NmtCommand::Unknown(0xAB), 0x02),
+            [0xAB, 0x02]
+        );
     }
 }

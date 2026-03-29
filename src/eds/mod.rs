@@ -112,6 +112,53 @@ fn parse_u16(s: &str) -> Option<u16> {
     }
 }
 
+/// Parse a node-ID string that may use `0x` prefix (hex), `H`/`h` suffix (hex), or plain
+/// decimal. Returns `None` for zero or values above 127 (invalid CANopen node IDs).
+pub fn parse_node_id_str(s: &str) -> Option<u8> {
+    let s = s.trim();
+    let val: u32 = if let Some(hex) = s.strip_prefix("0x").or_else(|| s.strip_prefix("0X")) {
+        u32::from_str_radix(hex.trim(), 16).ok()?
+    } else if let Some(hex) = s.strip_suffix('H').or_else(|| s.strip_suffix('h')) {
+        u32::from_str_radix(hex.trim(), 16).ok()?
+    } else {
+        s.parse().ok()?
+    };
+    if val == 0 || val > 127 {
+        return None;
+    }
+    Some(val as u8)
+}
+
+/// Read the `[DeviceComissioning]` section of an EDS file and return the `NodeId` field,
+/// parsed via [`parse_node_id_str`].
+///
+/// Returns `None` if the file cannot be read, the section or key are absent, or the value
+/// is out of the valid CANopen node-ID range (1–127).
+pub fn parse_node_id(path: &Path) -> Option<u8> {
+    let file = std::fs::File::open(path).ok()?;
+    let reader = io::BufReader::new(file);
+    let mut in_section = false;
+    for line in reader.lines() {
+        let line = line.ok()?;
+        let line = line.trim();
+        if line.starts_with('[') && line.ends_with(']') {
+            let section = &line[1..line.len() - 1];
+            in_section = section.eq_ignore_ascii_case("DeviceComissioning");
+            continue;
+        }
+        if in_section {
+            if let Some(eq) = line.find('=') {
+                let key = line[..eq].trim();
+                if key.eq_ignore_ascii_case("NodeId") {
+                    let val = line[eq + 1..].trim();
+                    return parse_node_id_str(val);
+                }
+            }
+        }
+    }
+    None
+}
+
 /// Parse a `DefaultValue` string as `u32` (hex or decimal).
 pub fn parse_default_u32(s: &str) -> Option<u32> {
     let s = s.trim();
@@ -144,6 +191,21 @@ mod tests {
         assert_eq!(parse_section("FileInfo"), None);
         assert_eq!(parse_section("DeviceInfo"), None);
         assert_eq!(parse_section("Comments"), None);
+    }
+
+    #[test]
+    fn parse_node_id_str_variants() {
+        assert_eq!(parse_node_id_str("0x1F"), Some(31));
+        assert_eq!(parse_node_id_str("0X1F"), Some(31));
+        assert_eq!(parse_node_id_str("1FH"), Some(31));
+        assert_eq!(parse_node_id_str("1fh"), Some(31));
+        assert_eq!(parse_node_id_str("31"), Some(31));
+        assert_eq!(parse_node_id_str("1"), Some(1));
+        assert_eq!(parse_node_id_str("127"), Some(127));
+        assert_eq!(parse_node_id_str("0"), None); // zero is invalid
+        assert_eq!(parse_node_id_str("128"), None); // above 127
+        assert_eq!(parse_node_id_str("0x00"), None); // zero hex
+        assert_eq!(parse_node_id_str("FFH"), None); // 255 > 127
     }
 
     #[test]
