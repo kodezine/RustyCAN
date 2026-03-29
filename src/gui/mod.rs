@@ -49,6 +49,7 @@ use rfd::FileDialog;
 
 use crate::app::{apply_event, AppState, CanEvent};
 use crate::canopen::nmt::{NmtCommand, NmtState};
+use crate::canopen::pdo::PdoRawValue;
 use crate::canopen::sdo::SdoDirection;
 use crate::eds;
 use crate::session::{self, CanCommand, SessionConfig};
@@ -1026,15 +1027,16 @@ fn nmt_section(
                             lbl.on_hover_text(full_path);
                         }
                     }
-                    ui.allocate_ui_with_layout(
-                        vec2(STATE_COL_W, 24.0),
-                        egui::Layout::right_to_left(egui::Align::Center),
-                        |ui| {
-                            ui.spacing_mut().item_spacing.x = 4.0;
-                            ui.label(egui::RichText::new(lbl).color(text_color).strong());
-                            ui.label(egui::RichText::new(state_icon).color(icon_color).size(14.0));
-                        },
-                    );
+                    ui.horizontal(|ui| {
+                        ui.spacing_mut().item_spacing.x = 4.0;
+                        ui.add_sized(
+                            vec2(18.0, 18.0),
+                            egui::Label::new(
+                                egui::RichText::new(state_icon).color(icon_color).size(14.0),
+                            ),
+                        );
+                        ui.label(egui::RichText::new(lbl).color(text_color).strong());
+                    });
                     if !listen_only {
                         for (btn_label, icon, cmd, btn_color) in &actions {
                             if ui
@@ -1110,63 +1112,93 @@ fn pdo_section(ui: &mut egui::Ui, state: &AppState) {
     )
     .default_open(true)
     .show(ui, |ui| {
-        egui::Grid::new("pdo_grid")
-            .striped(true)
-            .min_col_width(80.0)
-            .show(ui, |ui| {
-                ui.strong("Node");
-                ui.strong("PDO");
-                ui.strong("Signal");
-                ui.strong("Value");
-                ui.strong("Updated");
-                ui.end_row();
+        if state.pdo_values.is_empty() {
+            ui.label("No PDO frames received yet.");
+            return;
+        }
 
-                let mut keys: Vec<(u8, u8)> = state.pdo_values.keys().copied().collect();
-                keys.sort();
+        let mut keys: Vec<(u8, u16)> = state.pdo_values.keys().copied().collect();
+        keys.sort();
 
-                for (node_id, pdo_num) in keys {
-                    if let Some((values, updated, period)) =
-                        state.pdo_values.get(&(node_id, pdo_num))
-                    {
-                        let age_secs = updated.elapsed().as_secs_f64();
-                        let age_str = if age_secs < 60.0 {
-                            format!("{age_secs:.2}s ago")
-                        } else {
-                            format!("{:.0}m ago", age_secs / 60.0)
-                        };
-                        let age_str = match period {
-                            Some(p) => {
-                                format!("{age_str}  [Δ {:.0}ms]", p.as_secs_f64() * 1000.0)
-                            }
-                            None => age_str,
-                        };
-
-                        for (i, v) in values.iter().enumerate() {
-                            if i == 0 {
-                                ui.label(format!("{node_id}"));
-                                ui.label(format!("{pdo_num}"));
-                            } else {
-                                ui.label("");
-                                ui.label("");
-                            }
-                            ui.label(v.signal_name.as_str());
-                            ui.label(v.value.to_string());
-                            if i == 0 {
-                                ui.label(age_str.as_str());
-                            } else {
-                                ui.label("");
-                            }
-                            ui.end_row();
-                        }
+        for (node_id, cob_id) in keys {
+            if let Some((values, updated, period)) = state.pdo_values.get(&(node_id, cob_id)) {
+                let age_secs = updated.elapsed().as_secs_f64();
+                let age_str = if age_secs < 60.0 {
+                    format!("{age_secs:.2}s ago")
+                } else {
+                    format!("{:.0}m ago", age_secs / 60.0)
+                };
+                let age_str = match period {
+                    Some(p) => {
+                        format!("{age_str}  [Δ {:.0}ms]", p.as_secs_f64() * 1000.0)
                     }
-                }
+                    None => age_str,
+                };
 
-                if state.pdo_values.is_empty() {
-                    ui.label("No PDO frames received yet.");
-                    ui.end_row();
-                }
-            });
+                let header = format!("Node {:3}   COB-ID 0x{:03X}   {}", node_id, cob_id, age_str);
+                egui::CollapsingHeader::new(header)
+                    .id_salt((node_id, cob_id))
+                    .default_open(false)
+                    .show(ui, |ui| {
+                        egui::Grid::new((node_id, cob_id))
+                            .striped(true)
+                            .min_col_width(80.0)
+                            .show(ui, |ui| {
+                                ui.strong("Signal");
+                                ui.strong("Value");
+                                ui.end_row();
+                                for v in values {
+                                    ui.label(v.signal_name.as_str());
+                                    pdo_value_ui(ui, &v.value);
+                                    ui.end_row();
+                                }
+                            });
+                    });
+            }
+        }
     });
+}
+
+// ─── PDO value cell (main value + hex annotation) ────────────────────────────────
+
+fn pdo_value_ui(ui: &mut egui::Ui, val: &PdoRawValue) {
+    let hex: Option<String> = match val {
+        PdoRawValue::Integer(v) => Some(format!("0x{:X}", *v as u64)),
+        PdoRawValue::Unsigned(v) => Some(format!("0x{:X}", v)),
+        PdoRawValue::Float(v) => {
+            // If the value round-trips through f32, show 4-byte bits (REAL32);
+            // otherwise show the full 8-byte f64 bit pattern (REAL64).
+            let as_f32 = *v as f32;
+            if (as_f32 as f64).to_bits() == v.to_bits() {
+                Some(format!("0x{:08X}", as_f32.to_bits()))
+            } else {
+                Some(format!("0x{:016X}", v.to_bits()))
+            }
+        }
+        PdoRawValue::Text(s) => {
+            let hex_str = s
+                .bytes()
+                .map(|b| format!("{b:02X}"))
+                .collect::<Vec<_>>()
+                .join(" ");
+            Some(hex_str)
+        }
+        PdoRawValue::Bytes(_) => None, // already displayed as hex by Display
+    };
+
+    if let Some(hex_str) = hex {
+        ui.horizontal(|ui| {
+            ui.label(val.to_string());
+            ui.label(
+                egui::RichText::new(format!("[{hex_str}]"))
+                    .italics()
+                    .small()
+                    .color(egui::Color32::from_gray(160)),
+            );
+        });
+    } else {
+        ui.label(val.to_string());
+    }
 }
 
 // ─── SDO Log section ──────────────────────────────────────────────────────────

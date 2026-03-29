@@ -309,7 +309,7 @@ fn recv_loop(
                 if tx
                     .send(CanEvent::Pdo {
                         node_id,
-                        pdo_num: eff_pdo_num,
+                        cob_id,
                         values,
                     })
                     .is_err()
@@ -338,7 +338,7 @@ fn recv_loop(
                 if tx
                     .send(CanEvent::Pdo {
                         node_id,
-                        pdo_num: eff_pdo_num,
+                        cob_id,
                         values,
                     })
                     .is_err()
