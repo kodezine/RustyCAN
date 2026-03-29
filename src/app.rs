@@ -43,7 +43,8 @@ pub enum CanEvent {
     Sdo(SdoLogEntry),
     Pdo {
         node_id: u8,
-        pdo_num: u8,
+        /// COB-ID of the PDO frame that carried these signals.
+        cob_id: u16,
         values: Vec<PdoValue>,
     },
     /// Sent by the recv thread when the CAN adapter fails to open.
@@ -56,8 +57,8 @@ pub enum CanEvent {
 pub struct AppState {
     /// node_id → (eds basename, nmt state, last heartbeat (monotonic, inter-event period))
     pub node_map: HashMap<u8, (String, NmtState, Option<NmtTimestamp>)>,
-    /// (node_id, pdo_num) → live values + timing
-    pub pdo_values: HashMap<(u8, u8), PdoEntry>,
+    /// (node_id, cob_id) → live values + timing
+    pub pdo_values: HashMap<(u8, u16), PdoEntry>,
     /// Ring buffer of recent SDO events.
     pub sdo_log: VecDeque<SdoLogEntry>,
     /// Total CAN frames received.
@@ -126,13 +127,13 @@ impl AppState {
         self.sdo_log.push_back(entry);
     }
 
-    pub fn update_pdo(&mut self, node_id: u8, pdo_num: u8, values: Vec<PdoValue>) {
+    pub fn update_pdo(&mut self, node_id: u8, cob_id: u16, values: Vec<PdoValue>) {
         let period = self
             .pdo_values
-            .get(&(node_id, pdo_num))
+            .get(&(node_id, cob_id))
             .map(|(_, prev, _)| prev.elapsed());
         self.pdo_values
-            .insert((node_id, pdo_num), (values, Instant::now(), period));
+            .insert((node_id, cob_id), (values, Instant::now(), period));
     }
 }
 
@@ -152,10 +153,10 @@ pub fn apply_event(state: &mut AppState, ev: CanEvent) {
         CanEvent::Sdo(entry) => state.push_sdo(entry),
         CanEvent::Pdo {
             node_id,
-            pdo_num,
+            cob_id,
             values,
         } => {
-            state.update_pdo(node_id, pdo_num, values);
+            state.update_pdo(node_id, cob_id, values);
         }
         // Handled directly by the UI layer; nothing to record in AppState.
         CanEvent::AdapterError(_) => {}
