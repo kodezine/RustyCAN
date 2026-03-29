@@ -1,11 +1,10 @@
 mod widgets;
 
-use std::collections::{HashMap, VecDeque};
 use std::io;
 use std::sync::mpsc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
-use chrono::{DateTime, Utc};
+use crate::app::{drain_events, AppState, CanEvent};
 use crossterm::{
     event::{self, Event, KeyCode, KeyModifiers},
     execute,
@@ -16,116 +15,6 @@ use ratatui::{
     layout::{Constraint, Direction, Layout},
     Terminal,
 };
-
-use crate::canopen::nmt::NmtState;
-use crate::canopen::pdo::PdoValue;
-use crate::canopen::sdo::{SdoDirection, SdoValue};
-
-/// An SDO entry kept in the ring buffer for display.
-#[derive(Debug, Clone)]
-pub struct SdoLogEntry {
-    pub ts: DateTime<Utc>,
-    pub node_id: u8,
-    pub direction: SdoDirection,
-    pub index: u16,
-    pub subindex: u8,
-    pub name: String,
-    pub value: Option<SdoValue>,
-    pub abort_code: Option<u32>,
-}
-
-/// Application state updated by incoming decoded events.
-pub struct AppState {
-    /// node_id → (eds basename, nmt state, last heartbeat time)
-    pub node_map: HashMap<u8, (String, NmtState, Option<Instant>)>,
-    /// (node_id, pdo_num) → (live values, last-update time)
-    pub pdo_values: HashMap<(u8, u8), (Vec<PdoValue>, Instant)>,
-    /// Ring buffer of recent SDO events.
-    pub sdo_log: VecDeque<SdoLogEntry>,
-    /// Total CAN frames received.
-    pub total_frames: u64,
-    /// Rolling frames-per-second counter.
-    pub fps: f64,
-    /// Path of the JSONL log file for display.
-    pub log_path: String,
-    // Internal FPS tracking.
-    fps_window_start: Instant,
-    fps_window_count: u64,
-}
-
-const SDO_LOG_CAP: usize = 50;
-const FPS_WINDOW_SECS: f64 = 2.0;
-
-impl AppState {
-    pub fn new(log_path: String) -> Self {
-        AppState {
-            node_map: HashMap::new(),
-            pdo_values: HashMap::new(),
-            sdo_log: VecDeque::with_capacity(SDO_LOG_CAP + 1),
-            total_frames: 0,
-            fps: 0.0,
-            log_path,
-            fps_window_start: Instant::now(),
-            fps_window_count: 0,
-        }
-    }
-
-    /// Initialise state for configured nodes so the NMT panel shows them
-    /// immediately, even before any heartbeat is received.
-    pub fn init_nodes(&mut self, nodes: &[(u8, String)]) {
-        for (id, eds_name) in nodes {
-            self.node_map
-                .entry(*id)
-                .or_insert_with(|| (eds_name.clone(), NmtState::Unknown(0xFF), None));
-        }
-    }
-
-    pub fn record_frame(&mut self) {
-        self.total_frames += 1;
-        self.fps_window_count += 1;
-        let elapsed = self.fps_window_start.elapsed().as_secs_f64();
-        if elapsed >= FPS_WINDOW_SECS {
-            self.fps = self.fps_window_count as f64 / elapsed;
-            self.fps_window_count = 0;
-            self.fps_window_start = Instant::now();
-        }
-    }
-
-    pub fn update_nmt(&mut self, node_id: u8, state: NmtState) {
-        let entry = self
-            .node_map
-            .entry(node_id)
-            .or_insert_with(|| (format!("node{node_id}"), NmtState::Unknown(0xFF), None));
-        entry.1 = state;
-        entry.2 = Some(Instant::now());
-    }
-
-    pub fn push_sdo(&mut self, entry: SdoLogEntry) {
-        if self.sdo_log.len() >= SDO_LOG_CAP {
-            self.sdo_log.pop_front();
-        }
-        self.sdo_log.push_back(entry);
-    }
-
-    pub fn update_pdo(&mut self, node_id: u8, pdo_num: u8, values: Vec<PdoValue>) {
-        self.pdo_values
-            .insert((node_id, pdo_num), (values, Instant::now()));
-    }
-}
-
-/// Decoded CAN event passed from the recv thread to the UI thread.
-pub enum CanEvent {
-    Nmt {
-        node_id: u8,
-        state: NmtState,
-    },
-    Sdo(SdoLogEntry),
-    Pdo {
-        node_id: u8,
-        pdo_num: u8,
-        values: Vec<PdoValue>,
-    },
-}
 
 /// Run the TUI event loop.
 ///
@@ -164,16 +53,10 @@ fn event_loop(
 
     loop {
         // Drain all pending decoded CAN events (non-blocking).
-        loop {
-            match rx.try_recv() {
-                Ok(ev) => apply_event(&mut state, ev),
-                Err(mpsc::TryRecvError::Empty) => break,
-                Err(mpsc::TryRecvError::Disconnected) => {
-                    // Adapter thread died — redraw once and exit.
-                    draw(terminal, &state)?;
-                    return Ok(());
-                }
-            }
+        if !drain_events(&mut state, &rx) {
+            // Adapter thread died — redraw once and exit.
+            draw(terminal, &state)?;
+            return Ok(());
         }
 
         // Render.
@@ -194,25 +77,6 @@ fn event_loop(
     }
 }
 
-fn apply_event(state: &mut AppState, ev: CanEvent) {
-    state.record_frame();
-    match ev {
-        CanEvent::Nmt {
-            node_id,
-            state: nmt_state,
-        } => {
-            state.update_nmt(node_id, nmt_state);
-        }
-        CanEvent::Sdo(entry) => state.push_sdo(entry),
-        CanEvent::Pdo {
-            node_id,
-            pdo_num,
-            values,
-        } => {
-            state.update_pdo(node_id, pdo_num, values);
-        }
-    }
-}
 
 fn draw(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>, state: &AppState) -> io::Result<()> {
     terminal.draw(|f| {
