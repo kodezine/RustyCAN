@@ -34,7 +34,25 @@ impl EventLogger {
         }
     }
 
-    pub fn log_nmt(&mut self, ts: DateTime<Utc>, event: &NmtEvent) {
+    /// Log an NMT master command that was sent by this application.
+    pub fn log_nmt_sent(
+        &mut self,
+        ts: DateTime<Utc>,
+        command: &NmtCommand,
+        target_node: u8,
+        raw: &[u8],
+    ) {
+        let entry = json!({
+            "ts": ts.to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
+            "type": "NMT_COMMAND_SENT",
+            "command": format_nmt_command(command),
+            "target_node": target_node,
+            "raw": raw,
+        });
+        self.log(entry);
+    }
+
+    pub fn log_nmt(&mut self, ts: DateTime<Utc>, event: &NmtEvent, raw: &[u8]) {
         let entry = match event {
             NmtEvent::Command {
                 command,
@@ -44,12 +62,14 @@ impl EventLogger {
                 "type": "NMT_COMMAND",
                 "command": format_nmt_command(command),
                 "target_node": target_node,
+                "raw": raw,
             }),
             NmtEvent::Heartbeat { node_id, state } => json!({
                 "ts": ts.to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
                 "type": "NMT_STATE",
                 "node": node_id,
                 "state": format_nmt_state(state),
+                "raw": raw,
             }),
         };
         self.log(entry);
