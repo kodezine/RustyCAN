@@ -9,6 +9,9 @@
 //! - **Dongle polling** — a one-shot background thread probes the adapter every
 //!   [`PROBE_INTERVAL_SECS`] seconds. The Connect button is disabled (with a
 //!   tooltip) until the probe returns `true`.
+//! - **Listen-only mode** — checkbox that sets [`SessionConfig::listen_only`];
+//!   all [`CanCommand`] variants are silently dropped in the recv thread so
+//!   no frames are ever transmitted.
 //! - **Node ID from EDS** — when the user browses to an EDS file, the Node ID
 //!   box is pre-filled from `[DeviceComissioning] NodeId` if that key exists.
 //!   Accepted formats: decimal (`5`), `0x`-prefix hex (`0x05`), `H`/`h`-suffix
@@ -27,6 +30,22 @@
 //! - **PDO Live Values** — last decoded value + age for every signal from every
 //!   TPDO/RPDO frame seen since connect.
 //! - **SDO Log** — scrollable ring-buffer (last 50 entries, stick-to-bottom).
+//!
+//! ## Status bar (bottom)
+//! Three items separated by dividers, rendered every frame:
+//!
+//! - **fps / total** — rolling frames-per-second (2 s window) and cumulative
+//!   frame count since connect.
+//! - **Bus load bar** — 20-block `█`/`░` bar built with [`egui::text::LayoutJob`]
+//!   so each colour zone is a separate text run with no gaps:
+//!   - Blue  (`Color32` RGB 60/130/220) for the 0–30 % zone.
+//!   - Yellow (RGB 230/170/0) for the 30–70 % zone.
+//!   - Red   (RGB 220/60/60)  for the >70 % zone.
+//!
+//!   The percentage label after the bar matches the colour of the highest
+//!   filled zone. Load is estimated as `fps × 125 bits ÷ baud_rate × 100`.
+//!   See [`bus_load_bar`].
+//! - **Log path** — filename only; full path shown on hover.
 //!
 //! # Architecture
 //!
@@ -276,7 +295,7 @@ impl ConnectForm {
 
         let (rx, cmd_tx, node_labels) = session::start(config)?;
 
-        let mut state = AppState::new(self.log_path.trim().to_string());
+        let mut state = AppState::new(self.log_path.trim().to_string(), baud);
         state.init_nodes(&node_labels);
 
         // Save a clean copy of the form (no error) to restore on disconnect.
@@ -740,6 +759,79 @@ struct MonitorView {
     node_eds_paths: std::collections::HashMap<u8, String>,
 }
 
+/// Render a block-character bus-load bar into the current horizontal layout.
+///
+/// Visual: `Bus [██████░░░░░░░░░░░░░░] 28.4%`
+/// Colours — blue ≤30 %, yellow 30–70 %, red >70 %.
+fn bus_load_bar(ui: &mut egui::Ui, load: f64) {
+    use egui::text::{LayoutJob, TextFormat};
+
+    const BLOCKS: usize = 20;
+    let filled = ((load / 100.0) * BLOCKS as f64).round() as usize;
+    let filled = filled.min(BLOCKS);
+
+    // Colour-zone boundaries in blocks (30 % → 6, 70 % → 14)
+    let blue_end = ((30.0_f64 / 100.0) * BLOCKS as f64).round() as usize;
+    let yellow_end = ((70.0_f64 / 100.0) * BLOCKS as f64).round() as usize;
+
+    let blue_n = filled.min(blue_end);
+    let yellow_n = if filled > blue_end {
+        (filled - blue_end).min(yellow_end - blue_end)
+    } else {
+        0
+    };
+    let red_n = filled.saturating_sub(yellow_end);
+    let empty_n = BLOCKS - filled;
+
+    let font = egui::FontId::monospace(13.0);
+    let mk = |color: Color32| TextFormat {
+        color,
+        font_id: font.clone(),
+        ..Default::default()
+    };
+
+    let mut job = LayoutJob::default();
+    job.append("Bus ", 0.0, mk(Color32::from_gray(160)));
+    job.append("[", 0.0, mk(Color32::from_gray(120)));
+    if blue_n > 0 {
+        job.append(
+            &"\u{2588}".repeat(blue_n),
+            0.0,
+            mk(Color32::from_rgb(60, 130, 220)),
+        );
+    }
+    if yellow_n > 0 {
+        job.append(
+            &"\u{2588}".repeat(yellow_n),
+            0.0,
+            mk(Color32::from_rgb(230, 170, 0)),
+        );
+    }
+    if red_n > 0 {
+        job.append(
+            &"\u{2588}".repeat(red_n),
+            0.0,
+            mk(Color32::from_rgb(220, 60, 60)),
+        );
+    }
+    if empty_n > 0 {
+        job.append(&"\u{2591}".repeat(empty_n), 0.0, mk(Color32::from_gray(55)));
+    }
+    job.append("]", 0.0, mk(Color32::from_gray(120)));
+
+    let pct_color = if load >= 70.0 {
+        Color32::from_rgb(220, 60, 60)
+    } else if load >= 30.0 {
+        Color32::from_rgb(230, 170, 0)
+    } else {
+        Color32::from_rgb(60, 130, 220)
+    };
+    job.append(&format!(" {load:.1}%"), 0.0, mk(pct_color));
+
+    ui.label(job)
+        .on_hover_text("Estimated bus load (fps \u{00d7} 125 bits \u{00f7} baud rate)");
+}
+
 fn render_monitor(ctx: &egui::Context, view: &mut MonitorView) -> Option<Screen> {
     // Drain all pending CAN events; intercept AdapterError before rendering.
     let mut adapter_error: Option<String> = None;
@@ -797,17 +889,26 @@ fn render_monitor(ctx: &egui::Context, view: &mut MonitorView) -> Option<Screen>
                 .file_name()
                 .map(|f| f.to_string_lossy().into_owned())
                 .unwrap_or_else(|| log_full.clone());
-            let log_label = ui.label(format!(
-                "{} {:.1} fps   Total: {}   {} {}",
+
+            // FPS
+            ui.label(format!(
+                "{} {:.1} fps   Total: {}",
                 icons::FPS,
                 view.state.fps,
                 view.state.total_frames,
-                icons::LOG,
-                log_display,
             ));
+
+            // Bus load — block-character bar
+            ui.separator();
+            bus_load_bar(ui, view.state.bus_load);
+
+            // Log path
+            ui.separator();
+            let log_label = ui.label(format!("{} {}", icons::LOG, log_display));
             if !log_full.is_empty() {
                 log_label.on_hover_text(log_full);
             }
+
             if view.disconnected {
                 ui.separator();
                 ui.colored_label(Color32::RED, "⚠ Adapter disconnected");

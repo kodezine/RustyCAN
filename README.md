@@ -11,6 +11,7 @@ stored to a newline-delimited JSON log.
 |---|---|
 | **Native GUI** | egui/eframe window — no terminal required |
 | **Dongle detection** | Connect button enabled only when a PCAN-USB adapter is found; re-checked every 2 s |
+| **Listen-only mode** | Optional passive mode — no frames are ever transmitted; toggle at connect time |
 | **EDS optional** | Per-node EDS files are optional; PDO frames without EDS show raw byte values |
 | **Node ID from EDS** | Browsing to an EDS file auto-fills the Node ID from `[DeviceComissioning] NodeId` |
 | **Multi-node** | Configure any number of nodes at startup; new nodes appear dynamically from heartbeats |
@@ -18,6 +19,8 @@ stored to a newline-delimited JSON log.
 | **NMT commands** | Send Start / Stop / Enter Pre-Op / Reset Node / Reset Comm to any node or broadcast all |
 | **PDO live values** | Decode TPDO/RPDO signals from EDS mappings; raw hex bytes when no EDS is loaded |
 | **SDO decode** | Expedited upload/download with EDS name lookup; abort codes displayed |
+| **Bus load bar** | 20-block colour-coded bar in the status strip: blue ≤30 %, yellow 30–70 %, red >70 % |
+| **Frame rate** | Rolling fps counter (2 s window) shown alongside total frame count |
 | **JSONL logging** | Every event (received and sent) appended to a newline-delimited JSON file |
 
 ## Prerequisites
@@ -56,7 +59,7 @@ The GUI window opens immediately. No command-line flags are required.
 
 ```
 ┌─ Connection ──────────────────────────────────────────────┐
-│  Port:  [ 1 ]  ● Dongle: Connected                       │
+│  Port:  [ 1 ]  ● Dongle: Connected                        │
 │  Baud:  [ 250000 ▼ ]                                      │
 │  Log:   [ rustycan.jsonl              ] [Browse…]         │
 ├─ Nodes ───────────────────────────────────────────────────┤
@@ -88,22 +91,23 @@ current directory.
 ### Monitor screen
 
 ```
- RustyCAN  ·  Port 1  ·  250000 bps  ·  2 node(s)        [Disconnect]
-┌─ NMT Status ──────────────────────────────────────────────────────────┐
-│ Broadcast: [Start] [Stop] [Pre-Op] [Reset] [Reset Comm]               │
-│ Node  EDS            State           Last seen  Actions               │
-│    1  motor.eds      OPERATIONAL     0.3s ago   [Start][Stop]…        │
-│    2  (no EDS)       PRE-OPERATIONAL 1.1s ago   [Start][Stop]…        │
-├─ PDO Live Values ─────────────────────────────────────────────────────┤
-│ Node  PDO  Signal              Value       Updated                    │
-│    1    1  StatusWord          39          0.05s ago                  │
-│    1    1  VelocityActualValue 1234        0.05s ago                  │
-│    2    1  Byte0               [AB]        0.12s ago                  │
-│    2    1  Byte1               [CD]        0.12s ago                  │
-├─ SDO Log (last N) ────────────────────────────────────────────────────┤
-│ [12:01:01.234] N01 READ  6040h/00 ControlWord = 15                    │
-│ [12:01:01.456] N01 WRITE 6040h/00 ControlWord = 15                    │
-└─ Frames/s: 234.0   Total: 45231   Log: rustycan.jsonl ────────────────┘
+ RustyCAN  ·  Port 1  ·  250000 bps  ·  2 node(s)              [Disconnect]
+┌─ NMT Status ──────────────────────────────────────────────────────────────┐
+│ Broadcast: [Start] [Stop] [Pre-Op] [Reset] [Reset Comm]                   │
+│ Node  EDS            State           Last seen  Actions                   │
+│    1  motor.eds      OPERATIONAL     0.3s ago   [Start][Stop]…            │
+│    2  (no EDS)       PRE-OPERATIONAL 1.1s ago   [Start][Stop]…            │
+├─ PDO Live Values ─────────────────────────────────────────────────────────┤
+│ Node  PDO  Signal              Value       Updated                        │
+│    1    1  StatusWord          39          0.05s ago                      │
+│    1    1  VelocityActualValue 1234        0.05s ago                      │
+│    2    1  Byte0               [AB]        0.12s ago                      │
+│    2    1  Byte1               [CD]        0.12s ago                      │
+├─ SDO Log (last 50) ───────────────────────────────────────────────────────┤
+│ [12:01:01.234] N01 READ  6040h/00 ControlWord = 15                        │
+│ [12:01:01.456] N01 WRITE 6040h/00 ControlWord = 15                        │
+│  234.0 fps  Total: 45231  │  Bus [██████░░░░░░░░░░░░░░] 28.4%  │  📄 log  │
+└───────────────────────────────────────────────────────────────────────────┘
 ```
 
 **NMT Status** — one row per node. States are colour-coded:
@@ -124,8 +128,14 @@ EDS the raw frame bytes appear as `Byte0`, `Byte1`, … in hex.
 **SDO Log** — scrollable ring buffer (last 50 entries). `READ` entries are
 coloured cyan; `WRITE` entries magenta. Abort codes appear in red.
 
-**Status bar** — current decoded frame rate, total frame count since connect,
-and the active log file path.
+**Status bar** — three items separated by dividers:
+- **fps + total** — rolling frames/second (2 s window) and cumulative frame count.
+- **Bus load bar** — 20 block characters (`█`/`░`) colour-coded by zone: blue for
+  ≤ 30 %, yellow for 30–70 %, red for > 70 %. The percentage after the bar matches
+  the colour of the highest zone reached. Load is estimated as
+  `fps × 125 bits ÷ baud_rate × 100` (standard 11-bit ID, 8-byte frame with
+  overhead/stuffing). Hover the bar to see the formula.
+- **Log path** — filename of the active `.jsonl` log; hover to see the full path.
 
 ## JSONL log format
 
