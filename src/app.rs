@@ -65,6 +65,10 @@ pub struct AppState {
     pub total_frames: u64,
     /// Rolling frames-per-second counter.
     pub fps: f64,
+    /// Estimated bus load as a percentage (0–100), derived from fps and baud rate.
+    pub bus_load: f64,
+    /// Baud rate in bps — kept so `record_frame` can re-derive bus load.
+    pub baud_rate: u32,
     /// Path of the JSONL log file for display.
     pub log_path: String,
     // Internal FPS tracking.
@@ -76,13 +80,15 @@ const SDO_LOG_CAP: usize = 50;
 const FPS_WINDOW_SECS: f64 = 2.0;
 
 impl AppState {
-    pub fn new(log_path: String) -> Self {
+    pub fn new(log_path: String, baud_rate: u32) -> Self {
         AppState {
             node_map: HashMap::new(),
             pdo_values: HashMap::new(),
             sdo_log: VecDeque::with_capacity(SDO_LOG_CAP + 1),
             total_frames: 0,
             fps: 0.0,
+            bus_load: 0.0,
+            baud_rate,
             log_path,
             fps_window_start: Instant::now(),
             fps_window_count: 0,
@@ -105,6 +111,10 @@ impl AppState {
         let elapsed = self.fps_window_start.elapsed().as_secs_f64();
         if elapsed >= FPS_WINDOW_SECS {
             self.fps = self.fps_window_count as f64 / elapsed;
+            // ~125 bits per standard CAN frame (11-bit ID, 8B data, overhead + avg bit stuffing).
+            if self.baud_rate > 0 {
+                self.bus_load = (self.fps * 125.0 / self.baud_rate as f64 * 100.0).min(100.0);
+            }
             self.fps_window_count = 0;
             self.fps_window_start = Instant::now();
         }
