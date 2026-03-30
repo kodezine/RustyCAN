@@ -68,7 +68,9 @@ use rfd::FileDialog;
 use crate::app::{apply_event, AppState, CanEvent};
 use crate::canopen::nmt::{NmtCommand, NmtState};
 use crate::canopen::pdo::PdoRawValue;
-use crate::canopen::sdo::{encode_value_for_type, parse_hex_bytes, SdoDirection, SdoValue};
+use crate::canopen::sdo::{
+    encode_value_for_type, parse_hex_bytes, SdoDirection, SdoTransferMode, SdoValue,
+};
 use crate::eds;
 use crate::session::{self, CanCommand, SessionConfig};
 
@@ -309,6 +311,10 @@ impl ConnectForm {
             log_path: self.log_path.trim().to_string(),
             listen_only: self.listen_only,
             sdo_timeout_ms,
+            block_initiate_timeout_ms: 1000,
+            block_subblock_timeout_ms: 500,
+            block_end_timeout_ms: 1000,
+            block_size: 64,
         };
 
         let (rx, cmd_tx, node_labels, actual_log_path) = session::start(config)?;
@@ -1549,6 +1555,7 @@ fn sdo_browser_section(
                                 node_id: current_id,
                                 index,
                                 subindex,
+                                mode: SdoTransferMode::Auto,
                             });
                         }
                         Err(e) => panel.last_error = Some(e),
@@ -1583,6 +1590,7 @@ fn sdo_browser_section(
                                     index,
                                     subindex,
                                     data,
+                                    mode: SdoTransferMode::Auto,
                                 });
                             }
                             Err(e) => panel.last_error = Some(e),
@@ -1834,6 +1842,7 @@ fn sdo_browser_section(
                                     node_id: current_id,
                                     index: key.0,
                                     subindex: key.1,
+                                    mode: SdoTransferMode::Auto,
                                 });
                             }
 
@@ -1864,6 +1873,7 @@ fn sdo_browser_section(
                                                 index: key.0,
                                                 subindex: key.1,
                                                 data,
+                                                mode: SdoTransferMode::Auto,
                                             });
                                         }
                                         Err(e) => panel.last_error = Some(e),
