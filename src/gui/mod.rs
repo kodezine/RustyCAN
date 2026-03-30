@@ -62,14 +62,13 @@ use std::path::PathBuf;
 use std::sync::mpsc;
 use std::time::Instant;
 
-use chrono::Local;
 use eframe::egui::{self, vec2, Button, Color32};
 use rfd::FileDialog;
 
 use crate::app::{apply_event, AppState, CanEvent};
 use crate::canopen::nmt::{NmtCommand, NmtState};
 use crate::canopen::pdo::PdoRawValue;
-use crate::canopen::sdo::{encode_value_for_type, parse_hex_bytes, SdoDirection};
+use crate::canopen::sdo::{encode_value_for_type, parse_hex_bytes, SdoDirection, SdoValue};
 use crate::eds;
 use crate::session::{self, CanCommand, SessionConfig};
 
@@ -236,12 +235,11 @@ struct NodeEntry {
 
 impl Default for ConnectForm {
     fn default() -> Self {
-        let ts = Local::now().format("%Y-%d-%m-%H-%M-%S");
         ConnectForm {
             port: "1".into(),
             baud: "250000".into(),
             nodes: vec![NodeEntry::default()],
-            log_path: format!("rustycan-{ts}.jsonl"),
+            log_path: "rustycan.jsonl".into(),
             sdo_timeout_str: "500".into(),
             error: None,
             warnings: vec![],
@@ -313,9 +311,9 @@ impl ConnectForm {
             sdo_timeout_ms,
         };
 
-        let (rx, cmd_tx, node_labels) = session::start(config)?;
+        let (rx, cmd_tx, node_labels, actual_log_path) = session::start(config)?;
 
-        let mut state = AppState::new(self.log_path.trim().to_string(), baud);
+        let mut state = AppState::new(actual_log_path, baud);
         state.init_nodes(&node_labels);
 
         // Save a clean copy of the form (no error) to restore on disconnect.
@@ -1675,11 +1673,25 @@ fn sdo_browser_section(
                                 header = header.open(Some(true));
                             }
                             header.show(ui, |ui| {
+                                // Calculate column widths to fill available space
+                                let available_width = ui.available_width();
+                                let spacing = 8.0;
+                                let sub_width = 40.0;
+                                let type_width = 100.0;
+                                let access_width = 50.0;
+                                let name_width = (available_width
+                                    - sub_width
+                                    - type_width
+                                    - access_width
+                                    - spacing * 3.0)
+                                    .max(100.0);
+
                                 egui::Grid::new(("sdo_sub_grid", idx))
                                     .striped(true)
-                                    .min_col_width(0.0)
-                                    .spacing([8.0, 3.0])
+                                    .spacing([spacing, 3.0])
                                     .show(ui, |ui| {
+                                        ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Extend);
+
                                         ui.strong("Sub");
                                         ui.strong("Name");
                                         ui.strong("Type");
@@ -1689,6 +1701,19 @@ fn sdo_browser_section(
                                         for (sub, entry) in &subs {
                                             let key = (*idx, *sub);
                                             let is_selected = panel.selected_od_key == Some(key);
+
+                                            // Apply background highlighting for selected row
+                                            if is_selected {
+                                                let row_rect = ui.available_rect_before_wrap();
+                                                ui.painter().rect_filled(
+                                                    row_rect,
+                                                    0.0,
+                                                    Color32::from_rgba_unmultiplied(
+                                                        130, 190, 255, 30,
+                                                    ),
+                                                );
+                                            }
+
                                             let row_text = |s: &str| {
                                                 let t = egui::RichText::new(s);
                                                 if is_selected {
@@ -1698,29 +1723,40 @@ fn sdo_browser_section(
                                                     t
                                                 }
                                             };
-                                            let response = ui
-                                                .selectable_label(
-                                                    is_selected,
-                                                    row_text(&format!("{}", sub)),
+
+                                            // Make all cells clickable by wrapping each in selectable_label
+                                            let sub_response = ui
+                                                .add_sized(
+                                                    [sub_width, 0.0],
+                                                    egui::SelectableLabel::new(
+                                                        is_selected,
+                                                        row_text(&format!("{}", sub)),
+                                                    ),
                                                 )
                                                 .on_hover_text(format!(
                                                     "{:04X}h / sub {:02}  —  {}",
                                                     idx, sub, entry.name
                                                 ));
-                                            if response.clicked() {
-                                                if panel.selected_od_key == Some(key) {
-                                                    panel.selected_od_key = None;
-                                                } else {
-                                                    panel.selected_od_key = Some(key);
-                                                    panel.write_value_str.clear();
-                                                    panel.last_error = None;
-                                                }
-                                            }
-                                            ui.label(row_text(entry.name.as_str()));
-                                            ui.label(row_text(
-                                                &format!("{:?}", entry.data_type)
-                                                    .replace("DataType::", ""),
-                                            ));
+
+                                            let name_response = ui.add_sized(
+                                                [name_width, 0.0],
+                                                egui::SelectableLabel::new(
+                                                    is_selected,
+                                                    row_text(entry.name.as_str()),
+                                                ),
+                                            );
+
+                                            let type_response = ui.add_sized(
+                                                [type_width, 0.0],
+                                                egui::SelectableLabel::new(
+                                                    is_selected,
+                                                    row_text(
+                                                        &format!("{:?}", entry.data_type)
+                                                            .replace("DataType::", ""),
+                                                    ),
+                                                ),
+                                            );
+
                                             let (acc_str, acc_color) = match &entry.access {
                                                 AccessType::ReadOnly | AccessType::Const => {
                                                     ("RO", Color32::from_rgb(80, 200, 255))
@@ -1733,7 +1769,29 @@ fn sdo_browser_section(
                                                 }
                                                 AccessType::Unknown => ("?", Color32::GRAY),
                                             };
-                                            ui.colored_label(acc_color, acc_str);
+                                            let access_response = ui.add_sized(
+                                                [access_width, 0.0],
+                                                egui::SelectableLabel::new(
+                                                    is_selected,
+                                                    egui::RichText::new(acc_str).color(acc_color),
+                                                ),
+                                            );
+
+                                            // Check if any cell was clicked
+                                            if sub_response.clicked()
+                                                || name_response.clicked()
+                                                || type_response.clicked()
+                                                || access_response.clicked()
+                                            {
+                                                if panel.selected_od_key == Some(key) {
+                                                    panel.selected_od_key = None;
+                                                } else {
+                                                    panel.selected_od_key = Some(key);
+                                                    panel.write_value_str.clear();
+                                                    panel.last_error = None;
+                                                }
+                                            }
+
                                             ui.end_row();
                                         }
                                     });
@@ -1865,6 +1923,96 @@ fn parse_raw_index_sub(index_str: &str, sub_str: &str) -> Result<(u16, u8), Stri
 
 // ─── SDO Log section ──────────────────────────────────────────────────────────
 
+/// Render an SDO value with both main format and hex annotation (like PDO display).
+fn sdo_value_ui(ui: &mut egui::Ui, val: &SdoValue) {
+    let hex: Option<String> = match val {
+        SdoValue::I8(v) => Some(format!("0x{:02X}", *v as u8)),
+        SdoValue::I16(v) => Some(format!("0x{:04X}", *v as u16)),
+        SdoValue::I32(v) => Some(format!("0x{:08X}", *v as u32)),
+        SdoValue::I64(v) => Some(format!("0x{:016X}", *v as u64)),
+        SdoValue::U8(v) => Some(format!("0x{:02X}", v)),
+        SdoValue::U16(v) => Some(format!("0x{:04X}", v)),
+        SdoValue::U32(v) => Some(format!("0x{:08X}", v)),
+        SdoValue::U64(v) => Some(format!("0x{:016X}", v)),
+        SdoValue::F32(v) => Some(format!("0x{:08X}", v.to_bits())),
+        SdoValue::F64(v) => Some(format!("0x{:016X}", v.to_bits())),
+        SdoValue::Bytes(b) => {
+            // For byte arrays, try to show as ASCII if printable (excluding null terminators)
+            let as_str: Option<String> = if b.iter().all(|&byte| {
+                byte == 0
+                    || byte == 0x09
+                    || byte == 0x0A
+                    || byte == 0x0D
+                    || (0x20..0x7F).contains(&byte)
+            }) {
+                // Strip trailing null bytes and convert to string
+                let trimmed = b
+                    .iter()
+                    .take_while(|&&byte| byte != 0)
+                    .copied()
+                    .collect::<Vec<u8>>();
+                String::from_utf8(trimmed).ok()
+            } else {
+                None
+            };
+
+            // Always generate hex string for display
+            let hex_str = b
+                .iter()
+                .map(|byte| format!("{:02X}", byte))
+                .collect::<Vec<_>>()
+                .join(" ");
+
+            if let Some(text) = as_str {
+                // For visible strings: show string first, then hex bytes in italics
+                ui.horizontal_wrapped(|ui| {
+                    ui.label(format!("\"{}\"", text));
+                    ui.label(
+                        egui::RichText::new(hex_str)
+                            .italics()
+                            .small()
+                            .color(egui::Color32::from_gray(160)),
+                    );
+                });
+                return;
+            } else {
+                // For non-printable bytes: show hex format in brackets
+                ui.label(format!("[{}]", hex_str));
+                return;
+            }
+        }
+        SdoValue::Bool(_) => None, // "true"/"false" doesn't need hex
+    };
+
+    if let Some(hex_str) = hex {
+        ui.horizontal_wrapped(|ui| {
+            // Show decimal/main value
+            let main_value = match val {
+                SdoValue::I8(v) => format!("{}", v),
+                SdoValue::I16(v) => format!("{}", v),
+                SdoValue::I32(v) => format!("{}", v),
+                SdoValue::I64(v) => format!("{}", v),
+                SdoValue::U8(v) => format!("{}", v),
+                SdoValue::U16(v) => format!("{}", v),
+                SdoValue::U32(v) => format!("{}", v),
+                SdoValue::U64(v) => format!("{}", v),
+                SdoValue::F32(v) => format!("{:.4}", v),
+                SdoValue::F64(v) => format!("{:.6}", v),
+                _ => val.to_string(),
+            };
+            ui.label(main_value);
+            ui.label(
+                egui::RichText::new(format!("[{}]", hex_str))
+                    .italics()
+                    .small()
+                    .color(egui::Color32::from_gray(160)),
+            );
+        });
+    } else {
+        ui.label(val.to_string());
+    }
+}
+
 fn sdo_section(ui: &mut egui::Ui, state: &AppState) {
     let title = format!(
         "{} SDO Log  (last {})",
@@ -1895,7 +2043,8 @@ fn sdo_section(ui: &mut egui::Ui, state: &AppState) {
                             ui.monospace(format!("{:04X}h/{:02X}", entry.index, entry.subindex));
                             ui.label(entry.name.as_str());
                             if let Some(v) = &entry.value {
-                                ui.label(format!("= {v}"));
+                                ui.label("=");
+                                sdo_value_ui(ui, v);
                             }
                             if let Some(abort) = entry.abort_code {
                                 ui.colored_label(
