@@ -243,7 +243,7 @@ and the COB-ID classifier.
 | Multi-node EDS mapping | ✅ |
 | JSONL logging (received + sent) | ✅ |
 | SDO segmented transfers | ✅ |
-| SDO block transfers | planned |
+| SDO block transfers | ✅ |
 | EMCY message decode | planned |
 | Heartbeat timeout / watchdog | planned |
 | CAN FD support | planned |

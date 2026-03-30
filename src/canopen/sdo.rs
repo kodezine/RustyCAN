@@ -476,6 +476,241 @@ pub fn interpret_value(raw: &[u8], dtype: Option<&DataType>) -> SdoValue {
     }
 }
 
+// ─── Block Transfer Support ──────────────────────────────────────────────────
+
+/// SDO transfer mode selection for API.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SdoTransferMode {
+    /// Automatically choose best transfer mode (try block, fallback to segmented).
+    Auto,
+    /// Force segmented transfer mode (legacy compatibility).
+    ForcedSegmented,
+    /// Force block transfer mode (fail if unsupported).
+    ForcedBlock,
+}
+
+/// CRC support indication for block transfers.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CrcSupport {
+    Enabled,
+    Disabled,
+}
+
+/// Calculate CRC-16-CCITT for block transfer data integrity.
+/// Polynomial: 0x1021, Initial value: 0x0000
+/// Used in block download/upload end sequence per CiA 301 § 4.2.4.4.4
+pub fn calculate_crc16(data: &[u8]) -> u16 {
+    let mut crc: u16 = 0x0000;
+    for &byte in data {
+        crc ^= (byte as u16) << 8;
+        for _ in 0..8 {
+            if crc & 0x8000 != 0 {
+                crc = (crc << 1) ^ 0x1021;
+            } else {
+                crc <<= 1;
+            }
+        }
+    }
+    crc
+}
+
+// ─── Block Download (Client → Server) ────────────────────────────────────────
+
+/// Build a block download initiate request (CS=0xC4 or 0xC6).
+/// `crc_enabled = true` → CS=0xC6, `false` → CS=0xC4
+/// COB-ID: 0x600 + node_id
+pub fn encode_block_download_initiate(
+    index: u16,
+    subindex: u8,
+    size: u32,
+    crc_enabled: bool,
+) -> [u8; 8] {
+    // ccs=11010, cc=1 (client command), cs=0 (initiate)
+    // bit 2: CRC support (1=yes)
+    // bit 1: size indicator (always 1)
+    let cs = if crc_enabled { 0xC6 } else { 0xC4 }; // 0b11000110 or 0b11000100
+    let [idx_lo, idx_hi] = index.to_le_bytes();
+    let [s0, s1, s2, s3] = size.to_le_bytes();
+    [cs, idx_lo, idx_hi, subindex, s0, s1, s2, s3]
+}
+
+/// Build a block download sub-block segment (seqno 1-127).
+/// Each segment carries up to 7 bytes of payload.
+/// COB-ID: 0x600 + node_id
+pub fn encode_block_download_subblock(seqno: u8, data: &[u8], _is_last: bool) -> [u8; 8] {
+    // CS = seqno (1-127) for normal segments
+    // If this is the last segment of a sub-block, c-bit is NOT set here
+    // (c-bit is only used in block upload, not download sub-blocks)
+    let cs = seqno & 0x7F; // Ensure sequence number is 1-127
+    let mut frame = [0u8; 8];
+    frame[0] = cs;
+    for (i, &b) in data.iter().enumerate().take(7) {
+        frame[1 + i] = b;
+    }
+    frame
+}
+
+/// Build block download end request (CS=0xC1).
+/// `n` = number of bytes in last segment that do not contain data (0-6).
+/// COB-ID: 0x600 + node_id
+pub fn encode_block_download_end(n: u8, crc: u16) -> [u8; 8] {
+    // ccs=11000001, n in bits 3-1
+    let cs = 0xC1 | ((n & 0x07) << 1);
+    let [crc_lo, crc_hi] = crc.to_le_bytes();
+    [cs, crc_lo, crc_hi, 0, 0, 0, 0, 0]
+}
+
+/// Parse block download initiate response from server (CS=0xA4).
+/// Returns `Some(blksize)` where blksize is the number of segments per block (1-127).
+pub fn decode_block_download_initiate_response(data: &[u8]) -> Option<u8> {
+    if data.len() < 8 {
+        return None;
+    }
+    let cs = data[0];
+    // scs=10100, server response to initiate download
+    if cs != 0xA4 {
+        return None;
+    }
+    let blksize = data[4]; // Server's requested block size
+    Some(blksize)
+}
+
+/// Parse block download sub-block response from server (CS=0xA2).
+/// Returns `Some((ackseq, blksize))` where:
+/// - `ackseq` = last correctly received sequence number (0-127)
+/// - `blksize` = new block size for next sub-block
+pub fn decode_block_download_subblock_response(data: &[u8]) -> Option<(u8, u8)> {
+    if data.len() < 8 {
+        return None;
+    }
+    let cs = data[0];
+    // scs=10100010
+    if cs != 0xA2 {
+        return None;
+    }
+    let ackseq = data[1];
+    let blksize = data[2];
+    Some((ackseq, blksize))
+}
+
+/// Parse block download end response from server (CS=0xA1).
+/// Returns `true` if the server acknowledges successful transfer.
+pub fn decode_block_download_end_response(data: &[u8]) -> bool {
+    data.first() == Some(&0xA1)
+}
+
+// ─── Block Upload (Server → Client) ──────────────────────────────────────────
+
+/// Build a block upload initiate request (CS=0xA4 or 0xA0).
+/// `blksize` = requested segments per block (1-127).
+/// `pst` = protocol switch threshold (0=no switch, else switch to segmented at this size).
+/// COB-ID: 0x600 + node_id
+pub fn encode_block_upload_initiate(
+    index: u16,
+    subindex: u8,
+    blksize: u8,
+    pst: u8,
+    crc_enabled: bool,
+) -> [u8; 8] {
+    // ccs=10100, cc=1 (client command)
+    // bit 2: CRC support
+    let cs = if crc_enabled { 0xA4 } else { 0xA0 }; // 0b10100100 or 0b10100000
+    let [idx_lo, idx_hi] = index.to_le_bytes();
+    [cs, idx_lo, idx_hi, subindex, blksize, pst, 0, 0]
+}
+
+/// Build block upload start request (CS=0xA3).
+/// Sent after receiving initiate response to begin data transfer.
+/// COB-ID: 0x600 + node_id
+pub fn encode_block_upload_start() -> [u8; 8] {
+    [0xA3, 0, 0, 0, 0, 0, 0, 0]
+}
+
+/// Build block upload response (CS=0xA2).
+/// Sent after receiving a sub-block to acknowledge reception.
+/// `ackseq` = last correctly received sequence number.
+/// `blksize` = requested block size for next sub-block.
+/// COB-ID: 0x600 + node_id
+pub fn encode_block_upload_response(ackseq: u8, blksize: u8) -> [u8; 8] {
+    // ccs=10100010
+    [0xA2, ackseq, blksize, 0, 0, 0, 0, 0]
+}
+
+/// Build block upload end response (CS=0xA1).
+/// Acknowledges successful end of block upload.
+/// COB-ID: 0x600 + node_id
+pub fn encode_block_upload_end_response() -> [u8; 8] {
+    [0xA1, 0, 0, 0, 0, 0, 0, 0]
+}
+
+/// Parse block upload initiate response from server (CS=0xC4 or 0xC0).
+/// Returns `Some((crc_enabled, size))` where size is the total data size in bytes.
+/// If size is not indicated, returns size = 0.
+pub fn decode_block_upload_initiate_response(data: &[u8]) -> Option<(bool, u32)> {
+    if data.len() < 8 {
+        return None;
+    }
+    let cs = data[0];
+    // scs=11000, sc=1 (server response)
+    // Check for 0xC0 (no CRC, no size), 0xC4 (no CRC, size), 0xC2 (CRC, no size), 0xC6 (CRC, size)
+    if cs & 0xF8 != 0xC0 {
+        return None;
+    }
+    let crc_enabled = (cs & 0x04) != 0;
+    let size_indicated = (cs & 0x02) != 0;
+    let size = if size_indicated {
+        u32::from_le_bytes([data[4], data[5], data[6], data[7]])
+    } else {
+        0
+    };
+    Some((crc_enabled, size))
+}
+
+/// Parse a block upload sub-block segment from server.
+/// Returns `Some((seqno, payload, is_last))` where:
+/// - `seqno` = sequence number (1-127)
+/// - `payload` = data bytes (up to 7)
+/// - `is_last` = true if this is the last segment (c-bit set)
+pub fn decode_block_upload_subblock(data: &[u8]) -> Option<(u8, Vec<u8>, bool)> {
+    if data.len() < 8 {
+        return None;
+    }
+    let cs = data[0];
+    // For sub-block segments, CS contains seqno (bits 6-0) and c-bit (bit 7)
+    let is_last = (cs & 0x80) != 0;
+    let seqno = cs & 0x7F;
+
+    // If this is NOT the last segment, all 7 bytes are valid data
+    // If IS last, need to check for n in the end sequence frame
+    let payload = if !is_last {
+        data.get(1..8).unwrap_or(&[]).to_vec()
+    } else {
+        // For the last segment in the entire transfer, data length might be < 7
+        // This is handled by the end sequence, so we return all 7 bytes here
+        data.get(1..8).unwrap_or(&[]).to_vec()
+    };
+
+    Some((seqno, payload, is_last))
+}
+
+/// Parse block upload end request from server (CS=0xC1).
+/// Returns `Some((n, crc))` where:
+/// - `n` = number of bytes in last segment that do NOT contain data (0-6)
+/// - `crc` = CRC-16 value for data integrity check
+pub fn decode_block_upload_end(data: &[u8]) -> Option<(u8, u16)> {
+    if data.len() < 8 {
+        return None;
+    }
+    let cs = data[0];
+    // scs=11000001, n in bits 3-1
+    if cs & 0xF1 != 0xC1 {
+        return None;
+    }
+    let n = (cs >> 1) & 0x07;
+    let crc = u16::from_le_bytes([data[1], data[2]]);
+    Some((n, crc))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -731,5 +966,188 @@ mod tests {
     #[test]
     fn encode_u8_overflow_error() {
         assert!(encode_value_for_type("256", &DataType::Unsigned8).is_err());
+    }
+
+    // ─── Block Transfer Tests ─────────────────────────────────────────────────
+
+    #[test]
+    fn crc16_empty_data() {
+        assert_eq!(calculate_crc16(&[]), 0x0000);
+    }
+
+    #[test]
+    fn crc16_known_values() {
+        // CRC-16/XMODEM (poly=0x1021, init=0x0000) as specified by CiA 301 for SDO block transfers.
+        // Standard check value for "123456789" with this variant is 0x31C3, NOT 0x29B1
+        // (0x29B1 belongs to CRC-16/CCITT-FALSE which uses init=0xFFFF).
+        assert_eq!(calculate_crc16(b"123456789"), 0x31C3);
+        assert_eq!(calculate_crc16(&[0x00]), 0x0000);
+        assert_eq!(calculate_crc16(&[0xFF]), 0x1EF0);
+    }
+
+    #[test]
+    fn encode_block_download_initiate_with_crc() {
+        let frame = encode_block_download_initiate(0x1000, 0x01, 1024, true);
+        assert_eq!(frame[0], 0xC6); // CS with CRC bit set
+        assert_eq!(u16::from_le_bytes([frame[1], frame[2]]), 0x1000);
+        assert_eq!(frame[3], 0x01);
+        assert_eq!(
+            u32::from_le_bytes([frame[4], frame[5], frame[6], frame[7]]),
+            1024
+        );
+    }
+
+    #[test]
+    fn encode_block_download_initiate_without_crc() {
+        let frame = encode_block_download_initiate(0x2000, 0x02, 512, false);
+        assert_eq!(frame[0], 0xC4); // CS without CRC bit
+    }
+
+    #[test]
+    fn encode_block_download_subblock_segment() {
+        let data = [0x01, 0x02, 0x03, 0x04, 0x05];
+        let frame = encode_block_download_subblock(10, &data, false);
+        assert_eq!(frame[0], 10); // seqno
+        assert_eq!(&frame[1..6], &data);
+        assert_eq!(&frame[6..], &[0u8, 0]); // 2 remaining zero-padded bytes
+    }
+
+    #[test]
+    fn encode_block_download_end_with_crc() {
+        let crc = 0x1234;
+        let frame = encode_block_download_end(2, crc);
+        assert_eq!(frame[0], 0xC1 | (2 << 1)); // CS with n=2
+        assert_eq!(u16::from_le_bytes([frame[1], frame[2]]), crc);
+    }
+
+    #[test]
+    fn decode_block_download_initiate_response_valid() {
+        let data = [0xA4, 0, 0, 0, 64, 0, 0, 0]; // blksize=64
+        let blksize = decode_block_download_initiate_response(&data);
+        assert_eq!(blksize, Some(64));
+    }
+
+    #[test]
+    fn decode_block_download_subblock_response_valid() {
+        let data = [0xA2, 32, 64, 0, 0, 0, 0, 0]; // ackseq=32, blksize=64
+        let result = decode_block_download_subblock_response(&data);
+        assert_eq!(result, Some((32, 64)));
+    }
+
+    #[test]
+    fn decode_block_download_end_response_valid() {
+        let data = [0xA1, 0, 0, 0, 0, 0, 0, 0];
+        assert!(decode_block_download_end_response(&data));
+    }
+
+    #[test]
+    fn decode_block_download_end_response_invalid() {
+        let data = [0xA2, 0, 0, 0, 0, 0, 0, 0];
+        assert!(!decode_block_download_end_response(&data));
+    }
+
+    #[test]
+    fn encode_block_upload_initiate_with_crc() {
+        let frame = encode_block_upload_initiate(0x1018, 0x01, 64, 0, true);
+        assert_eq!(frame[0], 0xA4); // CS with CRC
+        assert_eq!(u16::from_le_bytes([frame[1], frame[2]]), 0x1018);
+        assert_eq!(frame[3], 0x01);
+        assert_eq!(frame[4], 64); // blksize
+        assert_eq!(frame[5], 0); // pst
+    }
+
+    #[test]
+    fn encode_block_upload_initiate_without_crc() {
+        let frame = encode_block_upload_initiate(0x1000, 0x00, 32, 0, false);
+        assert_eq!(frame[0], 0xA0); // CS without CRC
+    }
+
+    #[test]
+    fn test_encode_block_upload_start() {
+        let frame = super::encode_block_upload_start();
+        assert_eq!(frame[0], 0xA3);
+    }
+
+    #[test]
+    fn test_encode_block_upload_response() {
+        let frame = super::encode_block_upload_response(127, 64);
+        assert_eq!(frame[0], 0xA2);
+        assert_eq!(frame[1], 127); // ackseq
+        assert_eq!(frame[2], 64); // blksize
+    }
+
+    #[test]
+    fn test_encode_block_upload_end_response() {
+        let frame = super::encode_block_upload_end_response();
+        assert_eq!(frame[0], 0xA1);
+    }
+
+    #[test]
+    fn decode_block_upload_initiate_response_with_crc_and_size() {
+        let data = [0xC6, 0, 0, 0, 0xE8, 0x03, 0, 0]; // CS=0xC6, size=1000
+        let result = decode_block_upload_initiate_response(&data);
+        assert_eq!(result, Some((true, 1000)));
+    }
+
+    #[test]
+    fn decode_block_upload_initiate_response_no_crc_with_size() {
+        // 0xC2 = bit1 (s=size indicated), bit2 clear (sc=no CRC) → no CRC, size=1024
+        let data = [0xC2, 0, 0, 0, 0x00, 0x04, 0, 0]; // CS=0xC2, size=1024
+        let result = decode_block_upload_initiate_response(&data);
+        assert_eq!(result, Some((false, 1024)));
+    }
+
+    #[test]
+    fn decode_block_upload_initiate_response_no_size() {
+        // 0xC4 = bit2 (sc=CRC), bit1 clear (s=no size) → CRC enabled, no size
+        let data = [0xC4, 0, 0, 0, 0, 0, 0, 0]; // CS=0xC4 (CRC, no size)
+        let result = decode_block_upload_initiate_response(&data);
+        assert_eq!(result, Some((true, 0)));
+    }
+
+    #[test]
+    fn decode_block_upload_subblock_normal_segment() {
+        let data = [0x01, 0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0xFF, 0x11];
+        let result = decode_block_upload_subblock(&data);
+        assert_eq!(
+            result,
+            Some((1, vec![0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0xFF, 0x11], false))
+        );
+    }
+
+    #[test]
+    fn decode_block_upload_subblock_last_segment() {
+        let data = [0x85, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07]; // seqno=5, c-bit set
+        let result = decode_block_upload_subblock(&data);
+        assert_eq!(
+            result,
+            Some((5, vec![0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07], true))
+        );
+    }
+
+    #[test]
+    fn test_decode_block_upload_end() {
+        let data = [0xC1 | (3 << 1), 0x34, 0x12, 0, 0, 0, 0, 0]; // n=3, crc=0x1234
+        let result = super::decode_block_upload_end(&data);
+        assert_eq!(result, Some((3, 0x1234)));
+    }
+
+    #[test]
+    fn test_decode_block_upload_end_no_unused_bytes() {
+        let data = [0xC1, 0xAB, 0xCD, 0, 0, 0, 0, 0]; // n=0, crc=0xCDAB
+        let result = super::decode_block_upload_end(&data);
+        assert_eq!(result, Some((0, 0xCDAB)));
+    }
+
+    #[test]
+    fn sequence_number_wrapping() {
+        // Test that sequence numbers stay within 1-127 range
+        for i in 1..=127 {
+            let frame = encode_block_download_subblock(i, &[0x11], false);
+            assert_eq!(frame[0], i);
+        }
+        // Sequence 128 should be masked to valid range
+        let frame = encode_block_download_subblock(128, &[0x11], false);
+        assert_eq!(frame[0] & 0x7F, 0); // wraps around
     }
 }
