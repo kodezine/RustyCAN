@@ -75,8 +75,10 @@ The GUI window opens immediately. No command-line flags are required.
 
 **Port** — PCAN-USB channel number (typically `1`).  
 **Baud rate** — drop-down: 125000 / 250000 / 500000 / 1000000 bps.  
-**Log file** — path to the `.jsonl` output; defaults to `rustycan.jsonl` in the
-current directory.  
+**Log file** — base name for the `.jsonl` output; defaults to `rustycan.jsonl`.
+A timestamp (`YYYYMMDDHHMMSS`) is automatically inserted before the extension,
+so `log.jsonl` creates `log_20263003130458.jsonl`. This ensures each run
+produces a unique log file.  
 **Dongle indicator** — polled every 2 s; the Connect button stays disabled
 (greyed) until the adapter is found on the given port/baud.  
 **Nodes** — each row is a CANopen node:
@@ -125,8 +127,15 @@ there is no optimistic update.
 **PDO Live Values** — signals decoded from EDS mappings. For nodes without an
 EDS the raw frame bytes appear as `Byte0`, `Byte1`, … in hex.
 
+**SDO Browser** — located in the Monitor screen; click any row in the EDS-driven
+table to select it and reveal Read/Write action buttons below. The entire row
+(all columns) is clickable. Values are displayed in both decimal and hex format
+for easy debugging (e.g., `42 [0x2A]`). String values show the readable text
+followed by hex bytes in italics (e.g., `"Device Name" 44 65 76...`).
+
 **SDO Log** — scrollable ring buffer (last 50 entries). `READ` entries are
-coloured cyan; `WRITE` entries magenta. Abort codes appear in red.
+coloured cyan; `WRITE` entries magenta. Abort codes appear in red. Values are
+displayed with both their primary format and hex/ASCII representation.
 
 **Status bar** — three items separated by dividers:
 - **fps + total** — rolling frames/second (2 s window) and cumulative frame count.
@@ -145,6 +154,7 @@ All CAN data bytes are written as `"0x##"` hex strings.
 ```jsonl
 {"ts":"2026-03-28T12:01:01.234Z","type":"NMT_STATE","cob_id":"0x720","node":32,"state":"PRE-OPERATIONAL","raw":["0x7F"]}
 {"ts":"2026-03-28T12:01:01.235Z","type":"SDO_READ","cob_id":"0x5A0","node":32,"index":"0x3000","subindex":"0x01","name":"Status Word","value":255,"raw":["0x4B","0x00","0x30","0x01","0xFF","0x00","0x00","0x00"]}
+{"ts":"2026-03-28T12:01:01.240Z","type":"SDO_READ","cob_id":"0x5A0","node":32,"index":"0x1008","subindex":"0x00","name":"Device Name","value":[84,67,45,77,78,50,48,56,54,52,55,52,45,48,48,0],"ascii":"TC-MN2086474-00","raw":["0x43","0x08","0x10","0x00","0x54","0x43","0x2D","0x4D"]}
 {"ts":"2026-03-28T12:01:01.300Z","type":"PDO","cob_id":"0x201","node":32,"pdo_num":1,"signals":{"Status Word":43,"Digital Inputs":0,"Current Segment Index":0},"raw":["0x2B","0x00","0x00","0x00"]}
 {"ts":"2026-03-28T12:01:01.400Z","type":"NMT_COMMAND","cob_id":"0x000","command":"START","target_node":0,"raw":["0x01","0x00"]}
 {"ts":"2026-03-28T12:01:01.401Z","type":"NMT_COMMAND_SENT","cob_id":"0x000","command":"START","target_node":1,"raw":["0x01","0x01"]}
@@ -166,9 +176,16 @@ All CAN data bytes are written as `"0x##"` hex strings.
 | `NMT_STATE` | Heartbeat or bootup frame received | `node`, `state` |
 | `NMT_COMMAND` | NMT command frame observed on bus | `command`, `target_node` |
 | `NMT_COMMAND_SENT` | NMT command sent by RustyCAN | `command`, `target_node` |
-| `SDO_READ` | SDO upload response decoded | `node`, `index` (hex), `subindex` (hex), `name`, `value` |
-| `SDO_WRITE` | SDO download request decoded | `node`, `index` (hex), `subindex` (hex), `name`, `value` |
+| `SDO_READ` | SDO upload response decoded | `node`, `index` (hex), `subindex` (hex), `name`, `value`, `ascii` (optional) |
+| `SDO_WRITE` | SDO download request decoded | `node`, `index` (hex), `subindex` (hex), `name`, `value`, `ascii` (optional) |
 | `PDO` | TPDO or RPDO frame decoded | `node`, `pdo_num` (EDS-derived), `signals` (name→value map) |
+
+**SDO notes:**
+- `ascii` — present only for byte array values (VISIBLE_STRING, OCTET_STRING) when
+  all bytes are printable ASCII (0x20–0x7F), common whitespace characters (tab,
+  newline, carriage return), or null terminators. Trailing nulls are stripped
+  from the `ascii` string. Makes it easy to read string values directly in the
+  log without manual decoding.
 
 **PDO notes:**
 - `node` and `pdo_num` are resolved from the EDS mapping for the matching COB-ID; if no EDS is loaded for the sending node, `node` is derived from the COB-ID range and signals fall back to `{"Byte0": "0x##", …}`.
@@ -225,11 +242,19 @@ and the COB-ID classifier.
 | Raw PDO bytes for nodes without EDS | ✅ |
 | Multi-node EDS mapping | ✅ |
 | JSONL logging (received + sent) | ✅ |
-| SDO segmented / block transfers | planned |
+| SDO segmented transfers | ✅ |
+| SDO block transfers | planned |
 | EMCY message decode | planned |
 | Heartbeat timeout / watchdog | planned |
 | CAN FD support | planned |
 | Replay from saved JSONL log | planned |
+
+## Documentation
+
+Additional documentation is available in the [`.readme/`](.readme/) folder:
+
+- **[Multi-Node Stability Guide](.readme/multi-node-stability.md)** — Fixes for connection issues with 7-10+ nodes, error recovery, and troubleshooting
+- **[Logging Performance](.readme/logging-performance.md)** — Optimization details for high-traffic scenarios, batched flushing, and configuration tuning
 
 ## License
 

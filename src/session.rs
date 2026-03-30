@@ -78,6 +78,7 @@ pub type SessionResult = Result<
         mpsc::Receiver<CanEvent>,
         mpsc::Sender<CanCommand>,
         Vec<(u8, String)>,
+        String, // Actual log file path with timestamp
     ),
     String,
 >;
@@ -129,8 +130,14 @@ pub fn start(config: SessionConfig) -> SessionResult {
         .collect();
 
     // ── Open logger ───────────────────────────────────────────────────────────
+    // Compute the timestamped log path before creating the logger
+    let actual_log_path =
+        crate::logger::add_timestamp_to_path(std::path::Path::new(&config.log_path))
+            .to_string_lossy()
+            .to_string();
+
     let logger = EventLogger::new(&config.log_path)
-        .map_err(|e| format!("Failed to open log file {}: {e}", config.log_path))?;
+        .map_err(|e| format!("Failed to open log file {}: {e}", actual_log_path))?;
 
     // ── Channels ──────────────────────────────────────────────────────────────
     let (tx, rx) = mpsc::channel::<CanEvent>();
@@ -160,22 +167,24 @@ pub fn start(config: SessionConfig) -> SessionResult {
             adapter,
             &node_ods,
             &pdo_decoders,
-            tx,
+            tx.clone(),
             cmd_rx,
             logger,
             listen_only,
             sdo_timeout_ms,
+            &port,
+            baud,
         );
     });
 
-    Ok((rx, cmd_tx, node_labels))
+    Ok((rx, cmd_tx, node_labels, actual_log_path))
 }
 
 // ─── Receive loop ─────────────────────────────────────────────────────────────
 
 #[allow(clippy::too_many_arguments)]
 fn recv_loop(
-    adapter: Box<dyn host_can::adapter::Adapter>,
+    mut adapter: Box<dyn host_can::adapter::Adapter>,
     ods: &[(u8, Option<ObjectDictionary>)],
     pdo_decoders: &[(u8, PdoDecoder)],
     tx: mpsc::Sender<CanEvent>,
@@ -183,8 +192,15 @@ fn recv_loop(
     mut logger: EventLogger,
     listen_only: bool,
     sdo_timeout_ms: u64,
+    port: &str,
+    baud: u32,
 ) {
     let timeout = Some(Duration::from_millis(500));
+
+    // Error tracking for automatic recovery
+    let mut consecutive_errors = 0u32;
+    const MAX_CONSECUTIVE_ERRORS: u32 = 10;
+    let mut last_error_time = Instant::now();
 
     // ── Per-node in-flight SDO tracking ──────────────────────────────────────
     /// Internal state for the active SDO transfer on one node.
@@ -248,26 +264,46 @@ fn recv_loop(
                         if let Some(frame) = host_can::id::new_standard(cob_id)
                             .and_then(|id| CanFrame::new(id, &payload))
                         {
-                            if let Err(e) = adapter.send(&frame) {
-                                eprintln!("SDO read send error: {e:?}");
-                            } else {
-                                pending_sdos.insert(
-                                    node_id,
-                                    PendingSdo {
+                            match adapter.send(&frame) {
+                                Ok(_) => {
+                                    pending_sdos.insert(
+                                        node_id,
+                                        PendingSdo {
+                                            node_id,
+                                            index,
+                                            subindex,
+                                            direction: SdoDirection::Read,
+                                            started_at: Instant::now(),
+                                            state: SdoPendingState::WaitingResponse,
+                                        },
+                                    );
+                                    let _ = tx.send(CanEvent::SdoPending {
                                         node_id,
                                         index,
                                         subindex,
                                         direction: SdoDirection::Read,
-                                        started_at: Instant::now(),
-                                        state: SdoPendingState::WaitingResponse,
-                                    },
-                                );
-                                let _ = tx.send(CanEvent::SdoPending {
-                                    node_id,
-                                    index,
-                                    subindex,
-                                    direction: SdoDirection::Read,
-                                });
+                                    });
+                                }
+                                Err(e) => {
+                                    eprintln!("SDO read send error: {e:?}");
+                                    // Send an abort event to notify the GUI
+                                    let empty_od = ObjectDictionary::new();
+                                    let od = find_od(ods, node_id).unwrap_or(&empty_od);
+                                    let name = od
+                                        .get(&(index, subindex))
+                                        .map(|e| e.name.clone())
+                                        .unwrap_or_else(|| format!("{index:04X}h/{subindex:02X}"));
+                                    let _ = tx.send(CanEvent::Sdo(SdoLogEntry {
+                                        ts: Utc::now(),
+                                        node_id,
+                                        direction: SdoDirection::Read,
+                                        index,
+                                        subindex,
+                                        name,
+                                        value: None,
+                                        abort_code: Some(0x08000000), // General error
+                                    }));
+                                }
                             }
                         }
                     }
@@ -286,26 +322,48 @@ fn recv_loop(
                                 if let Some(frame) = host_can::id::new_standard(cob_id)
                                     .and_then(|id| CanFrame::new(id, &payload))
                                 {
-                                    if let Err(e) = adapter.send(&frame) {
-                                        eprintln!("SDO write send error: {e:?}");
-                                    } else {
-                                        pending_sdos.insert(
-                                            node_id,
-                                            PendingSdo {
+                                    match adapter.send(&frame) {
+                                        Ok(_) => {
+                                            pending_sdos.insert(
+                                                node_id,
+                                                PendingSdo {
+                                                    node_id,
+                                                    index,
+                                                    subindex,
+                                                    direction: SdoDirection::Write,
+                                                    started_at: Instant::now(),
+                                                    state: SdoPendingState::WaitingResponse,
+                                                },
+                                            );
+                                            let _ = tx.send(CanEvent::SdoPending {
                                                 node_id,
                                                 index,
                                                 subindex,
                                                 direction: SdoDirection::Write,
-                                                started_at: Instant::now(),
-                                                state: SdoPendingState::WaitingResponse,
-                                            },
-                                        );
-                                        let _ = tx.send(CanEvent::SdoPending {
-                                            node_id,
-                                            index,
-                                            subindex,
-                                            direction: SdoDirection::Write,
-                                        });
+                                            });
+                                        }
+                                        Err(e) => {
+                                            eprintln!("SDO write send error: {e:?}");
+                                            // Send an abort event to notify the GUI
+                                            let empty_od = ObjectDictionary::new();
+                                            let od = find_od(ods, node_id).unwrap_or(&empty_od);
+                                            let name = od
+                                                .get(&(index, subindex))
+                                                .map(|e| e.name.clone())
+                                                .unwrap_or_else(|| {
+                                                    format!("{index:04X}h/{subindex:02X}")
+                                                });
+                                            let _ = tx.send(CanEvent::Sdo(SdoLogEntry {
+                                                ts: Utc::now(),
+                                                node_id,
+                                                direction: SdoDirection::Write,
+                                                index,
+                                                subindex,
+                                                name,
+                                                value: None,
+                                                abort_code: Some(0x08000000), // General error
+                                            }));
+                                        }
                                     }
                                 }
                             }
@@ -316,29 +374,51 @@ fn recv_loop(
                             if let Some(frame) = host_can::id::new_standard(cob_id)
                                 .and_then(|id| CanFrame::new(id, &payload))
                             {
-                                if let Err(e) = adapter.send(&frame) {
-                                    eprintln!("SDO segmented initiate error: {e:?}");
-                                } else {
-                                    pending_sdos.insert(
-                                        node_id,
-                                        PendingSdo {
+                                match adapter.send(&frame) {
+                                    Ok(_) => {
+                                        pending_sdos.insert(
+                                            node_id,
+                                            PendingSdo {
+                                                node_id,
+                                                index,
+                                                subindex,
+                                                direction: SdoDirection::Write,
+                                                started_at: Instant::now(),
+                                                state: SdoPendingState::DownloadSegmented {
+                                                    remaining: data,
+                                                    toggle: false,
+                                                },
+                                            },
+                                        );
+                                        let _ = tx.send(CanEvent::SdoPending {
                                             node_id,
                                             index,
                                             subindex,
                                             direction: SdoDirection::Write,
-                                            started_at: Instant::now(),
-                                            state: SdoPendingState::DownloadSegmented {
-                                                remaining: data,
-                                                toggle: false,
-                                            },
-                                        },
-                                    );
-                                    let _ = tx.send(CanEvent::SdoPending {
-                                        node_id,
-                                        index,
-                                        subindex,
-                                        direction: SdoDirection::Write,
-                                    });
+                                        });
+                                    }
+                                    Err(e) => {
+                                        eprintln!("SDO segmented initiate error: {e:?}");
+                                        // Send an abort event to notify the GUI
+                                        let empty_od = ObjectDictionary::new();
+                                        let od = find_od(ods, node_id).unwrap_or(&empty_od);
+                                        let name = od
+                                            .get(&(index, subindex))
+                                            .map(|e| e.name.clone())
+                                            .unwrap_or_else(|| {
+                                                format!("{index:04X}h/{subindex:02X}")
+                                            });
+                                        let _ = tx.send(CanEvent::Sdo(SdoLogEntry {
+                                            ts: Utc::now(),
+                                            node_id,
+                                            direction: SdoDirection::Write,
+                                            index,
+                                            subindex,
+                                            name,
+                                            value: None,
+                                            abort_code: Some(0x08000000), // General error
+                                        }));
+                                    }
                                 }
                             }
                         }
@@ -348,12 +428,56 @@ fn recv_loop(
         }
 
         let frame = match adapter.recv(timeout) {
-            Ok(f) => f,
+            Ok(f) => {
+                // Reset error counter on successful receive
+                consecutive_errors = 0;
+                f
+            }
             Err(e) => {
                 let msg = format!("{e:?}");
-                if !msg.contains("ReadTimeout") {
-                    eprintln!("CAN recv error: {e:?}");
+
+                // ReadTimeout is normal when there's no traffic, don't count it as an error
+                if msg.contains("ReadTimeout") {
+                    continue;
                 }
+
+                // Log the error
+                eprintln!("CAN recv error: {e:?}");
+
+                // Track consecutive errors
+                if last_error_time.elapsed() < Duration::from_secs(1) {
+                    consecutive_errors += 1;
+                } else {
+                    consecutive_errors = 1;
+                }
+                last_error_time = Instant::now();
+
+                // If we're getting too many errors in quick succession, try to recover
+                if consecutive_errors >= MAX_CONSECUTIVE_ERRORS {
+                    eprintln!("Too many consecutive CAN errors ({consecutive_errors}), attempting recovery...");
+
+                    // Try to reinitialize the adapter
+                    match host_can::adapter::get_adapter(port, baud) {
+                        Ok(new_adapter) => {
+                            eprintln!("Successfully reconnected to CAN adapter");
+                            adapter = new_adapter;
+                            consecutive_errors = 0;
+
+                            // Clear pending SDOs since we lost connection
+                            pending_sdos.clear();
+                        }
+                        Err(e) => {
+                            eprintln!("Failed to reconnect to CAN adapter: {e:?}");
+                            let _ = tx.send(CanEvent::AdapterError(format!(
+                                "Lost connection to CAN adapter after repeated errors.\n\
+                                 Last error: {e:?}\n\
+                                 The adapter may need to be physically reset or unplugged/replugged."
+                            )));
+                            return; // Exit the thread
+                        }
+                    }
+                }
+
                 continue;
             }
         };
