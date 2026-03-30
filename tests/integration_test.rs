@@ -106,6 +106,64 @@ fn sdo_decodes_status_word_with_eds() {
     assert!(matches!(ev.value, Some(SdoValue::U16(0x00FF))));
 }
 
+// ─── SDO frame encoding ───────────────────────────────────────────────────────
+
+#[test]
+fn sdo_encode_upload_request_roundtrip() {
+    use rustycan::canopen::sdo::{decode_sdo, encode_upload_request};
+    use rustycan::eds::types::ObjectDictionary;
+
+    let frame = encode_upload_request(0x3000, 1);
+    // COB-ID for request is 0x600+n, but decode_sdo is direction-agnostic for cs=0x40
+    let od = ObjectDictionary::new();
+    let ev = decode_sdo(32, &frame, &od, false).expect("encode_upload_request produced bad frame");
+    assert_eq!(ev.index, 0x3000);
+    assert_eq!(ev.subindex, 0x01);
+}
+
+#[test]
+fn sdo_encode_download_expedited_u16() {
+    use rustycan::canopen::sdo::{decode_sdo, encode_download_expedited};
+
+    let od = rustycan::eds::parse_eds(fixture("sample_drive.eds")).expect("failed to parse EDS");
+
+    // Write 0x000F to Status Word (0x3000/1, U16)
+    let data = 0x000Fu16.to_le_bytes();
+    let frame = encode_download_expedited(0x3000, 1, &data).expect("encode failed");
+
+    // Decoding as a client→server request
+    let ev = decode_sdo(32, &frame, &od, false).expect("decode returned None");
+    assert_eq!(ev.index, 0x3000);
+    assert_eq!(ev.subindex, 0x01);
+}
+
+#[test]
+fn sdo_encode_value_u32_known_object() {
+    use rustycan::canopen::sdo::{encode_download_expedited, encode_value_for_type};
+    use rustycan::eds::types::DataType;
+
+    // Encode 0xDEAD as U32 → 4 LE bytes that fit in an expedited frame
+    let bytes = encode_value_for_type("0xDEAD", &DataType::Unsigned32).unwrap();
+    let frame = encode_download_expedited(0x1000, 0, &bytes).expect("encode failed");
+    // cs must be 0x23 (0 bytes unused in data)
+    assert_eq!(frame[0], 0x23);
+    assert_eq!(u32::from_le_bytes(frame[4..8].try_into().unwrap()), 0xDEAD);
+}
+
+#[test]
+fn sdo_parse_hex_bytes_and_segmented_init() {
+    use rustycan::canopen::sdo::{decode_segmented_upload_initiate, parse_hex_bytes};
+
+    let bytes = parse_hex_bytes("48 65 6C 6C 6F").unwrap();
+    assert_eq!(bytes, b"Hello");
+
+    // Build a segmented upload initiate response with size=5
+    let mut frame = [0u8; 8];
+    frame[0] = 0x41; // CS: not expedited, size indicated
+    frame[4..8].copy_from_slice(&5u32.to_le_bytes());
+    assert_eq!(decode_segmented_upload_initiate(&frame), Some(Some(5)));
+}
+
 // ─── NMT frame classification ─────────────────────────────────────────────────
 
 #[test]
