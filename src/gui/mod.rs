@@ -69,7 +69,7 @@ use rfd::FileDialog;
 use crate::app::{apply_event, AppState, CanEvent};
 use crate::canopen::nmt::{NmtCommand, NmtState};
 use crate::canopen::pdo::PdoRawValue;
-use crate::canopen::sdo::SdoDirection;
+use crate::canopen::sdo::{encode_value_for_type, parse_hex_bytes, SdoDirection};
 use crate::eds;
 use crate::session::{self, CanCommand, SessionConfig};
 
@@ -95,7 +95,8 @@ mod icons {
     pub const NMT_HEADER: &str = "\u{f233}"; // server
     pub const PDO_HEADER: &str = "\u{f1de}"; // sliders
     pub const SDO_HEADER: &str = "\u{f0f6}"; // file-text
-                                             // NMT states
+    pub const SDO_BROWSER: &str = "\u{f002}"; // search
+                                              // NMT states
     pub const STATE_OP: &str = "\u{f058}"; // check-circle
     pub const STATE_PREOP: &str = "\u{f017}"; // clock
     pub const STATE_STOP: &str = "\u{f057}"; // times-circle
@@ -142,6 +143,7 @@ pub struct RustyCanApp {
     screen: Screen,
 }
 
+#[allow(clippy::large_enum_variant)]
 enum Screen {
     Connect(ConnectForm),
     Monitor(Box<MonitorView>),
@@ -187,6 +189,8 @@ struct ConnectForm {
     baud: String,
     nodes: Vec<NodeEntry>,
     log_path: String,
+    /// SDO response timeout in milliseconds.
+    sdo_timeout_str: String,
     /// Non-None when the last connect attempt failed.
     error: Option<String>,
     /// Live validation warnings shown before the connect button.
@@ -210,6 +214,7 @@ impl Clone for ConnectForm {
             baud: self.baud.clone(),
             nodes: self.nodes.clone(),
             log_path: self.log_path.clone(),
+            sdo_timeout_str: self.sdo_timeout_str.clone(),
             error: self.error.clone(),
             warnings: self.warnings.clone(),
             confirm_remove: self.confirm_remove,
@@ -237,6 +242,7 @@ impl Default for ConnectForm {
             baud: "250000".into(),
             nodes: vec![NodeEntry::default()],
             log_path: format!("rustycan-{ts}.jsonl"),
+            sdo_timeout_str: "500".into(),
             error: None,
             warnings: vec![],
             confirm_remove: None,
@@ -256,6 +262,19 @@ impl ConnectForm {
             .trim()
             .parse()
             .map_err(|_| format!("Invalid baud rate: {:?}", self.baud))?;
+
+        let sdo_timeout_ms: u64 = self
+            .sdo_timeout_str
+            .trim()
+            .parse::<u64>()
+            .ok()
+            .filter(|&v| v > 0)
+            .ok_or_else(|| {
+                format!(
+                    "SDO timeout must be a positive integer (ms), got {:?}",
+                    self.sdo_timeout_str
+                )
+            })?;
 
         let nodes: Vec<(u8, Option<PathBuf>)> = self
             .nodes
@@ -291,6 +310,7 @@ impl ConnectForm {
             nodes,
             log_path: self.log_path.trim().to_string(),
             listen_only: self.listen_only,
+            sdo_timeout_ms,
         };
 
         let (rx, cmd_tx, node_labels) = session::start(config)?;
@@ -311,6 +331,24 @@ impl ConnectForm {
             })
             .collect();
 
+        // Load ODs into a map for the SDO browser (re-parse; errors non-fatal here).
+        let node_ods: std::collections::HashMap<u8, crate::eds::types::ObjectDictionary> = self
+            .nodes
+            .iter()
+            .filter_map(|e| {
+                let id = eds::parse_node_id_str(e.id_str.trim())?;
+                let path = if e.eds_path.trim().is_empty() {
+                    return None;
+                } else {
+                    std::path::PathBuf::from(e.eds_path.trim())
+                };
+                let od = eds::parse_eds(&path).ok()?;
+                Some((id, od))
+            })
+            .collect();
+
+        let node_labels_clone = node_labels.clone();
+
         Ok(MonitorView {
             rx,
             cmd_tx,
@@ -319,6 +357,9 @@ impl ConnectForm {
             disconnected: false,
             listen_only: self.listen_only,
             node_eds_paths,
+            node_labels: node_labels_clone,
+            node_ods,
+            sdo_browser: SdoBrowserPanel::default(),
         })
     }
 }
@@ -424,6 +465,14 @@ fn render_connect(ctx: &egui::Context, form: &mut ConnectForm) -> Option<Screen>
                                             );
                                         }
                                     });
+                                ui.end_row();
+
+                                ui.label("SDO timeout (ms):");
+                                ui.add(
+                                    egui::TextEdit::singleline(&mut form.sdo_timeout_str)
+                                        .desired_width(80.0)
+                                        .hint_text("500"),
+                                );
                                 ui.end_row();
 
                                 ui.label("Log file:");
@@ -747,6 +796,43 @@ fn render_connect(ctx: &egui::Context, form: &mut ConnectForm) -> Option<Screen>
 
 // ─── Monitor view ─────────────────────────────────────────────────────────────
 
+/// State for the SDO Browser collapsible panel in the Monitor view.
+struct SdoBrowserPanel {
+    /// Index into the session's sorted node list.
+    selected_node_idx: usize,
+    /// If true, show the raw hex-entry form; if false, show EDS-driven form.
+    raw_mode: bool,
+
+    // EDS pane state
+    filter_str: String,
+    selected_od_key: Option<(u16, u8)>,
+    write_value_str: String,
+
+    // Raw pane state
+    raw_index_str: String,
+    raw_subindex_str: String,
+    raw_data_str: String,
+
+    /// Last encode/validation error from a write attempt.
+    last_error: Option<String>,
+}
+
+impl Default for SdoBrowserPanel {
+    fn default() -> Self {
+        SdoBrowserPanel {
+            selected_node_idx: 0,
+            raw_mode: false,
+            filter_str: String::new(),
+            selected_od_key: None,
+            write_value_str: String::new(),
+            raw_index_str: String::new(),
+            raw_subindex_str: "0".into(),
+            raw_data_str: String::new(),
+            last_error: None,
+        }
+    }
+}
+
 struct MonitorView {
     rx: mpsc::Receiver<CanEvent>,
     cmd_tx: mpsc::Sender<CanCommand>,
@@ -757,6 +843,12 @@ struct MonitorView {
     listen_only: bool,
     /// node_id → absolute EDS path (empty string when no EDS was configured).
     node_eds_paths: std::collections::HashMap<u8, String>,
+    /// Ordered node labels for the SDO browser's node selector.
+    node_labels: Vec<(u8, String)>,
+    /// Loaded object dictionaries per node, for the SDO browser.
+    node_ods: std::collections::HashMap<u8, crate::eds::types::ObjectDictionary>,
+    /// State for the SDO Browser panel.
+    sdo_browser: SdoBrowserPanel,
 }
 
 /// Render a block-character bus-load bar into the current horizontal layout.
@@ -928,6 +1020,16 @@ fn render_monitor(ctx: &egui::Context, view: &mut MonitorView) -> Option<Screen>
             );
             ui.add_space(4.0);
             pdo_section(ui, &view.state);
+            ui.add_space(4.0);
+            sdo_browser_section(
+                ui,
+                &view.state,
+                &view.node_labels,
+                &view.node_ods,
+                &view.cmd_tx,
+                view.listen_only,
+                &mut view.sdo_browser,
+            );
             ui.add_space(4.0);
             sdo_section(ui, &view.state);
         });
@@ -1300,6 +1402,465 @@ fn pdo_value_ui(ui: &mut egui::Ui, val: &PdoRawValue) {
     } else {
         ui.label(val.to_string());
     }
+}
+
+// ─── SDO Browser section ─────────────────────────────────────────────────────
+
+#[allow(clippy::too_many_arguments)]
+fn sdo_browser_section(
+    ui: &mut egui::Ui,
+    state: &AppState,
+    node_labels: &[(u8, String)],
+    node_ods: &std::collections::HashMap<u8, crate::eds::types::ObjectDictionary>,
+    cmd_tx: &mpsc::Sender<CanCommand>,
+    listen_only: bool,
+    panel: &mut SdoBrowserPanel,
+) {
+    use crate::eds::types::AccessType;
+
+    egui::CollapsingHeader::new(
+        egui::RichText::new(format!("{} SDO Browser", icons::SDO_BROWSER)).strong(),
+    )
+    .default_open(false)
+    .show(ui, |ui| {
+        if listen_only {
+            ui.colored_label(
+                Color32::YELLOW,
+                "SDO Browser is disabled in listen-only mode.",
+            );
+            return;
+        }
+        if node_labels.is_empty() {
+            ui.label("No nodes configured.");
+            return;
+        }
+
+        // ── Node selector ─────────────────────────────────────────────────
+        panel.selected_node_idx = panel.selected_node_idx.min(node_labels.len() - 1);
+        let (current_id, current_label) = &node_labels[panel.selected_node_idx];
+        let current_id = *current_id;
+
+        ui.horizontal(|ui| {
+            ui.label("Node:");
+            egui::ComboBox::from_id_salt("sdo_browser_node")
+                .selected_text(format!("{} ({})", current_id, current_label))
+                .show_ui(ui, |ui| {
+                    for (i, (id, label)) in node_labels.iter().enumerate() {
+                        let label_str = format!("{} ({})", id, label);
+                        if ui
+                            .selectable_value(&mut panel.selected_node_idx, i, label_str)
+                            .changed()
+                        {
+                            panel.selected_od_key = None;
+                            panel.write_value_str.clear();
+                            panel.last_error = None;
+                        }
+                    }
+                });
+
+            let has_od = node_ods.contains_key(&current_id);
+
+            // EDS / Raw tab buttons
+            ui.separator();
+            let eds_btn = ui.add_enabled(
+                has_od,
+                Button::new("EDS").fill(if !panel.raw_mode && has_od {
+                    Color32::from_rgb(40, 90, 180)
+                } else {
+                    Color32::from_gray(55)
+                }),
+            );
+            if has_od && eds_btn.clicked() {
+                panel.raw_mode = false;
+                panel.last_error = None;
+            }
+            let raw_btn = ui.add(Button::new("Raw").fill(if panel.raw_mode {
+                Color32::from_rgb(40, 90, 180)
+            } else {
+                Color32::from_gray(55)
+            }));
+            if raw_btn.clicked() {
+                panel.raw_mode = true;
+                panel.last_error = None;
+            }
+            if !has_od && !panel.raw_mode {
+                panel.raw_mode = true;
+            }
+
+            // Pending indicator
+            if let Some((idx, sub, dir)) = state.pending_sdos.get(&current_id) {
+                let dir_str = match dir {
+                    SdoDirection::Read => "READ",
+                    SdoDirection::Write => "WRITE",
+                };
+                ui.separator();
+                ui.colored_label(
+                    Color32::from_rgb(230, 190, 0),
+                    format!("\u{23f3} Waiting for {dir_str} {:04X}h/{:02X}…", idx, sub),
+                );
+            }
+        });
+
+        let is_pending = state.pending_sdos.contains_key(&current_id);
+
+        // ── Error display ─────────────────────────────────────────────────
+        if let Some(err) = &panel.last_error {
+            ui.colored_label(Color32::from_rgb(220, 60, 60), format!("\u{26a0} {err}"));
+        }
+
+        ui.add_space(4.0);
+
+        if panel.raw_mode {
+            // ── Raw pane ──────────────────────────────────────────────────
+            egui::Grid::new("sdo_raw_grid")
+                .num_columns(2)
+                .spacing([8.0, 6.0])
+                .show(ui, |ui| {
+                    ui.label("Index (hex):");
+                    ui.add(
+                        egui::TextEdit::singleline(&mut panel.raw_index_str)
+                            .desired_width(70.0)
+                            .hint_text("1001"),
+                    );
+                    ui.end_row();
+
+                    ui.label("Subindex:");
+                    ui.add(
+                        egui::TextEdit::singleline(&mut panel.raw_subindex_str)
+                            .desired_width(50.0)
+                            .hint_text("0"),
+                    );
+                    ui.end_row();
+                });
+
+            ui.horizontal(|ui| {
+                let read_ok = !is_pending && !panel.raw_index_str.trim().is_empty();
+                if ui
+                    .add_enabled(read_ok, Button::new("Read"))
+                    .on_disabled_hover_text(if is_pending {
+                        "Waiting for previous response"
+                    } else {
+                        "Enter an index first"
+                    })
+                    .clicked()
+                {
+                    match parse_raw_index_sub(&panel.raw_index_str, &panel.raw_subindex_str) {
+                        Ok((index, subindex)) => {
+                            panel.last_error = None;
+                            let _ = cmd_tx.send(CanCommand::SdoRead {
+                                node_id: current_id,
+                                index,
+                                subindex,
+                            });
+                        }
+                        Err(e) => panel.last_error = Some(e),
+                    }
+                }
+            });
+
+            ui.add_space(4.0);
+            ui.label("Write data (hex bytes):");
+            ui.add(
+                egui::TextEdit::singleline(&mut panel.raw_data_str)
+                    .desired_width(f32::INFINITY)
+                    .hint_text("01 02 03 04"),
+            );
+            ui.horizontal(|ui| {
+                let write_ok = !is_pending && !panel.raw_index_str.trim().is_empty();
+                if ui
+                    .add_enabled(write_ok, Button::new("Write"))
+                    .on_disabled_hover_text(if is_pending {
+                        "Waiting for previous response"
+                    } else {
+                        "Enter an index first"
+                    })
+                    .clicked()
+                {
+                    match parse_raw_index_sub(&panel.raw_index_str, &panel.raw_subindex_str) {
+                        Ok((index, subindex)) => match parse_hex_bytes(&panel.raw_data_str) {
+                            Ok(data) => {
+                                panel.last_error = None;
+                                let _ = cmd_tx.send(CanCommand::SdoWrite {
+                                    node_id: current_id,
+                                    index,
+                                    subindex,
+                                    data,
+                                });
+                            }
+                            Err(e) => panel.last_error = Some(e),
+                        },
+                        Err(e) => panel.last_error = Some(e),
+                    }
+                }
+            });
+        } else {
+            // ── EDS pane ──────────────────────────────────────────────────
+            if let Some(od) = node_ods.get(&current_id) {
+                // Filter text box
+                ui.horizontal(|ui| {
+                    ui.label("Filter:");
+                    ui.add(
+                        egui::TextEdit::singleline(&mut panel.filter_str)
+                            .desired_width(200.0)
+                            .hint_text("name or index…"),
+                    );
+                    if ui.small_button("✕").clicked() {
+                        panel.filter_str.clear();
+                    }
+                });
+
+                // Collect and filter entries, then group by index.
+                let filter = panel.filter_str.to_lowercase();
+                let mut entries: Vec<((u16, u8), &crate::eds::types::OdEntry)> = od
+                    .iter()
+                    .filter(|((idx, _sub), entry)| {
+                        if filter.is_empty() {
+                            return true;
+                        }
+                        entry.name.to_lowercase().contains(&filter)
+                            || format!("{:04x}", idx).contains(&filter)
+                            || format!("{:04X}", idx).contains(&filter)
+                    })
+                    .map(|(k, v)| (*k, v))
+                    .collect();
+                entries.sort_by_key(|(k, _)| *k);
+
+                // Build ordered list of unique indexes.
+                let mut indexes: Vec<u16> = entries.iter().map(|((idx, _), _)| *idx).collect();
+                indexes.dedup();
+
+                // Scrollable tree of index groups → subindex rows.
+                egui::ScrollArea::vertical()
+                    .id_salt("sdo_browser_od")
+                    .max_height(280.0)
+                    .show(ui, |ui| {
+                        for idx in &indexes {
+                            let subs: Vec<(u8, &crate::eds::types::OdEntry)> = entries
+                                .iter()
+                                .filter(|((i, _), _)| i == idx)
+                                .map(|((_, s), e)| (*s, *e))
+                                .collect();
+
+                            // Pick a representative name for the group header:
+                            // sub 0 name if it exists, otherwise first sub's name.
+                            let group_name = subs
+                                .iter()
+                                .find(|(s, _)| *s == 0)
+                                .or_else(|| subs.first())
+                                .map(|(_, e)| e.name.as_str())
+                                .unwrap_or("");
+
+                            // Highlight the header if any sub in this group is selected.
+                            let group_selected = panel
+                                .selected_od_key
+                                .map(|(si, _)| si == *idx)
+                                .unwrap_or(false);
+
+                            // Auto-open when the filter is active or when an entry in
+                            // this group is selected.
+                            let force_open = !filter.is_empty() || group_selected;
+
+                            let header_text =
+                                egui::RichText::new(format!("{:04X}h  {}", idx, group_name)).color(
+                                    if group_selected {
+                                        Color32::from_rgb(130, 190, 255)
+                                    } else {
+                                        Color32::GRAY
+                                    },
+                                );
+
+                            let mut header =
+                                egui::CollapsingHeader::new(header_text).id_salt(("sdo_idx", idx));
+                            if force_open {
+                                header = header.open(Some(true));
+                            }
+                            header.show(ui, |ui| {
+                                egui::Grid::new(("sdo_sub_grid", idx))
+                                    .striped(true)
+                                    .min_col_width(0.0)
+                                    .spacing([8.0, 3.0])
+                                    .show(ui, |ui| {
+                                        ui.strong("Sub");
+                                        ui.strong("Name");
+                                        ui.strong("Type");
+                                        ui.strong("Access");
+                                        ui.end_row();
+
+                                        for (sub, entry) in &subs {
+                                            let key = (*idx, *sub);
+                                            let is_selected = panel.selected_od_key == Some(key);
+                                            let row_text = |s: &str| {
+                                                let t = egui::RichText::new(s);
+                                                if is_selected {
+                                                    t.strong()
+                                                        .color(Color32::from_rgb(130, 190, 255))
+                                                } else {
+                                                    t
+                                                }
+                                            };
+                                            let response = ui
+                                                .selectable_label(
+                                                    is_selected,
+                                                    row_text(&format!("{}", sub)),
+                                                )
+                                                .on_hover_text(format!(
+                                                    "{:04X}h / sub {:02}  —  {}",
+                                                    idx, sub, entry.name
+                                                ));
+                                            if response.clicked() {
+                                                if panel.selected_od_key == Some(key) {
+                                                    panel.selected_od_key = None;
+                                                } else {
+                                                    panel.selected_od_key = Some(key);
+                                                    panel.write_value_str.clear();
+                                                    panel.last_error = None;
+                                                }
+                                            }
+                                            ui.label(row_text(entry.name.as_str()));
+                                            ui.label(row_text(
+                                                &format!("{:?}", entry.data_type)
+                                                    .replace("DataType::", ""),
+                                            ));
+                                            let (acc_str, acc_color) = match &entry.access {
+                                                AccessType::ReadOnly | AccessType::Const => {
+                                                    ("RO", Color32::from_rgb(80, 200, 255))
+                                                }
+                                                AccessType::WriteOnly => {
+                                                    ("WO", Color32::from_rgb(220, 100, 220))
+                                                }
+                                                AccessType::ReadWrite => {
+                                                    ("R/W", Color32::from_rgb(100, 220, 100))
+                                                }
+                                                AccessType::Unknown => ("?", Color32::GRAY),
+                                            };
+                                            ui.colored_label(acc_color, acc_str);
+                                            ui.end_row();
+                                        }
+                                    });
+                            });
+                        }
+                    });
+
+                // Detail + action area for selected entry
+                if let Some(key) = panel.selected_od_key {
+                    if let Some(entry) = od.get(&key) {
+                        ui.separator();
+                        ui.horizontal(|ui| {
+                            ui.strong(&entry.name);
+                            ui.label(format!(
+                                "— {:04X}h/{:02X}  {:?}",
+                                key.0, key.1, entry.data_type
+                            ));
+                        });
+
+                        let can_read = !matches!(entry.access, AccessType::WriteOnly);
+                        let can_write =
+                            !matches!(entry.access, AccessType::ReadOnly | AccessType::Const);
+
+                        ui.horizontal(|ui| {
+                            // Read button
+                            if ui
+                                .add_enabled(
+                                    can_read && !is_pending,
+                                    Button::new("Read").fill(Color32::from_rgb(40, 90, 180)),
+                                )
+                                .on_disabled_hover_text(if is_pending {
+                                    "Waiting for previous response"
+                                } else {
+                                    "Object is write-only"
+                                })
+                                .clicked()
+                            {
+                                panel.last_error = None;
+                                let _ = cmd_tx.send(CanCommand::SdoRead {
+                                    node_id: current_id,
+                                    index: key.0,
+                                    subindex: key.1,
+                                });
+                            }
+
+                            // Write area
+                            if can_write {
+                                let hint = value_hint_for_type(&entry.data_type);
+                                ui.add(
+                                    egui::TextEdit::singleline(&mut panel.write_value_str)
+                                        .desired_width(160.0)
+                                        .hint_text(hint),
+                                );
+                                if ui
+                                    .add_enabled(
+                                        !is_pending,
+                                        Button::new("Write").fill(Color32::from_rgb(120, 45, 130)),
+                                    )
+                                    .on_disabled_hover_text("Waiting for previous response")
+                                    .clicked()
+                                {
+                                    match encode_value_for_type(
+                                        &panel.write_value_str,
+                                        &entry.data_type,
+                                    ) {
+                                        Ok(data) => {
+                                            panel.last_error = None;
+                                            let _ = cmd_tx.send(CanCommand::SdoWrite {
+                                                node_id: current_id,
+                                                index: key.0,
+                                                subindex: key.1,
+                                                data,
+                                            });
+                                        }
+                                        Err(e) => panel.last_error = Some(e),
+                                    }
+                                }
+                            }
+                        });
+                    }
+                }
+            }
+        }
+    });
+}
+
+/// Return a short placeholder string describing the expected input for a given `DataType`.
+fn value_hint_for_type(dtype: &crate::eds::types::DataType) -> &'static str {
+    use crate::eds::types::DataType;
+    match dtype {
+        DataType::Boolean => "true / false",
+        DataType::Integer8 => "-128 … 127",
+        DataType::Integer16 => "-32768 … 32767",
+        DataType::Integer32 => "-2147483648 … 2147483647",
+        DataType::Integer64 => "signed 64-bit",
+        DataType::Unsigned8 => "0 … 255",
+        DataType::Unsigned16 => "0 … 65535  or  0x…",
+        DataType::Unsigned32 => "0 … 4294967295  or  0x…",
+        DataType::Unsigned64 => "unsigned 64-bit  or  0x…",
+        DataType::Real32 => "e.g. 3.14",
+        DataType::Real64 => "e.g. 3.141592",
+        DataType::VisibleString => "text string",
+        DataType::OctetString | DataType::Unknown(_) => "hex bytes: 01 02 …",
+    }
+}
+
+/// Parse the raw index (hex) and subindex (decimal) fields from the browser.
+fn parse_raw_index_sub(index_str: &str, sub_str: &str) -> Result<(u16, u8), String> {
+    let s = index_str.trim();
+    let index = if let Some(hex) = s.strip_prefix("0x").or_else(|| s.strip_prefix("0X")) {
+        u16::from_str_radix(hex, 16).map_err(|_| format!("Invalid hex index {:?}", index_str))?
+    } else {
+        // Try hex without prefix first (common for OD indices)
+        u16::from_str_radix(s, 16)
+            .or_else(|_| s.parse::<u16>())
+            .map_err(|_| {
+                format!(
+                    "Invalid index {:?} (use hex like 1001 or 0x1001)",
+                    index_str
+                )
+            })?
+    };
+    let subindex = sub_str
+        .trim()
+        .parse::<u8>()
+        .map_err(|_| format!("Invalid subindex {:?} (decimal 0–255)", sub_str))?;
+    Ok((index, subindex))
 }
 
 // ─── SDO Log section ──────────────────────────────────────────────────────────

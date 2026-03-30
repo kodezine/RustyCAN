@@ -1,10 +1,11 @@
 /// CAN session lifecycle: load EDS, open adapter, spawn recv thread.
 ///
 /// Extracted from `main.rs` so the GUI can start/stop sessions without a CLI.
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::mpsc;
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use chrono::Utc;
 use embedded_can::Frame as EmbeddedFrame;
@@ -15,7 +16,12 @@ use crate::canopen::{
     self, classify_frame, extract_cob_id,
     nmt::{decode_heartbeat, decode_nmt_command, encode_nmt_command, NmtCommand},
     pdo::PdoDecoder,
-    sdo::decode_sdo,
+    sdo::{
+        decode_sdo, decode_segmented_upload_initiate, decode_upload_segment_response,
+        encode_download_expedited, encode_download_initiate_segmented, encode_download_segment,
+        encode_upload_request, encode_upload_segment_ack, interpret_value,
+        is_download_initiate_ack, is_download_segment_ack, SdoDirection,
+    },
     FrameType,
 };
 use crate::eds::{parse_eds, types::ObjectDictionary};
@@ -30,6 +36,19 @@ pub enum CanCommand {
         command: NmtCommand,
         /// Target node ID; 0x00 broadcasts to all nodes.
         target_node: u8,
+    },
+    /// Initiate an SDO upload (master reads from node). COB-ID 0x600+node_id.
+    SdoRead {
+        node_id: u8,
+        index: u16,
+        subindex: u8,
+    },
+    /// Initiate an SDO download (master writes to node). COB-ID 0x600+node_id.
+    SdoWrite {
+        node_id: u8,
+        index: u16,
+        subindex: u8,
+        data: Vec<u8>,
     },
 }
 
@@ -46,6 +65,9 @@ pub struct SessionConfig {
     /// All [`CanCommand`] variants (NMT and future SDO/PDO writes) are silently
     /// dropped. Software-level only; the adapter still participates in ACK bits.
     pub listen_only: bool,
+    /// How long (milliseconds) to wait for an SDO response before emitting a
+    /// synthetic abort event with code 0x05040000 (protocol timed out).
+    pub sdo_timeout_ms: u64,
 }
 
 /// Load EDS files, open the log, spawn the recv thread.
@@ -120,6 +142,7 @@ pub fn start(config: SessionConfig) -> SessionResult {
     let port = config.port.clone();
     let baud = config.baud;
     let listen_only = config.listen_only;
+    let sdo_timeout_ms = config.sdo_timeout_ms;
 
     thread::spawn(move || {
         let adapter = match host_can::adapter::get_adapter(&port, baud) {
@@ -141,6 +164,7 @@ pub fn start(config: SessionConfig) -> SessionResult {
             cmd_rx,
             logger,
             listen_only,
+            sdo_timeout_ms,
         );
     });
 
@@ -149,6 +173,7 @@ pub fn start(config: SessionConfig) -> SessionResult {
 
 // ─── Receive loop ─────────────────────────────────────────────────────────────
 
+#[allow(clippy::too_many_arguments)]
 fn recv_loop(
     adapter: Box<dyn host_can::adapter::Adapter>,
     ods: &[(u8, Option<ObjectDictionary>)],
@@ -157,14 +182,41 @@ fn recv_loop(
     cmd_rx: mpsc::Receiver<CanCommand>,
     mut logger: EventLogger,
     listen_only: bool,
+    sdo_timeout_ms: u64,
 ) {
     let timeout = Some(Duration::from_millis(500));
+
+    // ── Per-node in-flight SDO tracking ──────────────────────────────────────
+    /// Internal state for the active SDO transfer on one node.
+    enum SdoPendingState {
+        /// Waiting for the server's initiate response (expedited upload or expedited download).
+        WaitingResponse,
+        /// Segmented upload in progress: accumulating server segments.
+        UploadSegmented {
+            toggle: bool,
+            buf: Vec<u8>,
+            expected_size: Option<u32>,
+        },
+        /// Segmented download in progress: sending chunks to the server.
+        DownloadSegmented { remaining: Vec<u8>, toggle: bool },
+    }
+
+    struct PendingSdo {
+        #[allow(dead_code)]
+        node_id: u8,
+        index: u16,
+        subindex: u8,
+        direction: SdoDirection,
+        started_at: Instant,
+        state: SdoPendingState,
+    }
+
+    let mut pending_sdos: HashMap<u8, PendingSdo> = HashMap::new();
 
     loop {
         // ── Drain outbound commands from GUI ─────────────────────────────────
         // In listen-only mode, drain and discard every command — prevents the
-        // channel from backing up. Any future SendSdo / SendPdo variants are
-        // automatically blocked here without further changes.
+        // channel from backing up.
         if listen_only {
             while cmd_rx.try_recv().is_ok() {}
         } else {
@@ -182,6 +234,112 @@ fn recv_loop(
                                 eprintln!("NMT send error: {e:?}");
                             } else {
                                 logger.log_nmt_sent(Utc::now(), command, target_node, &payload);
+                            }
+                        }
+                    }
+
+                    CanCommand::SdoRead {
+                        node_id,
+                        index,
+                        subindex,
+                    } => {
+                        let payload = encode_upload_request(index, subindex);
+                        let cob_id = 0x600u16 + node_id as u16;
+                        if let Some(frame) = host_can::id::new_standard(cob_id)
+                            .and_then(|id| CanFrame::new(id, &payload))
+                        {
+                            if let Err(e) = adapter.send(&frame) {
+                                eprintln!("SDO read send error: {e:?}");
+                            } else {
+                                pending_sdos.insert(
+                                    node_id,
+                                    PendingSdo {
+                                        node_id,
+                                        index,
+                                        subindex,
+                                        direction: SdoDirection::Read,
+                                        started_at: Instant::now(),
+                                        state: SdoPendingState::WaitingResponse,
+                                    },
+                                );
+                                let _ = tx.send(CanEvent::SdoPending {
+                                    node_id,
+                                    index,
+                                    subindex,
+                                    direction: SdoDirection::Read,
+                                });
+                            }
+                        }
+                    }
+
+                    CanCommand::SdoWrite {
+                        node_id,
+                        index,
+                        subindex,
+                        data,
+                    } => {
+                        let cob_id = 0x600u16 + node_id as u16;
+                        if data.len() <= 4 {
+                            // Expedited download
+                            if let Some(payload) = encode_download_expedited(index, subindex, &data)
+                            {
+                                if let Some(frame) = host_can::id::new_standard(cob_id)
+                                    .and_then(|id| CanFrame::new(id, &payload))
+                                {
+                                    if let Err(e) = adapter.send(&frame) {
+                                        eprintln!("SDO write send error: {e:?}");
+                                    } else {
+                                        pending_sdos.insert(
+                                            node_id,
+                                            PendingSdo {
+                                                node_id,
+                                                index,
+                                                subindex,
+                                                direction: SdoDirection::Write,
+                                                started_at: Instant::now(),
+                                                state: SdoPendingState::WaitingResponse,
+                                            },
+                                        );
+                                        let _ = tx.send(CanEvent::SdoPending {
+                                            node_id,
+                                            index,
+                                            subindex,
+                                            direction: SdoDirection::Write,
+                                        });
+                                    }
+                                }
+                            }
+                        } else {
+                            // Segmented download initiate
+                            let size = data.len() as u32;
+                            let payload = encode_download_initiate_segmented(index, subindex, size);
+                            if let Some(frame) = host_can::id::new_standard(cob_id)
+                                .and_then(|id| CanFrame::new(id, &payload))
+                            {
+                                if let Err(e) = adapter.send(&frame) {
+                                    eprintln!("SDO segmented initiate error: {e:?}");
+                                } else {
+                                    pending_sdos.insert(
+                                        node_id,
+                                        PendingSdo {
+                                            node_id,
+                                            index,
+                                            subindex,
+                                            direction: SdoDirection::Write,
+                                            started_at: Instant::now(),
+                                            state: SdoPendingState::DownloadSegmented {
+                                                remaining: data,
+                                                toggle: false,
+                                            },
+                                        },
+                                    );
+                                    let _ = tx.send(CanEvent::SdoPending {
+                                        node_id,
+                                        index,
+                                        subindex,
+                                        direction: SdoDirection::Write,
+                                    });
+                                }
                             }
                         }
                     }
@@ -245,22 +403,339 @@ fn recv_loop(
             FrameType::SdoResponse(node_id) => {
                 let empty_od = ObjectDictionary::new();
                 let od = find_od(ods, node_id).unwrap_or(&empty_od);
-                if let Some(sdo_ev) = decode_sdo(node_id, data, od, true) {
-                    logger.log_sdo(ts, &sdo_ev, data, cob_id);
-                    if tx
-                        .send(CanEvent::Sdo(SdoLogEntry {
+
+                if let Some(mut pending) = pending_sdos.remove(&node_id) {
+                    // Route through the SDO state machine.
+                    let cs = data.first().copied().unwrap_or(0);
+
+                    // ── Abort (CS=0x80) — always terminates the transfer ──────
+                    if cs == 0x80 {
+                        let abort_code = u32::from_le_bytes([
+                            data.get(4).copied().unwrap_or(0),
+                            data.get(5).copied().unwrap_or(0),
+                            data.get(6).copied().unwrap_or(0),
+                            data.get(7).copied().unwrap_or(0),
+                        ]);
+                        let name = od
+                            .get(&(pending.index, pending.subindex))
+                            .map(|e| e.name.clone())
+                            .unwrap_or_else(|| {
+                                format!("{:04X}h/{:02X}", pending.index, pending.subindex)
+                            });
+                        let entry = SdoLogEntry {
                             ts,
-                            node_id: sdo_ev.node_id,
-                            direction: sdo_ev.direction,
-                            index: sdo_ev.index,
-                            subindex: sdo_ev.subindex,
-                            name: sdo_ev.name,
-                            value: sdo_ev.value,
-                            abort_code: sdo_ev.abort_code,
-                        }))
-                        .is_err()
-                    {
-                        return;
+                            node_id,
+                            direction: pending.direction,
+                            index: pending.index,
+                            subindex: pending.subindex,
+                            name,
+                            value: None,
+                            abort_code: Some(abort_code),
+                        };
+                        logger.log_sdo(
+                            ts,
+                            &crate::canopen::sdo::SdoEvent {
+                                node_id,
+                                direction: entry.direction.clone(),
+                                index: entry.index,
+                                subindex: entry.subindex,
+                                name: entry.name.clone(),
+                                value: None,
+                                abort_code: Some(abort_code),
+                            },
+                            data,
+                            cob_id,
+                        );
+                        if tx.send(CanEvent::Sdo(entry)).is_err() {
+                            return;
+                        }
+                        // pending already removed above
+                    } else {
+                        match pending.state {
+                            // ── Waiting for initiate response ─────────────
+                            SdoPendingState::WaitingResponse => {
+                                // Expedited upload response
+                                if matches!(cs, 0x43 | 0x47 | 0x4B | 0x4F) {
+                                    if let Some(sdo_ev) = decode_sdo(node_id, data, od, true) {
+                                        logger.log_sdo(ts, &sdo_ev, data, cob_id);
+                                        if tx
+                                            .send(CanEvent::Sdo(SdoLogEntry {
+                                                ts,
+                                                node_id: sdo_ev.node_id,
+                                                direction: sdo_ev.direction,
+                                                index: sdo_ev.index,
+                                                subindex: sdo_ev.subindex,
+                                                name: sdo_ev.name,
+                                                value: sdo_ev.value,
+                                                abort_code: sdo_ev.abort_code,
+                                            }))
+                                            .is_err()
+                                        {
+                                            return;
+                                        }
+                                    }
+                                    // pending removed — transfer complete
+                                }
+                                // Download expedited ack (CS=0x60 with index/subindex echo)
+                                else if is_download_initiate_ack(data) {
+                                    let name = od
+                                        .get(&(pending.index, pending.subindex))
+                                        .map(|e| e.name.clone())
+                                        .unwrap_or_else(|| {
+                                            format!(
+                                                "{:04X}h/{:02X}",
+                                                pending.index, pending.subindex
+                                            )
+                                        });
+                                    let entry = SdoLogEntry {
+                                        ts,
+                                        node_id,
+                                        direction: SdoDirection::Write,
+                                        index: pending.index,
+                                        subindex: pending.subindex,
+                                        name,
+                                        value: None,
+                                        abort_code: None,
+                                    };
+                                    logger.log_sdo(
+                                        ts,
+                                        &crate::canopen::sdo::SdoEvent {
+                                            node_id,
+                                            direction: entry.direction.clone(),
+                                            index: entry.index,
+                                            subindex: entry.subindex,
+                                            name: entry.name.clone(),
+                                            value: None,
+                                            abort_code: None,
+                                        },
+                                        data,
+                                        cob_id,
+                                    );
+                                    if tx.send(CanEvent::Sdo(entry)).is_err() {
+                                        return;
+                                    }
+                                    // pending removed — transfer complete
+                                }
+                                // Segmented upload initiate (CS=0x40 or 0x41)
+                                else if let Some(opt_size) =
+                                    decode_segmented_upload_initiate(data)
+                                {
+                                    // Send first upload segment request (toggle=false)
+                                    let cob_out = 0x600u16 + node_id as u16;
+                                    let ack_frame = encode_upload_segment_ack(false);
+                                    if let Some(f) = host_can::id::new_standard(cob_out)
+                                        .and_then(|id| CanFrame::new(id, &ack_frame))
+                                    {
+                                        let _ = adapter.send(&f);
+                                    }
+                                    // Transition to UploadSegmented
+                                    pending.state = SdoPendingState::UploadSegmented {
+                                        toggle: false,
+                                        buf: Vec::new(),
+                                        expected_size: opt_size,
+                                    };
+                                    pending_sdos.insert(node_id, pending);
+                                } else {
+                                    // Unexpected frame for this state; reinsert so timeout still fires.
+                                    pending_sdos.insert(node_id, pending);
+                                }
+                            }
+
+                            // ── Accumulating upload segments ──────────────
+                            SdoPendingState::UploadSegmented {
+                                mut toggle,
+                                mut buf,
+                                expected_size,
+                            } => {
+                                if let Some((chunk, is_last)) = decode_upload_segment_response(data)
+                                {
+                                    buf.extend_from_slice(&chunk);
+
+                                    if is_last {
+                                        // Full data assembled — decode typed value
+                                        let opt_dtype = od
+                                            .get(&(pending.index, pending.subindex))
+                                            .map(|e| &e.data_type);
+                                        let value = interpret_value(&buf, opt_dtype);
+                                        let name = od
+                                            .get(&(pending.index, pending.subindex))
+                                            .map(|e| e.name.clone())
+                                            .unwrap_or_else(|| {
+                                                format!(
+                                                    "{:04X}h/{:02X}",
+                                                    pending.index, pending.subindex
+                                                )
+                                            });
+                                        let entry = SdoLogEntry {
+                                            ts,
+                                            node_id,
+                                            direction: SdoDirection::Read,
+                                            index: pending.index,
+                                            subindex: pending.subindex,
+                                            name,
+                                            value: Some(value),
+                                            abort_code: None,
+                                        };
+                                        logger.log_sdo(
+                                            ts,
+                                            &crate::canopen::sdo::SdoEvent {
+                                                node_id,
+                                                direction: entry.direction.clone(),
+                                                index: entry.index,
+                                                subindex: entry.subindex,
+                                                name: entry.name.clone(),
+                                                value: entry.value.clone(),
+                                                abort_code: None,
+                                            },
+                                            data,
+                                            cob_id,
+                                        );
+                                        if tx.send(CanEvent::Sdo(entry)).is_err() {
+                                            return;
+                                        }
+                                        // pending removed — transfer complete
+                                    } else {
+                                        // Send next segment request with toggled bit
+                                        toggle = !toggle;
+                                        let cob_out = 0x600u16 + node_id as u16;
+                                        let ack_frame = encode_upload_segment_ack(toggle);
+                                        if let Some(f) = host_can::id::new_standard(cob_out)
+                                            .and_then(|id| CanFrame::new(id, &ack_frame))
+                                        {
+                                            let _ = adapter.send(&f);
+                                        }
+                                        // Reinsert with updated state
+                                        pending.state = SdoPendingState::UploadSegmented {
+                                            toggle,
+                                            buf,
+                                            expected_size,
+                                        };
+                                        pending_sdos.insert(node_id, pending);
+                                    }
+                                } else {
+                                    // Unexpected; reinsert for timeout
+                                    pending.state = SdoPendingState::UploadSegmented {
+                                        toggle,
+                                        buf,
+                                        expected_size,
+                                    };
+                                    pending_sdos.insert(node_id, pending);
+                                }
+                            }
+
+                            // ── Sending download segments ─────────────────
+                            // `toggle` = next toggle bit to use for outgoing segment.
+                            // `is_download_initiate_ack` → send first segment.
+                            // `is_download_segment_ack(!toggle)` → server acked last segment.
+                            SdoPendingState::DownloadSegmented {
+                                mut remaining,
+                                mut toggle,
+                            } => {
+                                let send_next_segment = is_download_initiate_ack(data)
+                                    || is_download_segment_ack(data, !toggle);
+
+                                if send_next_segment {
+                                    let chunk_len = remaining.len().min(7);
+                                    let chunk = remaining[..chunk_len].to_vec();
+                                    remaining = remaining[chunk_len..].to_vec();
+                                    let is_last = remaining.is_empty();
+
+                                    let seg_frame =
+                                        encode_download_segment(&chunk, toggle, is_last);
+                                    let cob_out = 0x600u16 + node_id as u16;
+                                    if let Some(f) = host_can::id::new_standard(cob_out)
+                                        .and_then(|id| CanFrame::new(id, &seg_frame))
+                                    {
+                                        let _ = adapter.send(&f);
+                                    }
+
+                                    if is_last {
+                                        // Server will ack this last segment; stay pending to
+                                        // receive that final ack, but now as WaitingResponse.
+                                        // We repurpose WaitingResponse here: on CS=0x20|(toggle<<4)
+                                        // we emit success.
+                                        pending.state = SdoPendingState::DownloadSegmented {
+                                            remaining: Vec::new(),
+                                            toggle, // toggle of the last sent segment
+                                        };
+                                        pending_sdos.insert(node_id, pending);
+                                    } else {
+                                        toggle = !toggle;
+                                        pending.state = SdoPendingState::DownloadSegmented {
+                                            remaining,
+                                            toggle,
+                                        };
+                                        pending_sdos.insert(node_id, pending);
+                                    }
+                                } else if remaining.is_empty()
+                                    && is_download_segment_ack(data, toggle)
+                                {
+                                    // Final segment ack — transfer complete
+                                    let name = od
+                                        .get(&(pending.index, pending.subindex))
+                                        .map(|e| e.name.clone())
+                                        .unwrap_or_else(|| {
+                                            format!(
+                                                "{:04X}h/{:02X}",
+                                                pending.index, pending.subindex
+                                            )
+                                        });
+                                    let entry = SdoLogEntry {
+                                        ts,
+                                        node_id,
+                                        direction: SdoDirection::Write,
+                                        index: pending.index,
+                                        subindex: pending.subindex,
+                                        name,
+                                        value: None,
+                                        abort_code: None,
+                                    };
+                                    logger.log_sdo(
+                                        ts,
+                                        &crate::canopen::sdo::SdoEvent {
+                                            node_id,
+                                            direction: entry.direction.clone(),
+                                            index: entry.index,
+                                            subindex: entry.subindex,
+                                            name: entry.name.clone(),
+                                            value: None,
+                                            abort_code: None,
+                                        },
+                                        data,
+                                        cob_id,
+                                    );
+                                    if tx.send(CanEvent::Sdo(entry)).is_err() {
+                                        return;
+                                    }
+                                    // pending removed — transfer complete
+                                } else {
+                                    // Unexpected frame; reinsert
+                                    pending.state =
+                                        SdoPendingState::DownloadSegmented { remaining, toggle };
+                                    pending_sdos.insert(node_id, pending);
+                                }
+                            }
+                        }
+                    }
+                } else {
+                    // No pending for this node — passive decode (unchanged)
+                    if let Some(sdo_ev) = decode_sdo(node_id, data, od, true) {
+                        logger.log_sdo(ts, &sdo_ev, data, cob_id);
+                        if tx
+                            .send(CanEvent::Sdo(SdoLogEntry {
+                                ts,
+                                node_id: sdo_ev.node_id,
+                                direction: sdo_ev.direction,
+                                index: sdo_ev.index,
+                                subindex: sdo_ev.subindex,
+                                name: sdo_ev.name,
+                                value: sdo_ev.value,
+                                abort_code: sdo_ev.abort_code,
+                            }))
+                            .is_err()
+                        {
+                            return;
+                        }
                     }
                 }
             }
@@ -348,6 +823,38 @@ fn recv_loop(
             }
 
             _ => {}
+        }
+
+        // ── SDO timeout scan ─────────────────────────────────────────────────
+        // CiA 301 abort code 0x05040000 = SDO protocol timed out.
+        let timed_out: Vec<u8> = pending_sdos
+            .iter()
+            .filter(|(_, p)| p.started_at.elapsed().as_millis() as u64 >= sdo_timeout_ms)
+            .map(|(id, _)| *id)
+            .collect();
+
+        for node_id in timed_out {
+            if let Some(p) = pending_sdos.remove(&node_id) {
+                let empty_od_inner = ObjectDictionary::new();
+                let od_inner = find_od(ods, node_id).unwrap_or(&empty_od_inner);
+                let name = od_inner
+                    .get(&(p.index, p.subindex))
+                    .map(|e| e.name.clone())
+                    .unwrap_or_else(|| format!("{:04X}h/{:02X}", p.index, p.subindex));
+                let entry = SdoLogEntry {
+                    ts: Utc::now(),
+                    node_id,
+                    direction: p.direction,
+                    index: p.index,
+                    subindex: p.subindex,
+                    name,
+                    value: None,
+                    abort_code: Some(0x0504_0000),
+                };
+                if tx.send(CanEvent::Sdo(entry)).is_err() {
+                    return;
+                }
+            }
         }
     }
 }

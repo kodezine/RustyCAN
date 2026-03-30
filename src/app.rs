@@ -47,6 +47,14 @@ pub enum CanEvent {
         cob_id: u16,
         values: Vec<PdoValue>,
     },
+    /// Emitted by the recv thread when a master-initiated SDO transfer is sent.
+    /// Allows the UI to show a "pending" indicator while waiting for the response.
+    SdoPending {
+        node_id: u8,
+        index: u16,
+        subindex: u8,
+        direction: SdoDirection,
+    },
     /// Sent by the recv thread when the CAN adapter fails to open.
     AdapterError(String),
 }
@@ -61,6 +69,8 @@ pub struct AppState {
     pub pdo_values: HashMap<(u8, u16), PdoEntry>,
     /// Ring buffer of recent SDO events.
     pub sdo_log: VecDeque<SdoLogEntry>,
+    /// In-flight SDO transfers initiated by the master: node_id → (index, subindex, direction).
+    pub pending_sdos: HashMap<u8, (u16, u8, SdoDirection)>,
     /// Total CAN frames received.
     pub total_frames: u64,
     /// Rolling frames-per-second counter.
@@ -85,6 +95,7 @@ impl AppState {
             node_map: HashMap::new(),
             pdo_values: HashMap::new(),
             sdo_log: VecDeque::with_capacity(SDO_LOG_CAP + 1),
+            pending_sdos: HashMap::new(),
             total_frames: 0,
             fps: 0.0,
             bus_load: 0.0,
@@ -160,13 +171,27 @@ pub fn apply_event(state: &mut AppState, ev: CanEvent) {
         } => {
             state.update_nmt(node_id, nmt_state);
         }
-        CanEvent::Sdo(entry) => state.push_sdo(entry),
+        CanEvent::Sdo(entry) => {
+            // Clear any pending indicator for this node.
+            state.pending_sdos.remove(&entry.node_id);
+            state.push_sdo(entry);
+        }
         CanEvent::Pdo {
             node_id,
             cob_id,
             values,
         } => {
             state.update_pdo(node_id, cob_id, values);
+        }
+        CanEvent::SdoPending {
+            node_id,
+            index,
+            subindex,
+            direction,
+        } => {
+            state
+                .pending_sdos
+                .insert(node_id, (index, subindex, direction));
         }
         // Handled directly by the UI layer; nothing to record in AppState.
         CanEvent::AdapterError(_) => {}
