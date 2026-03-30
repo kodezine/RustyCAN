@@ -142,6 +142,7 @@ fn format_bps(s: &str) -> String {
 
 pub struct RustyCanApp {
     screen: Screen,
+    logo: egui::TextureHandle,
 }
 
 #[allow(clippy::large_enum_variant)]
@@ -151,9 +152,20 @@ enum Screen {
 }
 
 impl RustyCanApp {
-    fn new() -> Self {
+    fn new(cc: &eframe::CreationContext) -> Self {
+        let icon_bytes = include_bytes!("../../assets/RustyCAN.iconset/icon_256x256.png");
+        let icon_data =
+            eframe::icon_data::from_png_bytes(icon_bytes).expect("bundled icon is valid PNG");
+        let color_image = egui::ColorImage::from_rgba_unmultiplied(
+            [icon_data.width as usize, icon_data.height as usize],
+            &icon_data.rgba,
+        );
+        let logo = cc
+            .egui_ctx
+            .load_texture("app_logo", color_image, egui::TextureOptions::LINEAR);
         RustyCanApp {
             screen: Screen::Connect(ConnectForm::default()),
+            logo,
         }
     }
 }
@@ -166,7 +178,7 @@ impl eframe::App for RustyCanApp {
 
         match &mut self.screen {
             Screen::Connect(form) => {
-                if let Some(s) = render_connect(ctx, form) {
+                if let Some(s) = render_connect(ctx, form, &self.logo) {
                     next_screen = Some(s);
                 }
             }
@@ -206,6 +218,8 @@ struct ConnectForm {
     last_probe: Option<Instant>,
     /// If true, no CAN frames are transmitted (commands are silently dropped).
     listen_only: bool,
+    /// If true, also write a plain-text `.log` file alongside the JSONL file.
+    text_log: bool,
 }
 
 impl Clone for ConnectForm {
@@ -225,6 +239,7 @@ impl Clone for ConnectForm {
             probe_rx: None,
             last_probe: None,
             listen_only: self.listen_only,
+            text_log: self.text_log,
         }
     }
 }
@@ -250,6 +265,7 @@ impl Default for ConnectForm {
             probe_rx: None,
             last_probe: None,
             listen_only: false,
+            text_log: false,
         }
     }
 }
@@ -310,6 +326,7 @@ impl ConnectForm {
             nodes,
             log_path: self.log_path.trim().to_string(),
             listen_only: self.listen_only,
+            text_log: self.text_log,
             sdo_timeout_ms,
             block_initiate_timeout_ms: 1000,
             block_subblock_timeout_ms: 500,
@@ -375,7 +392,11 @@ const BAUD_OPTIONS: &[&str] = &[
 /// How often to re-probe the dongle (seconds).
 const PROBE_INTERVAL_SECS: u64 = 2;
 
-fn render_connect(ctx: &egui::Context, form: &mut ConnectForm) -> Option<Screen> {
+fn render_connect(
+    ctx: &egui::Context,
+    form: &mut ConnectForm,
+    logo: &egui::TextureHandle,
+) -> Option<Screen> {
     // ── Dongle probe cycle ────────────────────────────────────────────────────
     // 1. Drain any pending probe result.
     if let Some(rx) = &form.probe_rx {
@@ -404,14 +425,20 @@ fn render_connect(ctx: &egui::Context, form: &mut ConnectForm) -> Option<Screen>
     let mut transition = None;
 
     // Estimated content height so we can split surplus space equally top/bottom.
-    const CONNECT_CONTENT_H: f32 = 560.0;
+    const CONNECT_CONTENT_H: f32 = 632.0;
 
     egui::CentralPanel::default().show(ctx, |ui| {
         egui::ScrollArea::vertical().show(ui, |ui| {
             let top_pad = ((ui.available_height() - CONNECT_CONTENT_H) / 2.0).max(20.0);
             ui.vertical_centered(|ui| {
                 ui.add_space(top_pad);
-                ui.heading(egui::RichText::new(format!("{} RustyCAN", icons::APP)).strong());
+                ui.add(
+                    egui::Image::new(logo)
+                        .fit_to_exact_size(egui::vec2(72.0, 72.0))
+                        .corner_radius(8.0),
+                );
+                ui.add_space(8.0);
+                ui.heading(egui::RichText::new("RustyCAN").strong());
                 ui.label(
                     egui::RichText::new(env!("RUSTYCAN_VERSION"))
                         .size(12.0)
@@ -538,6 +565,10 @@ fn render_connect(ctx: &egui::Context, form: &mut ConnectForm) -> Option<Screen>
 
                                 ui.label("Mode:");
                                 ui.checkbox(&mut form.listen_only, "Listen-only (passive)");
+                                ui.end_row();
+
+                                ui.label("Logging:");
+                                ui.checkbox(&mut form.text_log, "Also write plain-text .log file");
                                 ui.end_row();
                             });
                     }); // close Connection CollapsingHeader
@@ -2140,7 +2171,7 @@ pub fn run() -> Result<(), eframe::Error> {
                 );
             });
 
-            Ok(Box::new(RustyCanApp::new()))
+            Ok(Box::new(RustyCanApp::new(cc)))
         }),
     )
 }

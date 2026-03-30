@@ -16,6 +16,8 @@ use crate::canopen::sdo::{SdoDirection, SdoEvent, SdoValue};
 /// CAN receive loop in high-traffic scenarios (7-10+ nodes).
 pub struct EventLogger {
     writer: BufWriter<File>,
+    /// Optional plain-text companion log (`.log` file, same timestamp stem).
+    text_writer: Option<BufWriter<File>>,
     /// Count of log entries since last flush.
     entries_since_flush: usize,
     /// Time of last flush.
@@ -29,6 +31,41 @@ pub struct EventLogger {
 impl EventLogger {
     pub fn new<P: AsRef<Path>>(path: P) -> std::io::Result<Self> {
         Self::with_config(path, 50, 100)
+    }
+
+    /// Create a logger that also writes a parallel plain-text `.log` file.
+    ///
+    /// When `text_log` is `false` this is identical to [`new`][Self::new].
+    /// When `true`, a second file is opened alongside the JSONL file with the
+    /// same timestamped stem but a `.log` extension.  Both files share the same
+    /// flush cadence so there is no additional performance overhead.
+    pub fn with_text_log<P: AsRef<Path>>(path: P, text_log: bool) -> std::io::Result<Self> {
+        let timestamped_path = add_timestamp_to_path(path.as_ref());
+        let file = OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&timestamped_path)?;
+        let writer = BufWriter::with_capacity(64 * 1024, file);
+
+        let text_writer = if text_log {
+            let text_path = timestamped_path.with_extension("log");
+            let text_file = OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(&text_path)?;
+            Some(BufWriter::with_capacity(64 * 1024, text_file))
+        } else {
+            None
+        };
+
+        Ok(Self {
+            writer,
+            text_writer,
+            entries_since_flush: 0,
+            last_flush: Instant::now(),
+            flush_interval_entries: 50,
+            flush_interval_ms: 100,
+        })
     }
 
     /// Create a logger with custom flush intervals.
@@ -56,6 +93,7 @@ impl EventLogger {
 
         Ok(Self {
             writer,
+            text_writer: None,
             entries_since_flush: 0,
             last_flush: Instant::now(),
             flush_interval_entries,
@@ -83,6 +121,9 @@ impl EventLogger {
 
             if should_flush {
                 let _ = self.writer.flush();
+                if let Some(w) = &mut self.text_writer {
+                    let _ = w.flush();
+                }
                 self.entries_since_flush = 0;
                 self.last_flush = Instant::now();
             }
@@ -94,6 +135,9 @@ impl EventLogger {
     /// critical events are persisted even if the process crashes.
     pub fn force_flush(&mut self) {
         let _ = self.writer.flush();
+        if let Some(w) = &mut self.text_writer {
+            let _ = w.flush();
+        }
         self.entries_since_flush = 0;
         self.last_flush = Instant::now();
     }
@@ -106,51 +150,77 @@ impl EventLogger {
         target_node: u8,
         raw: &[u8],
     ) {
+        let ts_str = ts.to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
         let entry = json!({
-            "ts": ts.to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
+            "ts": ts_str,
             "type": "NMT_COMMAND_SENT",
             "cob_id": "0x000",
+            "source_node": 0,
             "command": format_nmt_command(command),
             "target_node": target_node,
             "raw": bytes_to_hex(raw),
         });
         self.log(entry);
+        self.write_text_line(&ts_str, "NMT_COMMAND_SENT", "0x000", raw);
     }
 
     pub fn log_nmt(&mut self, ts: DateTime<Utc>, event: &NmtEvent, raw: &[u8], cob_id: u16) {
-        let entry = match event {
+        let ts_str = ts.to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
+        let cob_id_str = format!("0x{cob_id:03X}");
+        let (entry, type_str) = match event {
             NmtEvent::Command {
                 command,
                 target_node,
-            } => json!({
-                "ts": ts.to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
-                "type": "NMT_COMMAND",
-                "cob_id": format!("0x{cob_id:03X}"),
-                "command": format_nmt_command(command),
-                "target_node": target_node,
-                "raw": bytes_to_hex(raw),
-            }),
-            NmtEvent::Heartbeat { node_id, state } => json!({
-                "ts": ts.to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
-                "type": "NMT_STATE",
-                "cob_id": format!("0x{cob_id:03X}"),
-                "node": node_id,
-                "state": format_nmt_state(state),
-                "raw": bytes_to_hex(raw),
-            }),
+            } => (
+                json!({
+                    "ts": ts_str,
+                    "type": "NMT_COMMAND",
+                    "cob_id": cob_id_str,
+                    // NMT commands on COB-ID 0x000 always originate from the master.
+                    "source_node": 0,
+                    "command": format_nmt_command(command),
+                    "target_node": target_node,
+                    "raw": bytes_to_hex(raw),
+                }),
+                "NMT_COMMAND",
+            ),
+            NmtEvent::Heartbeat { node_id, state } => (
+                json!({
+                    "ts": ts_str,
+                    "type": "NMT_STATE",
+                    "cob_id": cob_id_str,
+                    // Heartbeat / error-control frames originate from the node itself.
+                    "source_node": node_id,
+                    "node": node_id,
+                    "state": format_nmt_state(state),
+                    "raw": bytes_to_hex(raw),
+                }),
+                "NMT_STATE",
+            ),
         };
         self.log(entry);
+        self.write_text_line(&ts_str, type_str, &cob_id_str, raw);
     }
 
     pub fn log_sdo(&mut self, ts: DateTime<Utc>, event: &SdoEvent, raw: &[u8], cob_id: u16) {
+        let ts_str = ts.to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
         let direction = match event.direction {
             SdoDirection::Read => "READ",
             SdoDirection::Write => "WRITE",
         };
+        let type_str = format!("SDO_{direction}");
+        let cob_id_str = format!("0x{cob_id:03X}");
+        // COB-ID 0x580–0x5FF: server (node) response; 0x600–0x67F: client (master) request.
+        let source_node: u8 = if (0x580..=0x5FF).contains(&cob_id) {
+            event.node_id
+        } else {
+            0
+        };
         let mut entry = json!({
-            "ts": ts.to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
-            "type": format!("SDO_{direction}"),
-            "cob_id": format!("0x{cob_id:03X}"),
+            "ts": ts_str,
+            "type": type_str,
+            "cob_id": cob_id_str,
+            "source_node": source_node,
             "node": event.node_id,
             "index": format!("0x{:04X}", event.index),
             "subindex": format!("0x{:02X}", event.subindex),
@@ -177,6 +247,7 @@ impl EventLogger {
             entry["abort_code"] = json!(format!("0x{code:08X}"));
         }
         self.log(entry);
+        self.write_text_line(&ts_str, &type_str, &cob_id_str, raw);
     }
 
     pub fn log_pdo(
@@ -188,31 +259,59 @@ impl EventLogger {
         raw: &[u8],
         cob_id: u16,
     ) {
+        let ts_str = ts.to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
+        let cob_id_str = format!("0x{cob_id:03X}");
         let mut signals = serde_json::Map::new();
         for v in values {
             signals.insert(v.signal_name.clone(), pdo_value_to_json(&v.value));
         }
 
         let entry = json!({
-            "ts": ts.to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
+            "ts": ts_str,
             "type": "PDO",
-            "cob_id": format!("0x{cob_id:03X}"),
+            "cob_id": cob_id_str,
+            // TPDOs are transmitted by the node itself.
+            "source_node": node_id,
             "node": node_id,
             "pdo_num": pdo_num,
             "signals": signals,
             "raw": bytes_to_hex(raw),
         });
         self.log(entry);
+        self.write_text_line(&ts_str, "PDO", &cob_id_str, raw);
     }
 }
 
 impl Drop for EventLogger {
     fn drop(&mut self) {
         let _ = self.writer.flush();
+        if let Some(w) = &mut self.text_writer {
+            let _ = w.flush();
+        }
     }
 }
 
 // ─── Private helpers ───────────────────────────────────────────────────────────
+
+impl EventLogger {
+    /// Write one line to the plain-text log.
+    ///
+    /// Format: `[<iso8601>][<type padded to 16>][<cob_id>] HH HH HH …`
+    ///
+    /// Called immediately after `self.log(entry)` in each public logging method.
+    /// The write is buffered and flushed on the same cadence as the JSONL writer.
+    fn write_text_line(&mut self, ts: &str, type_str: &str, cob_id: &str, raw: &[u8]) {
+        if let Some(w) = &mut self.text_writer {
+            let bytes_hex = raw
+                .iter()
+                .map(|b| format!("{b:02X}"))
+                .collect::<Vec<_>>()
+                .join(" ");
+            // 16 chars covers the longest type ("NMT_COMMAND_SENT")
+            let _ = writeln!(w, "[{ts}][{type_str:<16}][{cob_id}] {bytes_hex}");
+        }
+    }
+}
 
 /// Add a timestamp to a file path before the extension.
 /// Example: "log.jsonl" -> "log_20263003130458.jsonl"
