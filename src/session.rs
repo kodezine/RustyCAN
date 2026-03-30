@@ -83,6 +83,9 @@ pub struct SessionConfig {
     /// All [`CanCommand`] variants (NMT and future SDO/PDO writes) are silently
     /// dropped. Software-level only; the adapter still participates in ACK bits.
     pub listen_only: bool,
+    /// When `true`, a plain-text `.log` file is written alongside the JSONL file.
+    /// Both files share the same timestamped stem (e.g. `rustycan_20260330120000`).
+    pub text_log: bool,
     /// How long (milliseconds) to wait for an SDO response before emitting a
     /// synthetic abort event with code 0x05040000 (protocol timed out).
     pub sdo_timeout_ms: u64,
@@ -162,7 +165,7 @@ pub fn start(config: SessionConfig) -> SessionResult {
             .to_string_lossy()
             .to_string();
 
-    let logger = EventLogger::new(&config.log_path)
+    let logger = EventLogger::with_text_log(&config.log_path, config.text_log)
         .map_err(|e| format!("Failed to open log file {}: {e}", actual_log_path))?;
 
     // ── Channels ──────────────────────────────────────────────────────────────
