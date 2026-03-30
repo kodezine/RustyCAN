@@ -19,3 +19,6 @@ target/
 # RustyCAN log files
 *.jsonl
 *.json.log
+
+# ignore vscode settings
+.vscode/
