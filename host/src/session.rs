@@ -245,8 +245,11 @@ fn recv_loop(
     _block_end_timeout_ms: u64,
     block_size: u8,
     _port: &str,
-    _baud: u32,
+    baud: u32,
 ) {
+    // Write session header — adapter identity and workstation metadata.
+    logger.log_session_start(chrono::Utc::now(), adapter.name(), baud);
+
     // Error tracking for automatic recovery
     let mut consecutive_errors = 0u32;
     const MAX_CONSECUTIVE_ERRORS: u32 = 10;
