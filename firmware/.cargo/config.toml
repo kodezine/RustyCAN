@@ -1,0 +1,11 @@
+[target.thumbv7em-none-eabihf]
+# Flash firmware via ST-LINK V3 on the Nucleo board using probe-rs.
+# Usage: cargo run --package dongle-h753
+runner = "probe-rs run --chip STM32H753ZITx --log-format '{t} [{L}] {s}'"
+
+[build]
+target = "thumbv7em-none-eabihf"
+
+[env]
+# Tell embassy-stm32 which chip we are targeting.
+DEFMT_LOG = "debug"

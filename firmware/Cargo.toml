@@ -1,0 +1,5 @@
+[workspace]
+members = [
+    "dongle-h753",
+]
+resolver = "2"

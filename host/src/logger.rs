@@ -26,6 +26,12 @@ pub struct EventLogger {
     flush_interval_entries: usize,
     /// Flush at least every N milliseconds.
     flush_interval_ms: u64,
+    /// Hardware timestamp (µs since bus-on) from the KCAN dongle ISR.
+    ///
+    /// Set by [`set_hw_timestamp`][Self::set_hw_timestamp] before each frame's
+    /// log call; cleared after each [`log`][Self::log] so it is only included
+    /// in the entry it belongs to.  `None` for PEAK (no hardware timestamps).
+    hw_timestamp_us: Option<u32>,
 }
 
 impl EventLogger {
@@ -65,6 +71,7 @@ impl EventLogger {
             last_flush: Instant::now(),
             flush_interval_entries: 50,
             flush_interval_ms: 100,
+            hw_timestamp_us: None,
         })
     }
 
@@ -98,12 +105,34 @@ impl EventLogger {
             last_flush: Instant::now(),
             flush_interval_entries,
             flush_interval_ms,
+            hw_timestamp_us: None,
         })
+    }
+
+    /// Set the hardware timestamp for the **next** [`log`][Self::log] call.
+    ///
+    /// The value is consumed (reset to `None`) after the call to `log()` so
+    /// it is never accidentally attached to a subsequent unrelated entry.
+    ///
+    /// Call this immediately before each frame's log method:
+    /// ```ignore
+    /// logger.set_hw_timestamp(hardware_timestamp_us);
+    /// logger.log_nmt(ts, &ev, data, cob_id);
+    /// ```
+    pub fn set_hw_timestamp(&mut self, ts: Option<u32>) {
+        self.hw_timestamp_us = ts;
     }
 
     /// Write a pre-built JSON `Value` as a single log line.
     /// Flushes periodically to balance data safety with performance.
-    pub fn log(&mut self, entry: Value) {
+    pub fn log(&mut self, mut entry: Value) {
+        // Attach hardware timestamp if one was set for this frame.
+        if let Some(hw_ts) = self.hw_timestamp_us.take() {
+            if let Value::Object(ref mut map) = entry {
+                map.insert("hw_ts_us".to_string(), serde_json::json!(hw_ts));
+            }
+        }
+
         if let Ok(s) = serde_json::to_string(&entry) {
             // Write the entry (buffered)
             if writeln!(self.writer, "{s}").is_err() {
