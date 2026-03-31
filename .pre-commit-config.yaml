@@ -22,11 +22,27 @@ repos:
         pass_filenames: false
         types: [rust]
 
+      - id: cargo-fmt-firmware
+        name: cargo fmt (firmware)
+        description: Enforce Rust code style for the firmware workspace.
+        language: system
+        entry: bash -c 'cd firmware && cargo fmt --'
+        pass_filenames: false
+        types: [rust]
+
       # ── Linting ─────────────────────────────────────────────────────────────
       - id: cargo-clippy
         name: cargo clippy
         description: Lint Rust code with Clippy, treating warnings as errors.
         language: system
         entry: cargo clippy --all-targets -- -D warnings
+        pass_filenames: false
+        types: [rust]
+
+      - id: cargo-clippy-firmware
+        name: cargo clippy (firmware)
+        description: Lint firmware with Clippy, treating warnings as errors.
+        language: system
+        entry: bash -c 'cd firmware && cargo clippy --target thumbv7em-none-eabihf -- -D warnings'
         pass_filenames: false
         types: [rust]

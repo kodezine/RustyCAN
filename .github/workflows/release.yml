@@ -19,17 +19,23 @@ jobs:
     runs-on: macos-latest
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: thumbv7em-none-eabihf
 
       - uses: Swatinem/rust-cache@v2
 
       - name: Build release binary
-        run: cargo build --release
+        run: cargo build --release -p rustycan
 
       - name: Strip binary
         run: strip target/release/rustycan
+
+      - name: Build firmware
+        working-directory: firmware
+        run: cargo build --release --target thumbv7em-none-eabihf
 
       - name: Package archive
         id: package
@@ -40,11 +46,16 @@ jobs:
           mkdir -p "rustycan-${TAG}"
           cp target/release/rustycan README.md LICENSE "rustycan-${TAG}/"
           tar -czf "${ARCHIVE}" "rustycan-${TAG}/"
+          FIRMWARE_ELF="dongle-h753-${TAG}.elf"
+          cp firmware/target/thumbv7em-none-eabihf/release/dongle-h753 "${FIRMWARE_ELF}"
           echo "archive=${ARCHIVE}" >> "$GITHUB_OUTPUT"
+          echo "firmware=${FIRMWARE_ELF}" >> "$GITHUB_OUTPUT"
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           generate_release_notes: true
           fail_on_unmatched_files: true
-          files: ${{ steps.package.outputs.archive }}
+          files: |
+            ${{ steps.package.outputs.archive }}
+            ${{ steps.package.outputs.firmware }}

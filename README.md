@@ -1,16 +1,24 @@
 # RustyCAN
 
 A native macOS GUI for monitoring, decoding, and controlling CANopen networks.
-Connect a **PEAK PCAN-USB** adapter, optionally provide EDS device-description
-files, and get live NMT state, PDO signal values, and SDO transactions — all
-stored to a newline-delimited JSON log.
+Connect a **PEAK PCAN-USB** adapter or a **KCAN Dongle** (STM32H753ZI-based,
+built with Embassy), optionally provide EDS device-description files, and get
+live NMT state, PDO signal values, and SDO transactions — all stored to a
+newline-delimited JSON log.
+
+The **KCAN Dongle** is the project's own first-class hardware target: a custom
+USB CAN adapter with hardware timestamps, a fully documented binary protocol,
+and a path to Phase 3 hardware-level encryption (STM32H563, TrustZone).
 
 ## Features
 
 | Feature | Details |
 |---|---|
 | **Native GUI** | egui/eframe window — no terminal required |
-| **Dongle detection** | Connect button enabled only when a PCAN-USB adapter is found; re-checked every 2 s |
+| **Adapter selection** | Choose PEAK PCAN-USB or KCAN Dongle from the Connect screen |
+| **KCAN Dongle** | STM32H753ZI Nucleo firmware (Embassy); custom 80-byte USB protocol with hardware timestamps |
+| **Hardware timestamps** | KCAN frames carry µs-precision timestamps from FDCAN TIM2; logged as `hw_ts_us` in JSONL |
+| **Dongle detection** | Connect button enabled only when the selected adapter is found; re-checked every 2 s |
 | **Listen-only mode** | Optional passive mode — no frames are ever transmitted; toggle at connect time |
 | **EDS optional** | Per-node EDS files are optional; PDO frames without EDS show raw byte values |
 | **Node ID from EDS** | Browsing to an EDS file auto-fills the Node ID from `[DeviceComissioning] NodeId` |
@@ -27,15 +35,40 @@ stored to a newline-delimited JSON log.
 
 ### Hardware
 
-A **PEAK PCAN-USB** adapter is required. Other adapters are not supported yet.
+RustyCAN supports two adapters; at least one is required.
 
-### PCUSB driver library
+#### Option A — PEAK PCAN-USB
 
-Install the PCANBasic userspace library from **<https://mac-can.com>**:
+A **PEAK PCAN-USB** adapter with the macOS PCANBasic library:
 
-1. Download the latest *PCUSB* `.pkg` from the mac-can.com downloads page.
+1. Download the latest *PCUSB* `.pkg` from **<https://mac-can.com>**.
 2. Run the installer — it places `libPCBUSB.dylib` in `/usr/local/lib/`.
 3. Connect your PCAN-USB adapter; it appears as channel `1` by default.
+
+#### Option B — KCAN Dongle (STM32H753ZI Nucleo)
+
+The KCAN Dongle is the project’s own hardware target. Flash the Embassy
+firmware onto a **NUCLEO-H753ZI** board:
+
+```sh
+# Install the target and flashing tool
+rustup target add thumbv7em-none-eabihf
+cargo install probe-rs-tools
+
+# Build and flash
+cd firmware
+cargo run --release -p dongle-h753
+```
+
+Connect the board’s **CN5 Micro-B USB** port to the host; it enumerates as
+VID `0x1209` / PID `0xBEEF` (“KCAN Dongle v1”). Wiring for CAN:
+
+| Nucleo pin | Signal | TJA1051T |
+|------------|--------|----------|
+| PD0 | FDCAN1 RX | RXD |
+| PD1 | FDCAN1 TX | TXD |
+| 3V3 | VCC | VCC |
+| GND | GND | GND |
 
 ### Rust toolchain
 
@@ -48,7 +81,7 @@ rustup update stable  # MSRV: 1.85+
 ```sh
 git clone https://github.com/kodezine/RustyCAN
 cd RustyCAN
-cargo run --release
+cargo run --release -p rustycan
 ```
 
 The GUI window opens immediately. No command-line flags are required.
@@ -59,9 +92,11 @@ The GUI window opens immediately. No command-line flags are required.
 
 ```
 ┌─ Connection ──────────────────────────────────────────────┐
-│  Port:  [ 1 ]  ● Dongle: Connected                        │
-│  Baud:  [ 250000 ▼ ]                                      │
-│  Log:   [ rustycan.jsonl              ] [Browse…]         │
+│  Adapter:  ○ PEAK PCAN-USB   ● KCAN Dongle ★              │
+│  KCAN:     [ KCAN Dongle v1.0.0 (SN: 00000001) ▼ ]        │
+│  Port:     [ 1 ]  (hidden for KCAN)                       │
+│  Baud:     [ 250000 ▼ ]  ● Dongle: Connected              │
+│  Log:      [ rustycan.jsonl              ] [Browse…]      │
 ├─ Nodes ───────────────────────────────────────────────────┤
 │  Node ID   EDS file path                                  │
 │  [ 1     ] [ /path/to/motor.eds    ] [Browse…] [✕]        │
@@ -73,7 +108,11 @@ The GUI window opens immediately. No command-line flags are required.
 └───────────────────────────────────────────────────────────┘
 ```
 
-**Port** — PCAN-USB channel number (typically `1`).  
+**Adapter** — radio buttons to choose between PEAK PCAN-USB and KCAN Dongle.
+The KCAN row (★) is the recommended first-class option.  
+**KCAN device** — dropdown listing all KCAN dongles found via USB enumeration
+(VID `0x1209` / PID `0xBEEF`). Re-enumerated every 2 s.  
+**Port** — PCAN-USB channel number (typically `1`); hidden when KCAN is selected.  
 **Baud rate** — drop-down: 125000 / 250000 / 500000 / 1000000 bps.  
 **Log file** — base name for the `.jsonl` output; defaults to `rustycan.jsonl`.
 A timestamp (`YYYYMMDDHHMMSS`) is automatically inserted before the extension,
@@ -168,6 +207,7 @@ All CAN data bytes are written as `"0x##"` hex strings.
 | `type` | all | Entry type (see table below) |
 | `cob_id` | all | CAN Object Identifier as `"0xNNN"` hex string |
 | `raw` | all | Full CAN data bytes as `["0x##", …]` hex strings |
+| `hw_ts_us` | KCAN only | Hardware timestamp in microseconds from FDCAN TIM2 (absent for PEAK frames) |
 
 ### Entry types
 
@@ -194,43 +234,76 @@ All CAN data bytes are written as `"0x##"` hex strings.
 ## Project structure
 
 ```
-src/
-  lib.rs          public library surface
-  main.rs         binary entry-point (launches GUI)
-  app.rs          AppState, CanEvent enum, event application logic
-  session.rs      SessionConfig, CanCommand, adapter lifecycle, recv thread
-  logger.rs       EventLogger — JSONL line writer
-  eds/
-    mod.rs        EDS INI parser; parse_node_id, parse_node_id_str
-    types.rs      ObjectDictionary, OdEntry, DataType, AccessType
-  canopen/
-    mod.rs        COB-ID classification (classify_frame / extract_cob_id)
-    nmt.rs        NMT decode (heartbeat, command) + encode_nmt_command
-    sdo.rs        Expedited SDO decode (upload / download / abort)
-    pdo.rs        PdoDecoder built from EDS TPDO/RPDO mapping objects
-  gui/
-    mod.rs        egui application — Connect & Monitor screens
-tests/
-  integration_test.rs   end-to-end EDS + PDO + SDO + NMT tests
-  fixtures/
-    sample_drive.eds    CiA 402 servo drive test fixture
+Cargo.toml          root workspace (host, kcan-protocol)
+kcan-protocol/      shared wire-protocol crate (no_std + std feature)
+  src/
+    frame.rs        KCanFrame — 80-byte wire format, LE, to_bytes/from_bytes
+    control.rs      KCanBitTiming, KCanBtConst, KCanDeviceInfo, KCanMode, RequestCode
+    encrypted.rs    EncryptionLayer trait stub (Phase 3 — STM32H563 SAES)
+host/               rustycan host application
+  Cargo.toml
+  src/
+    lib.rs          public library surface
+    main.rs         binary entry-point (launches GUI)
+    app.rs          AppState, CanEvent enum, event application logic
+    session.rs      SessionConfig, CanCommand, adapter lifecycle, recv thread
+    logger.rs       EventLogger — JSONL line writer (hw_ts_us for KCAN)
+    adapters/
+      mod.rs        CanAdapter trait, ReceivedFrame, AdapterKind, open_adapter
+      peak.rs       PeakAdapter — wraps host_can (PCAN-USB)
+      kcan.rs       KCanAdapter — nusb background-thread USB adapter
+    eds/
+      mod.rs        EDS INI parser; parse_node_id, parse_node_id_str
+      types.rs      ObjectDictionary, OdEntry, DataType, AccessType
+    canopen/
+      mod.rs        COB-ID classification (classify_frame / extract_cob_id)
+      nmt.rs        NMT decode (heartbeat, command) + encode_nmt_command
+      sdo.rs        Expedited SDO decode (upload / download / abort)
+      pdo.rs        PdoDecoder built from EDS TPDO/RPDO mapping objects
+    gui/
+      mod.rs        egui application — Connect & Monitor screens
+  tests/
+    integration_test.rs   end-to-end EDS + PDO + SDO + NMT tests
+    fixtures/
+      sample_drive.eds    CiA 402 servo drive test fixture
+firmware/           separate Cargo workspace (embedded target)
+  Cargo.toml        firmware workspace (dongle-h753)
+  memory.x          STM32H753ZI memory map (FLASH 2 MB, DTCM 128 KB, AXI 512 KB)
+  dongle-h753/
+    src/
+      main.rs       Embassy entry point, clock config (PLL1/2/3), task spawning
+      kcan_usb.rs   KCanUsbClass — bulk IN/OUT endpoint pair (vendor class)
+      can_task.rs   FDCAN1 RX/TX task (Frame ↔ KCanFrame conversion)
+      usb_task.rs   USB device task + bulk IN/OUT bridge
+      status_task.rs LED heartbeat + periodic STATUS frame every 100 ms
 ```
 
 ## Testing
 
 ```sh
-cargo test
+cargo test -p rustycan
 ```
 
-36 tests (29 unit + 7 integration) covering the EDS parser, node-ID string
+77 unit tests + 11 integration tests covering the EDS parser, node-ID string
 parsing, PDO bit extraction, SDO command-specifier decode, NMT encode/decode,
 and the COB-ID classifier.
+
+To verify the firmware crate type-checks (requires the embedded target):
+
+```sh
+rustup target add thumbv7em-none-eabihf
+cd firmware && cargo check --target thumbv7em-none-eabihf
+```
 
 ## Feature status
 
 | Feature | Status |
 |---|---|
 | Native egui GUI | ✅ |
+| PEAK PCAN-USB adapter | ✅ |
+| KCAN Dongle adapter (STM32H753ZI) | ✅ |
+| KCAN hardware timestamps (`hw_ts_us`) | ✅ |
+| Adapter selection in GUI | ✅ |
 | Dongle detection polling | ✅ |
 | EDS optional per node | ✅ |
 | Node ID from EDS `[DeviceComissioning]` | ✅ |
@@ -244,9 +317,10 @@ and the COB-ID classifier.
 | JSONL logging (received + sent) | ✅ |
 | SDO segmented transfers | ✅ |
 | SDO block transfers | ✅ |
+| KCAN Phase 3: STM32H563 HW encryption | planned |
+| CAN FD (KCAN firmware + host) | planned |
 | EMCY message decode | planned |
 | Heartbeat timeout / watchdog | planned |
-| CAN FD support | planned |
 | Replay from saved JSONL log | planned |
 
 ## Documentation

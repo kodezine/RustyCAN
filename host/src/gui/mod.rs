@@ -65,6 +65,7 @@ use std::time::Instant;
 use eframe::egui::{self, vec2, Button, Color32};
 use rfd::FileDialog;
 
+use crate::adapters::{kcan, AdapterKind};
 use crate::app::{apply_event, AppState, CanEvent};
 use crate::canopen::nmt::{NmtCommand, NmtState};
 use crate::canopen::pdo::PdoRawValue;
@@ -220,6 +221,12 @@ struct ConnectForm {
     listen_only: bool,
     /// If true, also write a plain-text `.log` file alongside the JSONL file.
     text_log: bool,
+    /// Which adapter backend to use.
+    adapter_kind: AdapterKind,
+    /// KCAN devices found during the last USB scan (serial, display name).
+    kcan_devices: Vec<(String, String)>,
+    /// Selected KCAN device serial (empty = auto-select first).
+    kcan_serial: String,
 }
 
 impl Clone for ConnectForm {
@@ -240,6 +247,9 @@ impl Clone for ConnectForm {
             last_probe: None,
             listen_only: self.listen_only,
             text_log: self.text_log,
+            adapter_kind: self.adapter_kind.clone(),
+            kcan_devices: self.kcan_devices.clone(),
+            kcan_serial: self.kcan_serial.clone(),
         }
     }
 }
@@ -266,6 +276,9 @@ impl Default for ConnectForm {
             last_probe: None,
             listen_only: false,
             text_log: false,
+            adapter_kind: AdapterKind::Peak,
+            kcan_devices: vec![],
+            kcan_serial: String::new(),
         }
     }
 }
@@ -332,6 +345,7 @@ impl ConnectForm {
             block_subblock_timeout_ms: 500,
             block_end_timeout_ms: 1000,
             block_size: 64,
+            adapter_kind: self.adapter_kind.clone(),
         };
 
         let (rx, cmd_tx, node_labels, actual_log_path) = session::start(config)?;
@@ -405,7 +419,11 @@ fn render_connect(
             form.probe_rx = None;
         }
     }
-    // 2. Launch a new one-shot probe thread if enough time has elapsed.
+    // 2. For KCAN, refresh the device list every probe cycle.
+    if matches!(form.adapter_kind, AdapterKind::KCan { .. }) {
+        form.kcan_devices = kcan::KCanAdapter::list_devices();
+    }
+    // 3. Launch a new one-shot probe thread if enough time has elapsed.
     let should_probe = form.probe_rx.is_none()
         && form
             .last_probe
@@ -415,9 +433,10 @@ fn render_connect(
     if should_probe {
         let port = form.port.trim().to_string();
         let baud: u32 = form.baud.trim().parse().unwrap_or(250_000);
+        let kind = form.adapter_kind.clone();
         let (probe_tx, probe_rx) = mpsc::channel::<bool>();
         std::thread::spawn(move || {
-            let _ = probe_tx.send(session::probe_adapter(&port, baud));
+            let _ = probe_tx.send(session::probe_adapter_with_kind(&kind, &port, baud));
         });
         form.probe_rx = Some(probe_rx);
         form.last_probe = Some(Instant::now());
@@ -462,27 +481,125 @@ fn render_connect(
                             .num_columns(2)
                             .spacing([12.0, 10.0])
                             .show(ui, |ui| {
-                                ui.label("Port:");
+                                // ── Adapter type selector ─────────────────────
+                                ui.label("Adapter:");
                                 ui.horizontal(|ui| {
-                                    ui.add(
-                                        egui::TextEdit::singleline(&mut form.port)
-                                            .desired_width(80.0)
-                                            .hint_text("1"),
-                                    );
-                                    // Dongle status indicator
+                                    let is_peak = matches!(form.adapter_kind, AdapterKind::Peak);
+                                    if ui.radio(is_peak, "PEAK PCAN-USB").clicked() {
+                                        form.adapter_kind = AdapterKind::Peak;
+                                        form.last_probe = None; // force re-probe
+                                    }
+                                    let is_kcan =
+                                        matches!(form.adapter_kind, AdapterKind::KCan { .. });
+                                    if ui.radio(is_kcan, "KCAN Dongle ★").clicked() {
+                                        let serial = if form.kcan_serial.is_empty() {
+                                            None
+                                        } else {
+                                            Some(form.kcan_serial.clone())
+                                        };
+                                        form.adapter_kind = AdapterKind::KCan { serial };
+                                        form.last_probe = None;
+                                    }
+                                });
+                                ui.end_row();
+
+                                // ── KCAN device picker (only when KCAN selected) ──
+                                if matches!(form.adapter_kind, AdapterKind::KCan { .. }) {
+                                    ui.label("KCAN device:");
+                                    ui.horizontal(|ui| {
+                                        if form.kcan_devices.is_empty() {
+                                            ui.colored_label(
+                                                Color32::from_rgb(200, 60, 60),
+                                                "No KCAN dongle found",
+                                            );
+                                        } else {
+                                            let selected_label = form
+                                                .kcan_devices
+                                                .iter()
+                                                .find(|(s, _)| s == &form.kcan_serial)
+                                                .map(|(_, n)| n.as_str())
+                                                .unwrap_or("Auto (first found)");
+                                            egui::ComboBox::from_id_salt("kcan_device_combo")
+                                                .selected_text(selected_label)
+                                                .show_ui(ui, |ui| {
+                                                    if ui
+                                                        .selectable_value(
+                                                            &mut form.kcan_serial,
+                                                            String::new(),
+                                                            "Auto (first found)",
+                                                        )
+                                                        .clicked()
+                                                    {
+                                                        form.adapter_kind =
+                                                            AdapterKind::KCan { serial: None };
+                                                    }
+                                                    for (serial, name) in &form.kcan_devices {
+                                                        let label = if serial.is_empty() {
+                                                            name.clone()
+                                                        } else {
+                                                            format!("{name} [{serial}]")
+                                                        };
+                                                        if ui
+                                                            .selectable_value(
+                                                                &mut form.kcan_serial,
+                                                                serial.clone(),
+                                                                label,
+                                                            )
+                                                            .clicked()
+                                                        {
+                                                            form.adapter_kind = AdapterKind::KCan {
+                                                                serial: Some(serial.clone()),
+                                                            };
+                                                        }
+                                                    }
+                                                });
+                                        }
+                                    });
+                                    ui.end_row();
+                                }
+
+                                // Port row — only shown for PEAK
+                                if matches!(form.adapter_kind, AdapterKind::Peak) {
+                                    ui.label("Port:");
+                                    ui.horizontal(|ui| {
+                                        ui.add(
+                                            egui::TextEdit::singleline(&mut form.port)
+                                                .desired_width(80.0)
+                                                .hint_text("1"),
+                                        );
+                                        // Dongle status indicator
+                                        if form.dongle_connected {
+                                            ui.colored_label(
+                                                Color32::from_rgb(0, 200, 80),
+                                                format!("{} Dongle: Connected", icons::PLUG_OK),
+                                            );
+                                        } else {
+                                            ui.colored_label(
+                                                Color32::from_rgb(200, 60, 60),
+                                                format!(
+                                                    "{} Dongle: Not detected",
+                                                    icons::PLUG_FAIL
+                                                ),
+                                            );
+                                        }
+                                    });
+                                    ui.end_row();
+                                } else {
+                                    // Show KCAN connection status inline
+                                    ui.label("Status:");
                                     if form.dongle_connected {
                                         ui.colored_label(
                                             Color32::from_rgb(0, 200, 80),
-                                            format!("{} Dongle: Connected", icons::PLUG_OK),
+                                            format!("{} KCAN: Connected", icons::PLUG_OK),
                                         );
                                     } else {
                                         ui.colored_label(
                                             Color32::from_rgb(200, 60, 60),
-                                            format!("{} Dongle: Not detected", icons::PLUG_FAIL),
+                                            format!("{} KCAN: Not detected", icons::PLUG_FAIL),
                                         );
                                     }
-                                });
-                                ui.end_row();
+                                    ui.end_row();
+                                }
 
                                 ui.label("Baud rate (bps):");
                                 egui::ComboBox::from_id_salt("baud_combo")

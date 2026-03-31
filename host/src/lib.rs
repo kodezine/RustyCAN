@@ -2,6 +2,7 @@
 ///
 /// Exposes the EDS parser, CANopen protocol decoders, and logger so they can
 /// be used by integration tests and external tools.
+pub mod adapters;
 pub mod app;
 pub mod canopen;
 pub mod eds;

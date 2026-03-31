@@ -1,0 +1,12 @@
+[package]
+name = "kcan-protocol"
+version = "0.1.0"
+edition = "2021"
+description = "KCAN wire-protocol types shared between firmware and the RustyCAN host adapter"
+
+# No std: this crate must compile for both bare-metal (no_std) and the host.
+[features]
+default = ["std"]
+std = []
+
+[dependencies]

@@ -11,6 +11,8 @@ use chrono::Utc;
 use embedded_can::Frame as EmbeddedFrame;
 use host_can::frame::CanFrame;
 
+use crate::adapters::{open_adapter, probe_adapter_kind, AdapterKind};
+
 use crate::app::{CanEvent, SdoLogEntry};
 use crate::canopen::{
     self, classify_frame, extract_cob_id,
@@ -97,6 +99,10 @@ pub struct SessionConfig {
     pub block_end_timeout_ms: u64,
     /// Default block size for block transfers (1-127 segments per block).
     pub block_size: u8,
+    /// Which adapter backend to use.
+    ///
+    /// Defaults to [`AdapterKind::Peak`] so existing callers are unaffected.
+    pub adapter_kind: AdapterKind,
 }
 
 /// Load EDS files, open the log, spawn the recv thread.
@@ -117,7 +123,12 @@ pub type SessionResult = Result<
 /// Opens the adapter, immediately drops it, and returns `true` on success.
 /// Intended for the Connect-screen dongle-detection poll.
 pub fn probe_adapter(port: &str, baud: u32) -> bool {
-    host_can::adapter::get_adapter(port, baud).is_ok()
+    probe_adapter_kind(&AdapterKind::Peak, port, baud)
+}
+
+/// Probe a specific adapter kind.
+pub fn probe_adapter_with_kind(kind: &AdapterKind, port: &str, baud: u32) -> bool {
+    probe_adapter_kind(kind, port, baud)
 }
 
 /// Returns `(rx, cmd_tx, node_labels)` on success, or a human-readable error string.
@@ -183,15 +194,15 @@ pub fn start(config: SessionConfig) -> SessionResult {
     let block_subblock_timeout_ms = config.block_subblock_timeout_ms;
     let block_end_timeout_ms = config.block_end_timeout_ms;
     let block_size = config.block_size;
+    let adapter_kind = config.adapter_kind.clone();
 
     thread::spawn(move || {
-        let adapter = match host_can::adapter::get_adapter(&port, baud) {
+        let adapter = match open_adapter(&adapter_kind, &port, baud, listen_only) {
             Ok(a) => a,
             Err(e) => {
                 // Send the error to the GUI, then exit the thread cleanly.
                 let _ = tx.send(CanEvent::AdapterError(format!(
-                    "Failed to open PCAN-USB channel {port}: {e}\n\
-                     Make sure the PCUSB library is installed and the adapter is connected."
+                    "Failed to open adapter: {e}"
                 )));
                 return;
             }
@@ -221,7 +232,7 @@ pub fn start(config: SessionConfig) -> SessionResult {
 
 #[allow(clippy::too_many_arguments)]
 fn recv_loop(
-    mut adapter: Box<dyn host_can::adapter::Adapter>,
+    mut adapter: Box<dyn crate::adapters::CanAdapter>,
     ods: &[(u8, Option<ObjectDictionary>)],
     pdo_decoders: &[(u8, PdoDecoder)],
     tx: mpsc::Sender<CanEvent>,
@@ -233,11 +244,9 @@ fn recv_loop(
     _block_subblock_timeout_ms: u64,
     _block_end_timeout_ms: u64,
     block_size: u8,
-    port: &str,
-    baud: u32,
+    _port: &str,
+    _baud: u32,
 ) {
-    let timeout = Some(Duration::from_millis(500));
-
     // Error tracking for automatic recovery
     let mut consecutive_errors = 0u32;
     const MAX_CONSECUTIVE_ERRORS: u32 = 10;
@@ -643,24 +652,18 @@ fn recv_loop(
             }
         }
 
-        let frame = match adapter.recv(timeout) {
-            Ok(f) => {
-                // Reset error counter on successful receive
+        let recv_result = adapter.recv(Duration::from_millis(500));
+        let (frame, hardware_timestamp_us) = match recv_result {
+            Ok(r) => {
                 consecutive_errors = 0;
-                f
+                (r.frame, r.hardware_timestamp_us)
+            }
+            Err(crate::adapters::AdapterError::Timeout) => {
+                continue;
             }
             Err(e) => {
-                let msg = format!("{e:?}");
+                eprintln!("CAN recv error: {e}");
 
-                // ReadTimeout is normal when there's no traffic, don't count it as an error
-                if msg.contains("ReadTimeout") {
-                    continue;
-                }
-
-                // Log the error
-                eprintln!("CAN recv error: {e:?}");
-
-                // Track consecutive errors
                 if last_error_time.elapsed() < Duration::from_secs(1) {
                     consecutive_errors += 1;
                 } else {
@@ -668,30 +671,13 @@ fn recv_loop(
                 }
                 last_error_time = Instant::now();
 
-                // If we're getting too many errors in quick succession, try to recover
                 if consecutive_errors >= MAX_CONSECUTIVE_ERRORS {
-                    eprintln!("Too many consecutive CAN errors ({consecutive_errors}), attempting recovery...");
-
-                    // Try to reinitialize the adapter
-                    match host_can::adapter::get_adapter(port, baud) {
-                        Ok(new_adapter) => {
-                            eprintln!("Successfully reconnected to CAN adapter");
-                            adapter = new_adapter;
-                            consecutive_errors = 0;
-
-                            // Clear pending SDOs since we lost connection
-                            pending_sdos.clear();
-                        }
-                        Err(e) => {
-                            eprintln!("Failed to reconnect to CAN adapter: {e:?}");
-                            let _ = tx.send(CanEvent::AdapterError(format!(
-                                "Lost connection to CAN adapter after repeated errors.\n\
-                                 Last error: {e:?}\n\
-                                 The adapter may need to be physically reset or unplugged/replugged."
-                            )));
-                            return; // Exit the thread
-                        }
-                    }
+                    let _ = tx.send(CanEvent::AdapterError(format!(
+                        "Lost connection to CAN adapter after {consecutive_errors} consecutive errors.\n\
+                         Last error: {e}\n\
+                         Please unplug and reconnect the adapter."
+                    )));
+                    return;
                 }
 
                 continue;
@@ -705,6 +691,8 @@ fn recv_loop(
         let data = frame.data();
         let cob_id = extract_cob_id(&frame);
         let ts = Utc::now();
+        // Pass hardware timestamp to logger for this frame (None for PEAK).
+        logger.set_hw_timestamp(hardware_timestamp_us);
 
         match classify_frame(cob_id) {
             // ── NMT command (COB-ID 0x000) ────────────────────────────────

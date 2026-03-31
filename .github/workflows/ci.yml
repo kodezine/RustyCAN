@@ -11,11 +11,11 @@ env:
 
 jobs:
   check:
-    name: Check
+    name: Check (host)
     runs-on: macos-latest
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - uses: dtolnay/rust-toolchain@stable
         with:
@@ -30,7 +30,35 @@ jobs:
         run: cargo clippy --all-targets -- -D warnings
 
       - name: Build
-        run: cargo build
+        run: cargo build -p rustycan
 
       - name: Test
-        run: cargo test
+        run: cargo test -p rustycan
+
+  firmware:
+    name: Check (firmware)
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: thumbv7em-none-eabihf
+          components: rustfmt, clippy
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: firmware -> firmware/target
+
+      - name: Format
+        working-directory: firmware
+        run: cargo fmt --check
+
+      - name: Clippy
+        working-directory: firmware
+        run: cargo clippy --target thumbv7em-none-eabihf -- -D warnings
+
+      - name: Firmware check
+        working-directory: firmware
+        run: cargo check --target thumbv7em-none-eabihf
