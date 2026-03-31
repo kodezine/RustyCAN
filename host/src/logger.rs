@@ -171,6 +171,38 @@ impl EventLogger {
         self.last_flush = Instant::now();
     }
 
+    /// Write a `session_start` header as the very first entry in the log.
+    ///
+    /// Records the adapter name, baud rate, and host workstation metadata so
+    /// every log file is self-describing. On macOS the metadata is gathered
+    /// from `sw_vers` and `sysctl`; degrades gracefully on other platforms.
+    pub fn log_session_start(&mut self, ts: DateTime<Utc>, adapter_name: &str, baud: u32) {
+        let host = collect_host_info();
+        let ts_str = ts.to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
+        let entry = json!({
+            "ts":      ts_str,
+            "type":    "session_start",
+            "adapter": adapter_name,
+            "baud":    baud,
+            "host":    host,
+        });
+        // Plain-text header line — written directly, not via write_text_line
+        // which expects a CAN-frame-formatted row.
+        if let Some(w) = &mut self.text_writer {
+            let ts_local = ts
+                .with_timezone(&Local)
+                .format("%Y-%m-%dT%H:%M:%S%.3f%z")
+                .to_string();
+            let os = host["os"].as_str().unwrap_or("-");
+            let model = host["model"].as_str().unwrap_or("-");
+            let _ = writeln!(
+                w,
+                "[{ts_local}][session_start    ][---------] adapter=\"{adapter_name}\" baud={baud} os=\"{os}\" model=\"{model}\""
+            );
+        }
+        self.log(entry);
+    }
+
     /// Log an NMT master command that was sent by this application.
     pub fn log_nmt_sent(
         &mut self,
@@ -318,6 +350,57 @@ impl Drop for EventLogger {
             let _ = w.flush();
         }
     }
+}
+
+// ─── Host metadata ────────────────────────────────────────────────────────────
+
+/// Collect workstation information for the `session_start` log entry.
+///
+/// Uses macOS CLI tools (`sw_vers`, `sysctl`) where available; degrades
+/// gracefully to `std::env::consts` on other platforms.
+fn collect_host_info() -> Value {
+    fn cmd_output(prog: &str, args: &[&str]) -> Option<String> {
+        std::process::Command::new(prog)
+            .args(args)
+            .output()
+            .ok()
+            .filter(|o| o.status.success())
+            .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+            .filter(|s| !s.is_empty())
+    }
+
+    // OS version — e.g. "macOS 15.3.2 (Build 24D81)"
+    let os_name = cmd_output("sw_vers", &["-productName"]);
+    let os_ver = cmd_output("sw_vers", &["-productVersion"]);
+    let os_build = cmd_output("sw_vers", &["-buildVersion"]);
+    let os = match (os_name, os_ver, os_build) {
+        (Some(n), Some(v), Some(b)) => format!("{n} {v} (Build {b})"),
+        (Some(n), Some(v), None) => format!("{n} {v}"),
+        _ => std::env::consts::OS.to_string(),
+    };
+
+    // Hardware model identifier — e.g. "Mac14,3"
+    let model = cmd_output("sysctl", &["-n", "hw.model"])
+        .unwrap_or_else(|| std::env::consts::ARCH.to_string());
+
+    // Hostname
+    let hostname = cmd_output("hostname", &[])
+        .or_else(|| std::env::var("HOSTNAME").ok())
+        .or_else(|| std::env::var("COMPUTERNAME").ok())
+        .unwrap_or_else(|| "-".to_string());
+
+    // Current user
+    let user = std::env::var("USER")
+        .or_else(|_| std::env::var("USERNAME"))
+        .unwrap_or_else(|_| "-".to_string());
+
+    json!({
+        "os":       os,
+        "model":    model,
+        "arch":     std::env::consts::ARCH,
+        "hostname": hostname,
+        "user":     user,
+    })
 }
 
 // ─── Private helpers ───────────────────────────────────────────────────────────
