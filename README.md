@@ -15,10 +15,10 @@ and a path to Phase 3 hardware-level encryption (STM32H563, TrustZone).
 | Feature | Details |
 |---|---|
 | **Native GUI** | egui/eframe window — no terminal required |
-| **Adapter selection** | Choose PEAK PCAN-USB or KCAN Dongle from the Connect screen |
+| **Adapter auto-detection** | KCAN dongles are detected automatically via USB enumeration; PEAK PCAN-USB shown as fallback |
 | **KCAN Dongle** | STM32H753ZI Nucleo firmware (Embassy); custom 80-byte USB protocol with hardware timestamps |
 | **Hardware timestamps** | KCAN frames carry µs-precision timestamps from FDCAN TIM2; logged as `hw_ts_us` in JSONL |
-| **Dongle detection** | Connect button enabled only when the selected adapter is found; re-checked every 2 s |
+| **Dongle detection** | USB scanned every 2 s; single KCAN auto-selected, multiple show a picker; PEAK shown when no KCAN found |
 | **Listen-only mode** | Optional passive mode — no frames are ever transmitted; toggle at connect time |
 | **EDS optional** | Per-node EDS files are optional; PDO frames without EDS show raw byte values |
 | **Node ID from EDS** | Browsing to an EDS file auto-fills the Node ID from `[DeviceComissioning] NodeId` |
