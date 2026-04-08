@@ -100,8 +100,28 @@ pub fn open_adapter(
 ) -> Result<Box<dyn CanAdapter>, AdapterError> {
     match kind {
         AdapterKind::Peak => {
-            let inner = host_can::adapter::get_adapter(port, baud)
-                .map_err(|e| AdapterError::NotFound(e.to_string()))?;
+            let inner = host_can::adapter::get_adapter(port, baud).map_err(|e| {
+                let detail = e.to_string();
+                // libloading surfaces a "cannot open shared object" / "dlopen" message
+                // when libPCBUSB.dylib / PCANBasic.dll is not installed.
+                if detail.to_lowercase().contains("libpcbusb")
+                    || detail.to_lowercase().contains("pcanbasic")
+                    || detail.to_lowercase().contains("dlopen")
+                    || detail.to_lowercase().contains("cannot open shared")
+                    || detail.to_lowercase().contains("the specified module")
+                {
+                    AdapterError::NotFound(format!(
+                        "PEAK driver library not found. \
+                        Please install the PCANBasic driver:\n\
+                        • macOS: https://mac-can.com\n\
+                        • Windows: https://peak-system.com/downloads\n\
+                        • Linux: https://peak-system.com/downloads\n\
+                        ({detail})"
+                    ))
+                } else {
+                    AdapterError::NotFound(detail)
+                }
+            })?;
             Ok(Box::new(peak::PeakAdapter::new(inner)))
         }
         AdapterKind::KCan { serial } => {
