@@ -1,0 +1,17 @@
+# udev rules for RustyCAN USB adapters
+#
+# Install:
+#   sudo cp 50-rustycan.rules /etc/udev/rules.d/
+#   sudo udevadm control --reload-rules
+#   sudo udevadm trigger
+#
+# You may need to log out and back in, or add your user to the 'plugdev' group:
+#   sudo usermod -aG plugdev $USER
+
+# KCAN dongle (VID 0x1209 / PID 0xBEEF — pid.codes open allocation)
+SUBSYSTEM=="usb", ATTR{idVendor}=="1209", ATTR{idProduct}=="beef", \
+    MODE="0660", GROUP="plugdev", TAG+="uaccess"
+
+# PEAK PCAN-USB adapters (PEAK System vendor ID 0x0c72)
+SUBSYSTEM=="usb", ATTR{idVendor}=="0c72", \
+    MODE="0660", GROUP="plugdev", TAG+="uaccess"
