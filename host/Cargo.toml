@@ -31,7 +31,7 @@ futures-lite = "2.6.1"
 host-can = { version = "0.1", features = ["pcan"] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
-host-can = { version = "0.1" }
+host-can = { version = "0.1", features = ["socketcan"] }
 
 [dev-dependencies]
 tempfile = "3"
@@ -57,15 +57,14 @@ icons        = [
 
 # macOS: produce a DMG containing a drag-to-Applications .app bundle.
 # .icns is already in assets/; rpath for libPCBUSB.dylib is set in build.rs.
+# (format is selected via --formats flag on the CLI in release.yml)
 [package.metadata.packager.macos]
-formats = ["dmg"]
 
 # Windows: NSIS one-click installer (.exe).
 # PCANBasic.dll is loaded at runtime via libloading — user installs PEAK drivers.
 [package.metadata.packager.nsis]
 installer-mode = "currentUser"
 
-# Linux: AppImage (runs on any distro without install) and a .deb for apt users.
-# udev rules for KCAN USB are in packaging/50-rustycan.rules — see README.
+# Linux: udev rules for KCAN USB are in packaging/50-rustycan.rules — see README.
+# (formats appimage,deb selected via --formats flag on the CLI in release.yml)
 [package.metadata.packager.linux]
-formats = ["appimage", "deb"]
