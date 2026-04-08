@@ -1,6 +1,11 @@
 # RustyCAN
 
-A native macOS GUI for monitoring, decoding, and controlling CANopen networks.
+[![Release](https://github.com/kodezine/RustyCAN/actions/workflows/release.yml/badge.svg)](https://github.com/kodezine/RustyCAN/actions/workflows/release.yml)
+[![Latest release](https://img.shields.io/github/v/release/kodezine/RustyCAN)](https://github.com/kodezine/RustyCAN/releases/latest)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Windows%20%7C%20Linux-lightgrey)](#installation)
+
+A native cross-platform GUI for monitoring, decoding, and controlling CANopen networks.
 Connect a **PEAK PCAN-USB** adapter or a **KCAN Dongle** (STM32H753ZI-based,
 built with Embassy), optionally provide EDS device-description files, and get
 live NMT state, PDO signal values, and SDO transactions — all stored to a
@@ -10,28 +15,43 @@ The **KCAN Dongle** is the project's own first-class hardware target: a custom
 USB CAN adapter with hardware timestamps, a fully documented binary protocol,
 and a path to Phase 3 hardware-level encryption (STM32H563, TrustZone).
 
-## Features
+## Installation
+
+| Platform | Artifact | Guide |
+|---|---|---|
+| 🍎 **macOS** (Apple Silicon & Intel) | `.dmg` · Homebrew tap | [install-macos.md](.readme/install-macos.md) |
+| 🪟 **Windows** (x86-64) | NSIS installer `.exe` | [install-windows.md](.readme/install-windows.md) |
+| 🐧 **Linux** (x86-64) | AppImage · `.deb` | [install-linux.md](.readme/install-linux.md) |
+
+> **Quick install on macOS:**
+> ```sh
+> brew tap kodezine/rustycan && brew install --cask rustycan
+> ```
+
+[📦 All release artifacts →](https://github.com/kodezine/RustyCAN/releases/latest)
+
+## ✨ Features
 
 | Feature | Details |
 |---|---|
-| **Native GUI** | egui/eframe window — no terminal required |
-| **Adapter selection** | Choose PEAK PCAN-USB or KCAN Dongle from the Connect screen |
-| **KCAN Dongle** | STM32H753ZI Nucleo firmware (Embassy); custom 80-byte USB protocol with hardware timestamps |
-| **Hardware timestamps** | KCAN frames carry µs-precision timestamps from FDCAN TIM2; logged as `hw_ts_us` in JSONL |
-| **Dongle detection** | Connect button enabled only when the selected adapter is found; re-checked every 2 s |
-| **Listen-only mode** | Optional passive mode — no frames are ever transmitted; toggle at connect time |
-| **EDS optional** | Per-node EDS files are optional; PDO frames without EDS show raw byte values |
-| **Node ID from EDS** | Browsing to an EDS file auto-fills the Node ID from `[DeviceComissioning] NodeId` |
-| **Multi-node** | Configure any number of nodes at startup; new nodes appear dynamically from heartbeats |
-| **NMT monitoring** | Live Bootup / Pre-Operational / Operational / Stopped state per node with age |
-| **NMT commands** | Send Start / Stop / Enter Pre-Op / Reset Node / Reset Comm to any node or broadcast all |
-| **PDO live values** | Decode TPDO/RPDO signals from EDS mappings; raw hex bytes when no EDS is loaded |
-| **SDO decode** | Expedited upload/download with EDS name lookup; abort codes displayed |
-| **Bus load bar** | 20-block colour-coded bar in the status strip: blue ≤30 %, yellow 30–70 %, red >70 % |
-| **Frame rate** | Rolling fps counter (2 s window) shown alongside total frame count |
-| **JSONL logging** | Every event (received and sent) appended to a newline-delimited JSON file |
+| 🖥️ **Native GUI** | egui/eframe window — no terminal required |
+| 🔌 **Adapter selection** | Choose PEAK PCAN-USB or KCAN Dongle from the Connect screen |
+| 🔧 **KCAN Dongle** | STM32H753ZI Nucleo firmware (Embassy); custom 80-byte USB protocol with hardware timestamps |
+| ⏱️ **Hardware timestamps** | KCAN frames carry µs-precision timestamps from FDCAN TIM2; logged as `hw_ts_us` in JSONL |
+| 🔍 **Dongle detection** | Connect button enabled only when the selected adapter is found; re-checked every 2 s |
+| 👂 **Listen-only mode** | Optional passive mode — no frames are ever transmitted; toggle at connect time |
+| 📄 **EDS optional** | Per-node EDS files are optional; PDO frames without EDS show raw byte values |
+| 🆔 **Node ID from EDS** | Browsing to an EDS file auto-fills the Node ID from `[DeviceComissioning] NodeId` |
+| 🌐 **Multi-node** | Configure any number of nodes at startup; new nodes appear dynamically from heartbeats |
+| 💓 **NMT monitoring** | Live Bootup / Pre-Operational / Operational / Stopped state per node with age |
+| 📡 **NMT commands** | Send Start / Stop / Enter Pre-Op / Reset Node / Reset Comm to any node or broadcast all |
+| 📊 **PDO live values** | Decode TPDO/RPDO signals from EDS mappings; raw hex bytes when no EDS is loaded |
+| 🔎 **SDO decode** | Expedited upload/download with EDS name lookup; abort codes displayed |
+| 📶 **Bus load bar** | 20-block colour-coded bar in the status strip: blue ≤30 %, yellow 30–70 %, red >70 % |
+| 🎞️ **Frame rate** | Rolling fps counter (2 s window) shown alongside total frame count |
+| 📝 **JSONL logging** | Every event (received and sent) appended to a newline-delimited JSON file |
 
-## Prerequisites
+## 🔌 Prerequisites
 
 ### Hardware
 
@@ -70,13 +90,13 @@ VID `0x1209` / PID `0xBEEF` (“KCAN Dongle v1”). Wiring for CAN:
 | 3V3 | VCC | VCC |
 | GND | GND | GND |
 
-### Rust toolchain
+### 🦀 Rust toolchain
 
 ```sh
 rustup update stable  # MSRV: 1.85+
 ```
 
-## Build & run
+## 🚀 Build & run
 
 ```sh
 git clone https://github.com/kodezine/RustyCAN
@@ -86,7 +106,7 @@ cargo run --release -p rustycan
 
 The GUI window opens immediately. No command-line flags are required.
 
-## Using the GUI
+## 🖥️ Using the GUI
 
 ### Connect screen
 
@@ -185,7 +205,7 @@ displayed with both their primary format and hex/ASCII representation.
   overhead/stuffing). Hover the bar to see the formula.
 - **Log path** — filename of the active `.jsonl` log; hover to see the full path.
 
-## JSONL log format
+## 📝 JSONL log format
 
 Each line is a self-contained JSON object flushed immediately to disk.
 All CAN data bytes are written as `"0x##"` hex strings.
@@ -231,7 +251,7 @@ All CAN data bytes are written as `"0x##"` hex strings.
 - `node` and `pdo_num` are resolved from the EDS mapping for the matching COB-ID; if no EDS is loaded for the sending node, `node` is derived from the COB-ID range and signals fall back to `{"Byte0": "0x##", …}`.
 - `signals` preserves EDS declaration order; typed values match the EDS `DataType` (integer, unsigned, float, or string).
 
-## Project structure
+## 🗂️ Project structure
 
 ```
 Cargo.toml          root workspace (host, kcan-protocol)
@@ -278,7 +298,7 @@ firmware/           separate Cargo workspace (embedded target)
       status_task.rs LED heartbeat + periodic STATUS frame every 100 ms
 ```
 
-## Testing
+## 🧪 Testing
 
 ```sh
 cargo test -p rustycan
@@ -295,7 +315,7 @@ rustup target add thumbv7em-none-eabihf
 cd firmware && cargo check --target thumbv7em-none-eabihf
 ```
 
-## Feature status
+## ✅ Feature status
 
 | Feature | Status |
 |---|---|
