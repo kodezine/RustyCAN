@@ -77,9 +77,8 @@ jobs:
         working-directory: host
         shell: bash
         run: |
-          cargo packager package --release \
+          cargo packager --release \
             --formats "${{ matrix.formats }}" \
-            --target ${{ matrix.target }} \
             --out-dir ../dist
 
       # ── Collect artifact paths ──────────────────────────────────────────

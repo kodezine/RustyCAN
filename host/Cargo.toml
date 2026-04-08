@@ -9,7 +9,7 @@ name = "rustycan"
 path = "src/main.rs"
 
 [dependencies]
-host-can = { version = "0.1", features = ["pcan"] }
+# host-can: pcan feature not enabled here — see target-specific sections below.
 embedded-can = "0.4"
 clap = { version = "4", features = ["derive"] }
 eframe = "0.31"
@@ -22,6 +22,16 @@ chrono = { version = "0.4", features = ["serde"] }
 nusb = "0.1"
 kcan-protocol = { path = "../kcan-protocol", features = ["std"] }
 futures-lite = "2.6.1"
+
+# host-can: pcan feature is only available on macOS and Windows.
+# On Linux, PEAK hardware uses SocketCAN (kernel driver) and the proprietary
+# libPCBUSB library does not support Linux — enabling pcan there causes a
+# compile error in the upstream crate (host-can issue: missing cfg(linux) arm).
+[target.'cfg(not(target_os = "linux"))'.dependencies]
+host-can = { version = "0.1", features = ["pcan"] }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+host-can = { version = "0.1" }
 
 [dev-dependencies]
 tempfile = "3"

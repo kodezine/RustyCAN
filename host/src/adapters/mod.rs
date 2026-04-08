@@ -17,6 +17,9 @@ use std::time::Duration;
 use host_can::frame::CanFrame;
 
 pub mod kcan;
+// PEAK adapter uses host-can's pcan feature which is macOS/Windows only.
+// On Linux, PEAK hardware is accessed via SocketCAN (kernel driver).
+#[cfg(not(target_os = "linux"))]
 pub mod peak;
 
 // ─── Public types ─────────────────────────────────────────────────────────────
@@ -100,29 +103,37 @@ pub fn open_adapter(
 ) -> Result<Box<dyn CanAdapter>, AdapterError> {
     match kind {
         AdapterKind::Peak => {
-            let inner = host_can::adapter::get_adapter(port, baud).map_err(|e| {
-                let detail = e.to_string();
-                // libloading surfaces a "cannot open shared object" / "dlopen" message
-                // when libPCBUSB.dylib / PCANBasic.dll is not installed.
-                if detail.to_lowercase().contains("libpcbusb")
-                    || detail.to_lowercase().contains("pcanbasic")
-                    || detail.to_lowercase().contains("dlopen")
-                    || detail.to_lowercase().contains("cannot open shared")
-                    || detail.to_lowercase().contains("the specified module")
-                {
-                    AdapterError::NotFound(format!(
-                        "PEAK driver library not found. \
-                        Please install the PCANBasic driver:\n\
-                        • macOS: https://mac-can.com\n\
-                        • Windows: https://peak-system.com/downloads\n\
-                        • Linux: https://peak-system.com/downloads\n\
-                        ({detail})"
-                    ))
-                } else {
-                    AdapterError::NotFound(detail)
-                }
-            })?;
-            Ok(Box::new(peak::PeakAdapter::new(inner)))
+            #[cfg(not(target_os = "linux"))]
+            {
+                let inner = host_can::adapter::get_adapter(port, baud).map_err(|e| {
+                    let detail = e.to_string();
+                    // libloading surfaces a "cannot open shared object" / "dlopen" message
+                    // when libPCBUSB.dylib / PCANBasic.dll is not installed.
+                    if detail.to_lowercase().contains("libpcbusb")
+                        || detail.to_lowercase().contains("pcanbasic")
+                        || detail.to_lowercase().contains("dlopen")
+                        || detail.to_lowercase().contains("cannot open shared")
+                        || detail.to_lowercase().contains("the specified module")
+                    {
+                        AdapterError::NotFound(format!(
+                            "PEAK driver library not found. \
+                            Please install the PCANBasic driver:\n\
+                            • macOS: https://mac-can.com\n\
+                            • Windows: https://peak-system.com/downloads\n\
+                            ({detail})"
+                        ))
+                    } else {
+                        AdapterError::NotFound(detail)
+                    }
+                })?;
+                Ok(Box::new(peak::PeakAdapter::new(inner)))
+            }
+            #[cfg(target_os = "linux")]
+            Err(AdapterError::NotFound(
+                "PEAK PCAN-USB is not supported on Linux via the proprietary driver. \
+                Use the KCAN dongle instead, or connect via SocketCAN."
+                    .into(),
+            ))
         }
         AdapterKind::KCan { serial } => {
             let adapter = kcan::KCanAdapter::open(serial.as_deref(), baud, listen_only)?;
@@ -136,7 +147,14 @@ pub fn open_adapter(
 /// Used by the Connect-screen polling loop.
 pub fn probe_adapter_kind(kind: &AdapterKind, port: &str, baud: u32) -> bool {
     match kind {
-        AdapterKind::Peak => host_can::adapter::get_adapter(port, baud).is_ok(),
+        AdapterKind::Peak => {
+            #[cfg(not(target_os = "linux"))]
+            {
+                host_can::adapter::get_adapter(port, baud).is_ok()
+            }
+            #[cfg(target_os = "linux")]
+            false
+        }
         AdapterKind::KCan { serial } => kcan::KCanAdapter::probe(serial.as_deref()),
     }
 }
