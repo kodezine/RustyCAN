@@ -68,7 +68,7 @@
 //! ```
 use std::path::PathBuf;
 use std::sync::mpsc;
-use std::time::Instant;
+use std::time::{Instant, SystemTime};
 
 use eframe::egui::{self, vec2, Button, Color32};
 use rfd::FileDialog;
@@ -86,7 +86,6 @@ use crate::session::{self, CanCommand, SessionConfig};
 // ─── Icon glyphs (Font Awesome codepoints present in MesloLGS NF) ────────────
 mod icons {
     // App / toolbar
-    pub const APP: &str = "\u{f085}"; // cogs
     pub const PORT: &str = "\u{f1e6}"; // plug
     pub const BAUD: &str = "\u{f197}"; // keyboard
     pub const NODES: &str = "\u{f0c0}"; // users
@@ -123,6 +122,7 @@ mod icons {
                                                  // Validation feedback
     pub const WARN: &str = "\u{f071}"; // exclamation-triangle
     pub const ERROR: &str = "\u{f06a}"; // exclamation-circle
+    pub const INFO: &str = "\u{f05a}"; // info-circle
 }
 
 /// Fixed width for every NMT action column — sized so the widest header ("Pre-Op") fits.
@@ -193,7 +193,7 @@ impl eframe::App for RustyCanApp {
                 }
             }
             Screen::Monitor(view) => {
-                if let Some(s) = render_monitor(ctx, view.as_mut()) {
+                if let Some(s) = render_monitor(ctx, view.as_mut(), &self.logo) {
                     next_screen = Some(s);
                 }
             }
@@ -206,6 +206,21 @@ impl eframe::App for RustyCanApp {
 }
 
 // ─── Connect screen ───────────────────────────────────────────────────────────
+
+#[derive(Clone)]
+enum MessageType {
+    Error,
+    Warning,
+    Notice,
+}
+
+#[derive(Clone)]
+struct MessageEntry {
+    text: String,
+    msg_type: MessageType,
+    timestamp: SystemTime,
+    created: Instant,
+}
 
 struct ConnectForm {
     port: String,
@@ -244,6 +259,8 @@ struct ConnectForm {
     adapter_notice: Option<String>,
     /// Originally configured adapter before any auto-switching.
     original_adapter_kind: Option<AdapterKind>,
+    /// Message history (last 5 errors/warnings/notices) for display.
+    message_history: Vec<MessageEntry>,
 }
 
 impl Clone for ConnectForm {
@@ -271,6 +288,7 @@ impl Clone for ConnectForm {
             confirm_remove_dbc: self.confirm_remove_dbc,
             adapter_notice: self.adapter_notice.clone(),
             original_adapter_kind: self.original_adapter_kind.clone(),
+            message_history: self.message_history.clone(),
         }
     }
 }
@@ -376,6 +394,7 @@ impl PersistedConfig {
             confirm_remove_dbc: None,
             adapter_notice: None,
             original_adapter_kind: None,
+            message_history: vec![],
         }
     }
 }
@@ -424,6 +443,7 @@ impl Default for ConnectForm {
                 confirm_remove_dbc: None,
                 adapter_notice: None,
                 original_adapter_kind: None,
+                message_history: vec![],
             }
         }
     }
@@ -597,7 +617,7 @@ fn try_fallback_adapter(form: &mut ConnectForm) -> bool {
 
             form.adapter_kind = fallback_kind;
             form.adapter_notice = Some(format!(
-                "⚠ {} not found, automatically switched to {}",
+                "{} not found, automatically switched to {}",
                 original_name, new_name
             ));
             return true;
@@ -652,26 +672,114 @@ fn render_connect(
     let mut transition = None;
 
     // Estimated content height so we can split surplus space equally top/bottom.
-    const CONNECT_CONTENT_H: f32 = 632.0;
+    const CONNECT_CONTENT_H: f32 = 500.0;
+
+    // ── Top toolbar (consistent with Monitor screen) ──────────────────────
+    egui::TopBottomPanel::top("connect_toolbar").show(ctx, |ui| {
+        ui.horizontal(|ui| {
+            // Logo and title spanning two lines
+            ui.add(
+                egui::Image::new(logo)
+                    .fit_to_exact_size(egui::vec2(48.0, 48.0))
+                    .corner_radius(6.0),
+            );
+            ui.vertical(|ui| {
+                ui.strong(egui::RichText::new("RustyCAN").size(24.0));
+                ui.label(
+                    egui::RichText::new(env!("RUSTYCAN_VERSION"))
+                        .size(10.0)
+                        .italics()
+                        .color(egui::Color32::from_gray(140)),
+                );
+            });
+            ui.separator();
+
+            // Dongle status indicator (always visible)
+            if form.dongle_connected {
+                ui.label(egui::RichText::new(icons::PLUG_OK).color(Color32::from_rgb(0, 200, 80)));
+                ui.label(egui::RichText::new("Detected").color(Color32::from_rgb(0, 200, 80)));
+            } else {
+                ui.label(
+                    egui::RichText::new(icons::PLUG_FAIL).color(Color32::from_rgb(200, 60, 60)),
+                );
+                ui.label(egui::RichText::new("Not detected").color(Color32::from_rgb(200, 60, 60)));
+            }
+
+            // Right side: Connect button (green, mirrors Disconnect button style)
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                let has_dupes = !form.warnings.is_empty();
+                let can_connect = form.dongle_connected && !has_dupes;
+                let resp = ui.add_enabled(
+                    can_connect,
+                    Button::new(
+                        egui::RichText::new(format!("{} Connect", icons::PLUG_OK))
+                            .color(Color32::WHITE),
+                    )
+                    .fill(Color32::from_rgb(34, 160, 54))
+                    .min_size(vec2(120.0, 32.0)),
+                );
+
+                if !form.dongle_connected {
+                    resp.on_disabled_hover_text("Connect a CAN dongle first");
+                } else if has_dupes {
+                    resp.on_disabled_hover_text("Fix duplicate node IDs before connecting");
+                } else if resp.clicked() {
+                    match form.try_connect() {
+                        Ok(view) => transition = Some(Screen::Monitor(Box::new(view))),
+                        Err(e) => form.error = Some(e),
+                    }
+                }
+            });
+        });
+    });
+
+    // ── Bottom status bar (greyed-out, for visual symmetry with Monitor screen) ──
+    egui::TopBottomPanel::bottom("status_bar").show(ctx, |ui| {
+        ui.vertical(|ui| {
+            // Line 1: Greyed-out Bus Load and FPS
+            ui.horizontal(|ui| {
+                // Greyed-out Bus load bar
+                ui.label(
+                    egui::RichText::new("Bus [░░░░░░░░░░░░░░░░░░░░] 0.0%")
+                        .monospace()
+                        .size(13.0)
+                        .color(egui::Color32::from_gray(80)),
+                );
+
+                // Greyed-out FPS
+                ui.separator();
+                ui.label(
+                    egui::RichText::new(format!("{} 0.0 fps", icons::FPS))
+                        .size(13.0)
+                        .color(egui::Color32::from_gray(80)),
+                );
+
+                // Right-aligned Total count
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    ui.label(
+                        egui::RichText::new(format!("Total:{}", format_count(0)))
+                            .size(13.0)
+                            .color(egui::Color32::from_gray(80)),
+                    );
+                });
+            });
+
+            // Line 2: Greyed-out Log path
+            ui.horizontal(|ui| {
+                ui.label(
+                    egui::RichText::new(format!("{} No log file", icons::LOG))
+                        .size(13.0)
+                        .color(egui::Color32::from_gray(80)),
+                );
+            });
+        });
+    });
 
     egui::CentralPanel::default().show(ctx, |ui| {
         egui::ScrollArea::vertical().show(ui, |ui| {
             let top_pad = ((ui.available_height() - CONNECT_CONTENT_H) / 2.0).max(20.0);
             ui.vertical_centered(|ui| {
                 ui.add_space(top_pad);
-                ui.add(
-                    egui::Image::new(logo)
-                        .fit_to_exact_size(egui::vec2(72.0, 72.0))
-                        .corner_radius(8.0),
-                );
-                ui.add_space(8.0);
-                ui.heading(egui::RichText::new("RustyCAN").strong());
-                ui.label(
-                    egui::RichText::new(env!("RUSTYCAN_VERSION"))
-                        .size(12.0)
-                        .color(egui::Color32::from_gray(140)),
-                );
-                ui.add_space(16.0);
             });
 
             // ── Connection settings ───────────────────────────────────────
@@ -773,43 +881,11 @@ fn render_connect(
                                 // Port row — only shown for PEAK
                                 if matches!(form.adapter_kind, AdapterKind::Peak) {
                                     ui.label("Port:");
-                                    ui.horizontal(|ui| {
-                                        ui.add(
-                                            egui::TextEdit::singleline(&mut form.port)
-                                                .desired_width(80.0)
-                                                .hint_text("1"),
-                                        );
-                                        // Dongle status indicator
-                                        if form.dongle_connected {
-                                            ui.colored_label(
-                                                Color32::from_rgb(0, 200, 80),
-                                                format!("{} Dongle: Connected", icons::PLUG_OK),
-                                            );
-                                        } else {
-                                            ui.colored_label(
-                                                Color32::from_rgb(200, 60, 60),
-                                                format!(
-                                                    "{} Dongle: Not detected",
-                                                    icons::PLUG_FAIL
-                                                ),
-                                            );
-                                        }
-                                    });
-                                    ui.end_row();
-                                } else {
-                                    // Show KCAN connection status inline
-                                    ui.label("Status:");
-                                    if form.dongle_connected {
-                                        ui.colored_label(
-                                            Color32::from_rgb(0, 200, 80),
-                                            format!("{} KCAN: Connected", icons::PLUG_OK),
-                                        );
-                                    } else {
-                                        ui.colored_label(
-                                            Color32::from_rgb(200, 60, 60),
-                                            format!("{} KCAN: Not detected", icons::PLUG_FAIL),
-                                        );
-                                    }
+                                    ui.add(
+                                        egui::TextEdit::singleline(&mut form.port)
+                                            .desired_width(80.0)
+                                            .hint_text("1"),
+                                    );
                                     ui.end_row();
                                 }
 
@@ -914,7 +990,7 @@ fn render_connect(
                     egui::CollapsingHeader::new(
                         egui::RichText::new("CANopen Nodes").size(20.0).strong(),
                     )
-                    .default_open(true)
+                    .default_open(false)
                     .show(ui, |ui| {
                         let mut to_remove: Option<usize> = None;
                         // Snapshot confirm state before iter_mut() to avoid borrow conflict.
@@ -1086,9 +1162,7 @@ fn render_connect(
                 .show(ui, |ui| {
                     ui.set_min_width(ui.available_width());
                     egui::CollapsingHeader::new(
-                        egui::RichText::new(format!("{} DBC Nodes", icons::DBC_HEADER))
-                            .size(20.0)
-                            .strong(),
+                        egui::RichText::new("DBC Nodes").size(20.0).strong(),
                     )
                     .default_open(false)
                     .show(ui, |ui| {
@@ -1259,64 +1333,111 @@ fn render_connect(
                 form.warnings.sort();
             }
 
-            // ── Error / warning label + Connect button ─────────────────────
-            // Always reserve space so the Connect button never shifts.
+            // ── Error / warning display ───────────────────────────────────
+            // Add current error/warning/notice to history
+            if let Some(err) = &form.error {
+                if form.message_history.is_empty()
+                    || form.message_history.last().unwrap().text != *err
+                {
+                    form.message_history.push(MessageEntry {
+                        text: err.clone(),
+                        msg_type: MessageType::Error,
+                        timestamp: SystemTime::now(),
+                        created: Instant::now(),
+                    });
+                }
+            }
+            if let Some(notice) = &form.adapter_notice {
+                if form.message_history.is_empty()
+                    || form.message_history.last().unwrap().text != *notice
+                {
+                    form.message_history.push(MessageEntry {
+                        text: notice.clone(),
+                        msg_type: MessageType::Notice,
+                        timestamp: SystemTime::now(),
+                        created: Instant::now(),
+                    });
+                }
+            }
+            for w in &form.warnings {
+                if form.message_history.is_empty()
+                    || !form
+                        .message_history
+                        .iter()
+                        .any(|m| m.text == *w && matches!(m.msg_type, MessageType::Warning))
+                {
+                    form.message_history.push(MessageEntry {
+                        text: w.clone(),
+                        msg_type: MessageType::Warning,
+                        timestamp: SystemTime::now(),
+                        created: Instant::now(),
+                    });
+                }
+            }
+
+            // Keep only last 5 messages
+            if form.message_history.len() > 5 {
+                form.message_history
+                    .drain(0..form.message_history.len() - 5);
+            }
+
+            // Display message history with greying based on age
             ui.vertical_centered(|ui| {
-                if let Some(err) = &form.error.clone() {
-                    ui.horizontal(|ui| {
-                        ui.label(
-                            egui::RichText::new(icons::ERROR)
-                                .size(16.0)
-                                .color(Color32::from_rgb(220, 60, 60)),
+                if !form.message_history.is_empty() {
+                    for msg in &form.message_history {
+                        let age_secs = msg.created.elapsed().as_secs_f32();
+                        // Grey out after 5 seconds, fully grey by 10 seconds
+                        let grey_factor = (age_secs - 5.0).max(0.0) / 5.0;
+                        let grey_factor = grey_factor.min(1.0);
+
+                        let (icon, base_color) = match msg.msg_type {
+                            MessageType::Error => (icons::ERROR, Color32::from_rgb(220, 60, 60)),
+                            MessageType::Warning => (icons::WARN, Color32::from_rgb(220, 170, 0)),
+                            MessageType::Notice => (icons::INFO, Color32::from_rgb(60, 160, 220)),
+                        };
+
+                        // Interpolate towards grey
+                        let grey_color = Color32::from_gray(120);
+                        let color = Color32::from_rgb(
+                            (base_color.r() as f32 * (1.0 - grey_factor)
+                                + grey_color.r() as f32 * grey_factor)
+                                as u8,
+                            (base_color.g() as f32 * (1.0 - grey_factor)
+                                + grey_color.g() as f32 * grey_factor)
+                                as u8,
+                            (base_color.b() as f32 * (1.0 - grey_factor)
+                                + grey_color.b() as f32 * grey_factor)
+                                as u8,
                         );
-                        ui.colored_label(Color32::from_rgb(220, 60, 60), err);
-                    });
-                } else if let Some(notice) = &form.adapter_notice {
-                    // Adapter auto-switch notice
-                    ui.horizontal(|ui| {
-                        ui.label(
-                            egui::RichText::new(icons::WARN)
-                                .size(16.0)
-                                .color(Color32::from_rgb(60, 160, 220)),
-                        );
-                        ui.colored_label(Color32::from_rgb(60, 160, 220), notice);
-                    });
-                } else if !form.warnings.is_empty() {
-                    for w in &form.warnings.clone() {
+
                         ui.horizontal(|ui| {
+                            ui.label(egui::RichText::new(icon).size(16.0).color(color));
+                            // Format timestamp as HH:MM:SS
+                            let time_display =
+                                match msg.timestamp.duration_since(std::time::UNIX_EPOCH) {
+                                    Ok(duration) => {
+                                        let total_secs = duration.as_secs();
+                                        let secs = total_secs % 60;
+                                        let mins = (total_secs / 60) % 60;
+                                        let hours = (total_secs / 3600) % 24;
+                                        format!("[{:02}:{:02}:{:02}]", hours, mins, secs)
+                                    }
+                                    Err(_) => "[--:--:--]".to_string(),
+                                };
                             ui.label(
-                                egui::RichText::new(icons::WARN)
-                                    .size(16.0)
-                                    .color(Color32::from_rgb(220, 170, 0)),
+                                egui::RichText::new(time_display)
+                                    .size(11.0)
+                                    .color(Color32::from_gray(100)),
                             );
-                            ui.colored_label(Color32::from_rgb(220, 170, 0), w);
+                            ui.label(egui::RichText::new(&msg.text).size(11.0).color(color));
                         });
                     }
                 } else {
                     ui.add_space(ui.text_style_height(&egui::TextStyle::Body));
                 }
             });
-            ui.add_space(6.0);
 
-            ui.vertical_centered(|ui| {
-                let has_dupes = !form.warnings.is_empty();
-                let can_connect = form.dongle_connected && !has_dupes;
-                let connect_btn = Button::new(egui::RichText::new("  Connect  ").size(18.0))
-                    .min_size(vec2(180.0, 40.0));
-                let resp = ui.add_enabled(can_connect, connect_btn);
-                if !form.dongle_connected {
-                    resp.on_disabled_hover_text("Connect a CAN dongle first");
-                } else if has_dupes {
-                    resp.on_disabled_hover_text("Fix duplicate node IDs before connecting");
-                } else if resp.clicked() {
-                    match form.try_connect() {
-                        Ok(view) => transition = Some(Screen::Monitor(Box::new(view))),
-                        Err(e) => form.error = Some(e),
-                    }
-                }
-            });
-
-            ui.add_space(top_pad.min(20.0));
+            ui.add_space(top_pad.min(40.0));
         });
     });
 
@@ -1378,6 +1499,107 @@ struct MonitorView {
     node_ods: std::collections::HashMap<u8, crate::eds::types::ObjectDictionary>,
     /// State for the SDO Browser panel.
     sdo_browser: SdoBrowserPanel,
+}
+
+/// Smart truncation of file paths for display.
+/// Keeps the filename always visible and uses ellipses in the middle if the path is too long.
+fn truncate_path_smart(full_path: &str, ui: &egui::Ui, available_width: f32) -> String {
+    if full_path.is_empty() {
+        return full_path.to_string();
+    }
+
+    // Measure full path width
+    let font_id = egui::TextStyle::Body.resolve(ui.style());
+    let full_width = ui.fonts(|f| {
+        f.layout_no_wrap(full_path.to_string(), font_id.clone(), egui::Color32::WHITE)
+            .rect
+            .width()
+    });
+
+    // If it fits, return as-is
+    if full_width <= available_width {
+        return full_path.to_string();
+    }
+
+    // Extract filename (everything after the last '/')
+    let path = std::path::Path::new(full_path);
+    let filename = path
+        .file_name()
+        .and_then(|f| f.to_str())
+        .unwrap_or(full_path);
+
+    // Reserve space for ellipsis and filename
+    let ellipsis = "...";
+    let suffix = format!("{}{}", ellipsis, filename);
+    let suffix_width = ui.fonts(|f| {
+        f.layout_no_wrap(suffix.clone(), font_id.clone(), egui::Color32::WHITE)
+            .rect
+            .width()
+    });
+
+    // If even the filename doesn't fit, just show it
+    if suffix_width >= available_width {
+        return filename.to_string();
+    }
+
+    // Find the parent directory path
+    let parent = path.parent().and_then(|p| p.to_str()).unwrap_or("");
+
+    if parent.is_empty() {
+        return filename.to_string();
+    }
+
+    // Binary search for the right prefix length
+    let mut left = 0;
+    let mut right = parent.len();
+    let mut best_len = 0;
+
+    while left <= right {
+        let mid = (left + right) / 2;
+        let prefix = &parent[..mid];
+        let candidate = format!("{}{}{}", prefix, ellipsis, filename);
+        let candidate_width = ui.fonts(|f| {
+            f.layout_no_wrap(candidate.clone(), font_id.clone(), egui::Color32::WHITE)
+                .rect
+                .width()
+        });
+
+        if candidate_width <= available_width {
+            best_len = mid;
+            left = mid + 1;
+        } else {
+            right = mid.saturating_sub(1);
+        }
+
+        if left > right {
+            break;
+        }
+    }
+
+    if best_len == 0 {
+        return suffix;
+    }
+
+    format!("{}{}{}", &parent[..best_len], ellipsis, filename)
+}
+
+/// Format a number with comma separators and leading spaces (fixed width for alignment).
+/// Supports up to billions (999,999,999,999).
+fn format_count(n: u64) -> String {
+    let s = n.to_string();
+    let mut result = String::new();
+
+    for (i, c) in s.chars().rev().enumerate() {
+        if i > 0 && i % 3 == 0 {
+            result.push(',');
+        }
+        result.push(c);
+    }
+
+    let formatted: String = result.chars().rev().collect();
+
+    // Pad to 15 characters (for up to 999,999,999,999)
+    format!("{:>15}", formatted)
 }
 
 /// Render a block-character bus-load bar into the current horizontal layout.
@@ -1453,7 +1675,11 @@ fn bus_load_bar(ui: &mut egui::Ui, load: f64) {
         .on_hover_text("Estimated bus load (fps \u{00d7} 125 bits \u{00f7} baud rate)");
 }
 
-fn render_monitor(ctx: &egui::Context, view: &mut MonitorView) -> Option<Screen> {
+fn render_monitor(
+    ctx: &egui::Context,
+    view: &mut MonitorView,
+    logo: &egui::TextureHandle,
+) -> Option<Screen> {
     // Drain all pending CAN events; intercept AdapterError before rendering.
     let mut adapter_error: Option<String> = None;
     loop {
@@ -1476,7 +1702,21 @@ fn render_monitor(ctx: &egui::Context, view: &mut MonitorView) -> Option<Screen>
     // ── Top toolbar ───────────────────────────────────────────────────────
     egui::TopBottomPanel::top("toolbar").show(ctx, |ui| {
         ui.horizontal(|ui| {
-            ui.strong(format!("{} RustyCAN", icons::APP));
+            // Logo and title spanning two lines
+            ui.add(
+                egui::Image::new(logo)
+                    .fit_to_exact_size(egui::vec2(48.0, 48.0))
+                    .corner_radius(6.0),
+            );
+            ui.vertical(|ui| {
+                ui.strong(egui::RichText::new("RustyCAN").size(28.0));
+                ui.label(
+                    egui::RichText::new(env!("RUSTYCAN_VERSION"))
+                        .size(10.0)
+                        .italics()
+                        .color(egui::Color32::from_gray(140)),
+                );
+            });
             ui.separator();
             // Green plug = actively connected
             ui.label(egui::RichText::new(icons::PORT).color(Color32::from_rgb(60, 200, 90)));
@@ -1512,36 +1752,55 @@ fn render_monitor(ctx: &egui::Context, view: &mut MonitorView) -> Option<Screen>
 
     // ── Bottom status bar ─────────────────────────────────────────────────
     egui::TopBottomPanel::bottom("status_bar").show(ctx, |ui| {
-        ui.horizontal(|ui| {
-            let log_full = &view.state.log_path;
-            let log_display = std::path::Path::new(log_full)
-                .file_name()
-                .map(|f| f.to_string_lossy().into_owned())
-                .unwrap_or_else(|| log_full.clone());
+        ui.vertical(|ui| {
+            // Line 1: Bus Load and FPS
+            ui.horizontal(|ui| {
+                // Bus load — block-character bar
+                bus_load_bar(ui, view.state.bus_load);
 
-            // FPS
-            ui.label(format!(
-                "{} {:.1} fps   Total: {}",
-                icons::FPS,
-                view.state.fps,
-                view.state.total_frames,
-            ));
-
-            // Bus load — block-character bar
-            ui.separator();
-            bus_load_bar(ui, view.state.bus_load);
-
-            // Log path
-            ui.separator();
-            let log_label = ui.label(format!("{} {}", icons::LOG, log_display));
-            if !log_full.is_empty() {
-                log_label.on_hover_text(log_full);
-            }
-
-            if view.disconnected {
+                // FPS
                 ui.separator();
-                ui.colored_label(Color32::RED, "⚠ Adapter disconnected");
-            }
+                ui.label(
+                    egui::RichText::new(format!("{} {:.1} fps", icons::FPS, view.state.fps,))
+                        .size(13.0),
+                );
+
+                // Right-aligned Total count
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    ui.label(
+                        egui::RichText::new(format!(
+                            "Total:{}",
+                            format_count(view.state.total_frames)
+                        ))
+                        .size(13.0),
+                    );
+                });
+            });
+
+            // Line 2: Log path and status
+            ui.horizontal(|ui| {
+                let log_full = &view.state.log_path;
+
+                // Use smart truncation for the log path (keeps filename visible with ellipses in middle)
+                let available_width = ui.available_width() - 100.0; // Reserve space for disconnect warning
+                let log_display = truncate_path_smart(log_full, ui, available_width);
+
+                // Log path
+                let log_label = ui.label(
+                    egui::RichText::new(format!("{} {}", icons::LOG, log_display)).size(13.0),
+                );
+                if !log_full.is_empty() && log_display != *log_full {
+                    log_label.on_hover_text(log_full); // Hover to see full path if truncated
+                }
+
+                if view.disconnected {
+                    ui.separator();
+                    ui.colored_label(
+                        Color32::RED,
+                        egui::RichText::new("⚠ Adapter disconnected").size(13.0),
+                    );
+                }
+            });
         });
     });
 

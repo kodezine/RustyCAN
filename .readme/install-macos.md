@@ -97,7 +97,7 @@ If you want to use a PEAK PCAN-USB adapter:
    - Optionally browse to `.eds` files for your nodes
 3. Click **Connect** — the button activates automatically when the adapter is detected.
 
-See the [README](../README.md#using-the-gui) for a full GUI walkthrough.
+See the [GUI Guide](gui-guide.md) for a full GUI walkthrough.
 
 ---
 

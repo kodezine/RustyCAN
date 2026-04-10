@@ -121,4 +121,4 @@ no proprietary library is required.
 3. Optionally browse to one or more `.eds` files for connected nodes.
 4. Click **Connect**.
 
-See the [README](../README.md#using-the-gui) for a full GUI walkthrough.
+See the [GUI Guide](gui-guide.md) for a full GUI walkthrough.

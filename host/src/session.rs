@@ -178,13 +178,21 @@ pub fn start(config: SessionConfig) -> SessionResult {
 
     // ── Open logger ───────────────────────────────────────────────────────────
     // Compute the timestamped log path before creating the logger
-    let actual_log_path =
-        crate::logger::add_timestamp_to_path(std::path::Path::new(&config.log_path))
-            .to_string_lossy()
-            .to_string();
+    let timestamped_log_path =
+        crate::logger::add_timestamp_to_path(std::path::Path::new(&config.log_path));
 
-    let logger = EventLogger::with_text_log(&config.log_path, config.text_log)
-        .map_err(|e| format!("Failed to open log file {}: {e}", actual_log_path))?;
+    let logger = EventLogger::with_text_log(&config.log_path, config.text_log).map_err(|e| {
+        format!(
+            "Failed to open log file {}: {e}",
+            timestamped_log_path.display()
+        )
+    })?;
+
+    // Convert to absolute path for display in the UI
+    let actual_log_path = std::fs::canonicalize(&timestamped_log_path)
+        .unwrap_or(timestamped_log_path)
+        .to_string_lossy()
+        .to_string();
 
     // ── Load DBC files (if configured) ────────────────────────────────────────
     let dbc_database: Option<DbcDatabase> = if config.dbc_paths.is_empty() {
