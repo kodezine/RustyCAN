@@ -61,6 +61,7 @@ Comprehensive documentation is organized in the [`.readme/`](.readme/) directory
 - [GUI Guide](.readme/gui-guide.md) — Connect & Monitor screens walkthrough
 
 ### Reference
+- [CLI Configuration File](.readme/cli-config.md) — `--config` flag, JSON schema, auto-connect
 - [JSONL Log Format](.readme/jsonl-format.md) — Complete logging specification
 - [Live HTTP Dashboard](.readme/live-dashboard.md) — Browser-based live event viewer
 - [DBC Signal Decoding](.readme/dbc-signal-decoding.md) — DBC file support details

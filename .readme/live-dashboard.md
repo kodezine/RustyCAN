@@ -5,6 +5,23 @@ to a browser in real time.  The dashboard is available at
 **`http://localhost:7878/`** from the moment the app launches — no
 configuration required.
 
+## Changing the Dashboard Port
+
+The default port is **7878** but it can be changed in two ways:
+
+**CLI flag** (highest priority):
+```sh
+rustycan --http-port 9090
+```
+
+**JSON config file** (`"http_port"` field):
+```json
+{ "http_port": 9090, ... }
+```
+
+The `--http-port` flag always overrides the value in the config file.  See
+[CLI Configuration File](cli-config.md) for the full schema.
+
 ## Accessing the Dashboard
 
 1. Launch RustyCAN (the HTTP server starts automatically).

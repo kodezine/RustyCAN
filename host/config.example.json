@@ -1,0 +1,18 @@
+{
+  "adapter_kind": "Peak",
+  "port": "1",
+  "baud": "250000",
+  "http_port": 7878,
+  "log_path": "rustycan.jsonl",
+  "sdo_timeout_str": "500",
+  "listen_only": false,
+  "text_log": false,
+  "kcan_serial": "",
+  "nodes": [
+    { "id_str": "1", "eds_path": "/path/to/node1.eds" },
+    { "id_str": "2", "eds_path": "" }
+  ],
+  "dbc_files": [
+    { "path": "/path/to/bus.dbc" }
+  ]
+}
