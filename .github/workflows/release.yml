@@ -7,6 +7,10 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
+  # softprops/action-gh-release still declares `using: node20` internally.
+  # Force Node 24 now to silence deprecation warnings ahead of the June 2026
+  # deadline when Node 24 becomes the default runner.
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 permissions:
   contents: write
