@@ -1,0 +1,15 @@
+VERSION ""
+
+NS_ :
+
+BS_:
+
+BU_: Vector__XXX ECU1
+
+BO_ 770 EngineData: 8 Vector__XXX
+ SG_ EngineSpeed : 0|16@1+ (0.125,0) [0|8031.875] "rpm" Vector__XXX
+ SG_ CoolantTemp : 16|8@1+ (1,-40) [-40|215] "degC" Vector__XXX
+ SG_ ThrottlePos : 24|8@0+ (0.392157,0) [0|100] "%" Vector__XXX
+
+VAL_ 770 CoolantTemp 0 "Sensor_Error" ;
+

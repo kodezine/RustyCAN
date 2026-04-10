@@ -38,15 +38,17 @@ and a path to Phase 3 hardware-level encryption (STM32H563, TrustZone).
 | 🔌 **Adapter selection** | Choose PEAK PCAN-USB or KCAN Dongle from the Connect screen |
 | 🔧 **KCAN Dongle** | STM32H753ZI Nucleo firmware (Embassy); custom 80-byte USB protocol with hardware timestamps |
 | ⏱️ **Hardware timestamps** | KCAN frames carry µs-precision timestamps from FDCAN TIM2; logged as `hw_ts_us` in JSONL |
-| 🔍 **Dongle detection** | Connect button enabled only when the selected adapter is found; re-checked every 2 s |
-| 👂 **Listen-only mode** | Optional passive mode — no frames are ever transmitted; toggle at connect time |
-| 📄 **EDS optional** | Per-node EDS files are optional; PDO frames without EDS show raw byte values |
+| 🔍 **Dongle detection** | Connect button enabled only when the selected adapter is found; re-checked every 2 s || 🔄 **Automatic adapter fallback** | If configured adapter unavailable, automatically tries other types (PEAK ↔ KCAN) with notice || � **Error resilience** | Continues running through adapter I/O errors; useful for waiting on unpowered buses or temporary disconnections |
+| �👂 **Listen-only mode** | Optional passive mode — no frames are ever transmitted; toggle at connect time |
+| � **Configuration persistence** | Form settings (port, baud, nodes, DBC files) saved to JSON and restored on next launch; missing files filtered out |
+| �📄 **EDS optional** | Per-node EDS files are optional; PDO frames without EDS show raw byte values |
 | 🆔 **Node ID from EDS** | Browsing to an EDS file auto-fills the Node ID from `[DeviceComissioning] NodeId` |
-| 🌐 **Multi-node** | Configure any number of nodes at startup; new nodes appear dynamically from heartbeats |
+| 🌐 **Multi-node** | Configure any number of CANopen nodes; nodes are optional when using DBC-only monitoring |
 | 💓 **NMT monitoring** | Live Bootup / Pre-Operational / Operational / Stopped state per node with age |
 | 📡 **NMT commands** | Send Start / Stop / Enter Pre-Op / Reset Node / Reset Comm to any node or broadcast all |
 | 📊 **PDO live values** | Decode TPDO/RPDO signals from EDS mappings; raw hex bytes when no EDS is loaded |
-| 🔎 **SDO decode** | Expedited upload/download with EDS name lookup; abort codes displayed |
+| � **DBC signal decoding** | Load a `.dbc` file to decode any message/signal on the bus; runs in dual-mode alongside CANopen; Intel & Motorola byte orders, VAL_ descriptions — [details](.readme/dbc-signal-decoding.md) |
+| �🔎 **SDO decode** | Expedited upload/download with EDS name lookup; abort codes displayed |
 | 📶 **Bus load bar** | 20-block colour-coded bar in the status strip: blue ≤30 %, yellow 30–70 %, red >70 % |
 | 🎞️ **Frame rate** | Rolling fps counter (2 s window) shown alongside total frame count |
 | 📝 **JSONL logging** | Every event (received and sent) appended to a newline-delimited JSON file |
@@ -140,16 +142,39 @@ so `log.jsonl` creates `log_20263003130458.jsonl`. This ensures each run
 produces a unique log file.  
 **Dongle indicator** — polled every 2 s; the Connect button stays disabled
 (greyed) until the adapter is found on the given port/baud.  
-**Nodes** — each row is a CANopen node:
+**Automatic adapter fallback** — if the configured adapter is not found during
+probing, RustyCAN automatically tries other available adapter types (PEAK ↔ KCAN).
+When a fallback succeeds, a blue notice appears: "⚠ PEAK PCAN-USB not found,
+automatically switched to KCAN Dongle". Manually switching adapters clears the notice.  
+**Nodes** — CANopen nodes to monitor (optional):
 - *Node ID* — decimal (`5`) or hex with `0x`/`H` prefix/suffix
   (`0x05`, `05H`); valid range 1–127.
 - *EDS file* — optional; click **Browse…** to pick a file. If the EDS
   contains `[DeviceComissioning] NodeId`, the Node ID box is pre-filled
   automatically. Leave the EDS blank to monitor the node without decoding.
-- Zero nodes configured is valid — the monitor will still show any node
-  that sends a heartbeat frame.
+- CANopen nodes are entirely optional — you can connect with zero nodes
+  when using DBC signal decoding or raw frame logging only.
+
+**DBC Nodes** — DBC files for signal decoding (optional, see [DBC details](.readme/dbc-signal-decoding.md)):
+- Load multiple DBC files; first-match precedence for overlapping CAN IDs.
+- Runs in dual-mode alongside CANopen.
+
+**Configuration persistence** — all settings are saved to
+`~/Library/Application Support/RustyCAN/config.json` (macOS) when you
+successfully connect, and automatically restored on next launch. Files that
+no longer exist are silently removed from the restored configuration.
 
 ### Monitor screen
+
+**Error resilience** — RustyCAN continues running even when the adapter
+encounters I/O errors (e.g., USB timeouts, temporary disconnections). This
+allows you to:
+- Connect to the adapter before the CAN bus is powered
+- Wait for nodes to come online without manual reconnection
+- Tolerate temporary USB communication issues
+
+Errors are logged to the terminal (stderr) for debugging. Use the **Disconnect**
+button to manually return to the Connect screen when needed.
 
 ```
  RustyCAN  ·  Port 1  ·  250000 bps  ·  2 node(s)              [Disconnect]
@@ -239,6 +264,15 @@ All CAN data bytes are written as `"0x##"` hex strings.
 | `SDO_READ` | SDO upload response decoded | `node`, `index` (hex), `subindex` (hex), `name`, `value`, `ascii` (optional) |
 | `SDO_WRITE` | SDO download request decoded | `node`, `index` (hex), `subindex` (hex), `name`, `value`, `ascii` (optional) |
 | `PDO` | TPDO or RPDO frame decoded | `node`, `pdo_num` (EDS-derived), `signals` (name→value map) |
+| `DBC_SIGNAL` | CAN frame decoded by loaded DBC | `message`, `source_dbc`, `signals` (name→{raw, physical, unit, description}) |
+| `RAW_FRAME` | Unmatched frame (fallback) | `cob_id`, `raw` (no higher-level decode) |
+
+**DBC note:** For decoded DBC signal JSONL contract details, see
+[`.readme/dbc-signal-decoding.md`](.readme/dbc-signal-decoding.md#jsonl-logging-format-for-decoded-dbc-signals).
+Multi-DBC loading is supported; multiple files are merged with first-match precedence for overlapping CAN IDs.
+
+**RAW_FRAME note:** Only emitted for frames that were not logged as NMT/SDO/PDO/DBC_SIGNAL.
+Prevents duplicate logging while capturing all bus traffic.
 
 **SDO notes:**
 - `ascii` — present only for byte array values (VISIBLE_STRING, OCTET_STRING) when

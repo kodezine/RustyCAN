@@ -18,10 +18,13 @@ rfd = "0.15"
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["preserve_order"] }
 chrono = { version = "0.4", features = ["serde"] }
+dirs = "5"
 # KCAN dongle support
 nusb = "0.1"
 kcan-protocol = { path = "../kcan-protocol", features = ["std"] }
 futures-lite = "2.6.1"
+# DBC file support
+can-dbc = "9"
 
 # host-can: pcan feature is only available on macOS and Windows.
 # On Linux, PEAK hardware uses SocketCAN (kernel driver) and the proprietary
