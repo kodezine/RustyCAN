@@ -164,7 +164,11 @@ enum Screen {
 }
 
 impl RustyCanApp {
-    fn new(cc: &eframe::CreationContext) -> Self {
+    fn new(
+        cc: &eframe::CreationContext,
+        config_path: Option<std::path::PathBuf>,
+        http_port: u16,
+    ) -> Self {
         let icon_bytes = include_bytes!("../../assets/RustyCAN.iconset/icon_256x256.png");
         let icon_data =
             eframe::icon_data::from_png_bytes(icon_bytes).expect("bundled icon is valid PNG");
@@ -175,9 +179,34 @@ impl RustyCanApp {
         let logo = cc
             .egui_ctx
             .load_texture("app_logo", color_image, egui::TextureOptions::LINEAR);
-        let sse_server = SseServer::start(7878);
+        let sse_server = SseServer::start(http_port);
+
+        let screen = if let Some(ref path) = config_path {
+            match PersistedConfig::load_from(path) {
+                Some(config) => {
+                    let mut form = config.into_form();
+                    match form.try_connect(sse_server.tx.clone()) {
+                        Ok(monitor) => Screen::Monitor(Box::new(monitor)),
+                        Err(msg) => {
+                            form.error = Some(msg);
+                            Screen::Connect(form)
+                        }
+                    }
+                }
+                None => {
+                    let form = ConnectForm {
+                        error: Some(format!("Failed to load config file: {}", path.display())),
+                        ..ConnectForm::default()
+                    };
+                    Screen::Connect(form)
+                }
+            }
+        } else {
+            Screen::Connect(ConnectForm::default())
+        };
+
         RustyCanApp {
-            screen: Screen::Connect(ConnectForm::default()),
+            screen,
             logo,
             sse_server,
         }
@@ -317,13 +346,20 @@ struct PersistedConfig {
     port: String,
     baud: String,
     nodes: Vec<NodeEntry>,
-    log_path: String,
+    /// Omitting this field or setting it to null/empty uses the default
+    /// `rustycan.jsonl` in the current working directory.
+    #[serde(default)]
+    log_path: Option<String>,
     sdo_timeout_str: String,
     listen_only: bool,
     text_log: bool,
     adapter_kind: AdapterKind,
     kcan_serial: String,
     dbc_files: Vec<DbcEntry>,
+    /// Port for the live HTML dashboard (`http://127.0.0.1:<port>/`).
+    /// Omitting this field uses 7878. The `--http-port` CLI flag overrides it.
+    #[serde(default)]
+    http_port: Option<u16>,
 }
 
 impl PersistedConfig {
@@ -356,7 +392,15 @@ impl PersistedConfig {
     /// Load configuration from disk, filtering out non-existent file paths.
     fn load() -> Option<Self> {
         let path = Self::config_path();
-        let json = std::fs::read_to_string(&path).ok()?;
+        Self::load_from(&path)
+    }
+
+    /// Load configuration from an arbitrary path (e.g. supplied via `--config`).
+    ///
+    /// Returns `None` if the file cannot be read or parsed. Non-existent EDS
+    /// and DBC paths are silently removed so the session can still start.
+    fn load_from(path: &std::path::Path) -> Option<Self> {
+        let json = std::fs::read_to_string(path).ok()?;
         let mut config: PersistedConfig = serde_json::from_str(&json).ok()?;
 
         // Filter out nodes with non-existent EDS files
@@ -377,11 +421,15 @@ impl PersistedConfig {
 
     /// Convert to ConnectForm with runtime state initialized to defaults.
     fn into_form(self) -> ConnectForm {
+        let log_path = match self.log_path {
+            Some(p) if !p.trim().is_empty() => p,
+            _ => "rustycan.jsonl".into(),
+        };
         ConnectForm {
             port: self.port,
             baud: self.baud,
             nodes: self.nodes,
-            log_path: self.log_path,
+            log_path,
             sdo_timeout_str: self.sdo_timeout_str,
             error: None,
             warnings: vec![],
@@ -409,13 +457,14 @@ impl From<&ConnectForm> for PersistedConfig {
             port: form.port.clone(),
             baud: form.baud.clone(),
             nodes: form.nodes.clone(),
-            log_path: form.log_path.clone(),
+            log_path: Some(form.log_path.clone()),
             sdo_timeout_str: form.sdo_timeout_str.clone(),
             listen_only: form.listen_only,
             text_log: form.text_log,
             adapter_kind: form.adapter_kind.clone(),
             kcan_serial: form.kcan_serial.clone(),
             dbc_files: form.dbc_files.clone(),
+            http_port: None, // not persisted to the app-data config; set via --config file only
         }
     }
 }
@@ -2974,7 +3023,7 @@ fn sdo_section(ui: &mut egui::Ui, state: &AppState) {
 
 /// Launch the native egui window. Blocks until the user closes it.
 /// No CLI arguments needed — all config is entered via the Connect screen.
-pub fn run() -> Result<(), eframe::Error> {
+pub fn run(config_path: Option<std::path::PathBuf>, http_port: u16) -> Result<(), eframe::Error> {
     let icon = eframe::icon_data::from_png_bytes(include_bytes!(
         "../../assets/RustyCAN.iconset/icon_512x512@2x.png"
     ))
@@ -3038,7 +3087,7 @@ pub fn run() -> Result<(), eframe::Error> {
                 );
             });
 
-            Ok(Box::new(RustyCanApp::new(cc)))
+            Ok(Box::new(RustyCanApp::new(cc, config_path, http_port)))
         }),
     )
 }
