@@ -11,6 +11,7 @@ use chrono::{DateTime, Utc};
 use crate::canopen::nmt::NmtState;
 use crate::canopen::pdo::PdoValue;
 use crate::canopen::sdo::{SdoDirection, SdoValue};
+use crate::dbc::types::DbcFrameSignals;
 
 // ─── Type aliases ─────────────────────────────────────────────────────────────
 
@@ -18,6 +19,28 @@ use crate::canopen::sdo::{SdoDirection, SdoValue};
 type NmtTimestamp = (Instant, Option<Duration>);
 /// `(live signal values, last-update monotonic, inter-event period)` per PDO.
 type PdoEntry = (Vec<PdoValue>, Instant, Option<Duration>);
+
+// ─── DBC state ────────────────────────────────────────────────────────────────
+
+/// Live state for one decoded DBC message.
+pub struct DbcMessageEntry {
+    pub message_name: String,
+    /// Most-recently decoded signal values for this message.
+    pub values: crate::dbc::types::DbcSignalValue,
+}
+
+/// Live decoded values for a single DBC signal (keyed by signal name).
+pub struct DbcSignalEntry {
+    pub signal_name: String,
+    pub can_id: u32,
+    pub message_name: String,
+    pub raw_int: i64,
+    pub physical: f64,
+    pub unit: String,
+    pub description: Option<String>,
+    pub last_seen: Instant,
+    pub count: u64,
+}
 
 // ─── Event types ─────────────────────────────────────────────────────────────
 
@@ -57,6 +80,11 @@ pub enum CanEvent {
     },
     /// Sent by the recv thread when the CAN adapter fails to open.
     AdapterError(String),
+    /// Signals decoded from a CAN frame against the loaded DBC database.
+    DbcSignal(DbcFrameSignals),
+    /// Emitted once when the DBC database is loaded successfully.
+    /// Carries the DBC file's stem name (e.g. `"sample_bus"`).
+    DbcLoaded(String),
 }
 
 // ─── Application state ───────────────────────────────────────────────────────
@@ -71,6 +99,12 @@ pub struct AppState {
     pub sdo_log: VecDeque<SdoLogEntry>,
     /// In-flight SDO transfers initiated by the master: node_id → (index, subindex, direction).
     pub pending_sdos: HashMap<u8, (u16, u8, SdoDirection)>,
+    /// Live DBC signal values: (can_id, signal_name) → entry.
+    ///
+    /// Populated when a DBC file is loaded and matching CAN frames are received.
+    pub dbc_signals: HashMap<(u32, String), DbcSignalEntry>,
+    /// Filename stem of the loaded DBC (e.g. `"sample_bus"`), or `None` if no DBC is loaded.
+    pub dbc_loaded: Option<String>,
     /// Total CAN frames received.
     pub total_frames: u64,
     /// Rolling frames-per-second counter.
@@ -96,6 +130,8 @@ impl AppState {
             pdo_values: HashMap::new(),
             sdo_log: VecDeque::with_capacity(SDO_LOG_CAP + 1),
             pending_sdos: HashMap::new(),
+            dbc_signals: HashMap::new(),
+            dbc_loaded: None,
             total_frames: 0,
             fps: 0.0,
             bus_load: 0.0,
@@ -195,6 +231,35 @@ pub fn apply_event(state: &mut AppState, ev: CanEvent) {
         }
         // Handled directly by the UI layer; nothing to record in AppState.
         CanEvent::AdapterError(_) => {}
+        CanEvent::DbcLoaded(name) => {
+            state.dbc_loaded = Some(name);
+        }
+        CanEvent::DbcSignal(frame_signals) => {
+            let now = Instant::now();
+            for sig in frame_signals.values {
+                let key = (frame_signals.can_id, sig.signal_name.clone());
+                let entry = state
+                    .dbc_signals
+                    .entry(key)
+                    .or_insert_with(|| DbcSignalEntry {
+                        signal_name: sig.signal_name.clone(),
+                        can_id: frame_signals.can_id,
+                        message_name: frame_signals.message_name.clone(),
+                        raw_int: 0,
+                        physical: 0.0,
+                        unit: sig.unit.clone(),
+                        description: None,
+                        last_seen: now,
+                        count: 0,
+                    });
+                entry.raw_int = sig.raw_int;
+                entry.physical = sig.physical;
+                entry.unit = sig.unit;
+                entry.description = sig.description;
+                entry.last_seen = now;
+                entry.count += 1;
+            }
+        }
     }
 }
 

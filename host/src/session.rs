@@ -32,6 +32,7 @@ use crate::canopen::{
     },
     FrameType,
 };
+use crate::dbc::{self, DbcDatabase};
 use crate::eds::{parse_eds, types::ObjectDictionary};
 use crate::logger::EventLogger;
 
@@ -103,6 +104,12 @@ pub struct SessionConfig {
     ///
     /// Defaults to [`AdapterKind::Peak`] so existing callers are unaffected.
     pub adapter_kind: AdapterKind,
+    /// DBC files to load for bus-wide raw CAN signal decoding.
+    ///
+    /// When non-empty, every received CAN frame is decoded against all loaded
+    /// DBC databases and the results emitted as [`CanEvent::DbcSignal`] events.
+    /// Empty vector disables DBC decoding entirely.
+    pub dbc_paths: Vec<std::path::PathBuf>,
 }
 
 /// Load EDS files, open the log, spawn the recv thread.
@@ -179,6 +186,35 @@ pub fn start(config: SessionConfig) -> SessionResult {
     let logger = EventLogger::with_text_log(&config.log_path, config.text_log)
         .map_err(|e| format!("Failed to open log file {}: {e}", actual_log_path))?;
 
+    // ── Load DBC files (if configured) ────────────────────────────────────────
+    let dbc_database: Option<DbcDatabase> = if config.dbc_paths.is_empty() {
+        None
+    } else {
+        let mut databases = Vec::new();
+        let mut loaded_names = Vec::new();
+
+        for path in &config.dbc_paths {
+            let db = dbc::load_dbc(path)
+                .map_err(|e| format!("Failed to load DBC {}: {e}", path.display()))?;
+            if let Some(stem) = path.file_stem() {
+                loaded_names.push(stem.to_string_lossy().into_owned());
+            }
+            databases.push(db);
+        }
+
+        let merged = dbc::merge_databases(databases)
+            .map_err(|e| format!("Failed to merge DBC databases: {e}"))?;
+
+        Some(merged)
+    };
+
+    // Capture DBC filenames for UI notification
+    let dbc_filenames: Vec<String> = config
+        .dbc_paths
+        .iter()
+        .filter_map(|p| p.file_stem().map(|s| s.to_string_lossy().into_owned()))
+        .collect();
+
     // ── Channels ──────────────────────────────────────────────────────────────
     let (tx, rx) = mpsc::channel::<CanEvent>();
     let (cmd_tx, cmd_rx) = mpsc::channel::<CanCommand>();
@@ -207,10 +243,15 @@ pub fn start(config: SessionConfig) -> SessionResult {
                 return;
             }
         };
+        // Notify the UI that DBCs were loaded successfully.
+        for name in dbc_filenames {
+            let _ = tx.send(CanEvent::DbcLoaded(name));
+        }
         recv_loop(
             adapter,
             &node_ods,
             &pdo_decoders,
+            dbc_database,
             tx.clone(),
             cmd_rx,
             logger,
@@ -231,10 +272,12 @@ pub fn start(config: SessionConfig) -> SessionResult {
 // ─── Receive loop ─────────────────────────────────────────────────────────────
 
 #[allow(clippy::too_many_arguments)]
+#[allow(unused_assignments)]
 fn recv_loop(
     mut adapter: Box<dyn crate::adapters::CanAdapter>,
     ods: &[(u8, Option<ObjectDictionary>)],
     pdo_decoders: &[(u8, PdoDecoder)],
+    dbc_database: Option<DbcDatabase>,
     tx: mpsc::Sender<CanEvent>,
     cmd_rx: mpsc::Receiver<CanCommand>,
     mut logger: EventLogger,
@@ -249,11 +292,6 @@ fn recv_loop(
 ) {
     // Write session header — adapter identity and workstation metadata.
     logger.log_session_start(chrono::Utc::now(), adapter.name(), baud);
-
-    // Error tracking for automatic recovery
-    let mut consecutive_errors = 0u32;
-    const MAX_CONSECUTIVE_ERRORS: u32 = 10;
-    let mut last_error_time = Instant::now();
 
     // ── Per-node in-flight SDO tracking ──────────────────────────────────────
     /// Internal state for the active SDO transfer on one node.
@@ -318,7 +356,13 @@ fn recv_loop(
         // In listen-only mode, drain and discard every command — prevents the
         // channel from backing up.
         if listen_only {
-            while cmd_rx.try_recv().is_ok() {}
+            loop {
+                match cmd_rx.try_recv() {
+                    Ok(_) => {} // Discard command
+                    Err(mpsc::TryRecvError::Empty) => break,
+                    Err(mpsc::TryRecvError::Disconnected) => return,
+                }
+            }
         } else {
             while let Ok(cmd) = cmd_rx.try_recv() {
                 match cmd {
@@ -653,36 +697,28 @@ fn recv_loop(
                     }
                 }
             }
+            // Check if we exited because the channel was disconnected
+            if matches!(cmd_rx.try_recv(), Err(mpsc::TryRecvError::Disconnected)) {
+                return;
+            }
         }
 
         let recv_result = adapter.recv(Duration::from_millis(500));
         let (frame, hardware_timestamp_us) = match recv_result {
-            Ok(r) => {
-                consecutive_errors = 0;
-                (r.frame, r.hardware_timestamp_us)
-            }
+            Ok(r) => (r.frame, r.hardware_timestamp_us),
             Err(crate::adapters::AdapterError::Timeout) => {
                 continue;
             }
             Err(e) => {
-                eprintln!("CAN recv error: {e}");
+                // Log the error but keep trying — the bus might not be powered yet,
+                // or the adapter might be temporarily unavailable. The user can
+                // manually disconnect if they want to give up.
+                eprintln!("CAN recv error (continuing): {e}");
 
-                if last_error_time.elapsed() < Duration::from_secs(1) {
-                    consecutive_errors += 1;
-                } else {
-                    consecutive_errors = 1;
-                }
-                last_error_time = Instant::now();
-
-                if consecutive_errors >= MAX_CONSECUTIVE_ERRORS {
-                    let _ = tx.send(CanEvent::AdapterError(format!(
-                        "Lost connection to CAN adapter after {consecutive_errors} consecutive errors.\n\
-                         Last error: {e}\n\
-                         Please unplug and reconnect the adapter."
-                    )));
+                // Check if GUI has disconnected before continuing
+                if matches!(cmd_rx.try_recv(), Err(mpsc::TryRecvError::Disconnected)) {
                     return;
                 }
-
                 continue;
             }
         };
@@ -697,11 +733,30 @@ fn recv_loop(
         // Pass hardware timestamp to logger for this frame (None for PEAK).
         logger.set_hw_timestamp(hardware_timestamp_us);
 
+        // Track whether this frame was logged by any path
+        let mut logged = false;
+
+        // ── DBC decoding (dual-mode: runs independently of CANopen) ──────────
+        if let Some(db) = &dbc_database {
+            let can_id: u32 = match frame.id() {
+                embedded_can::Id::Standard(s) => s.as_raw() as u32,
+                embedded_can::Id::Extended(e) => e.as_raw() & 0x1FFF_FFFF,
+            };
+            if let Some(signals) = db.decode_frame(can_id, data) {
+                logger.log_dbc_signal(ts, &signals, data, cob_id);
+                if tx.send(CanEvent::DbcSignal(signals)).is_err() {
+                    return; // GUI disconnected
+                }
+                logged = true;
+            }
+        }
+
         match classify_frame(cob_id) {
             // ── NMT command (COB-ID 0x000) ────────────────────────────────
             FrameType::NmtCommand => {
                 if let Some(ev) = decode_nmt_command(data) {
                     logger.log_nmt(ts, &ev, data, cob_id);
+                    logged = true;
                     if let canopen::nmt::NmtEvent::Command {
                         command: _,
                         target_node,
@@ -716,6 +771,7 @@ fn recv_loop(
             FrameType::Heartbeat(node_id) => {
                 if let Some(ev) = decode_heartbeat(node_id, data) {
                     logger.log_nmt(ts, &ev, data, cob_id);
+                    logged = true;
                     if let canopen::nmt::NmtEvent::Heartbeat { node_id, ref state } = ev {
                         if tx
                             .send(CanEvent::Nmt {
@@ -732,6 +788,7 @@ fn recv_loop(
 
             // ── SDO response (device → master) ────────────────────────────
             FrameType::SdoResponse(node_id) => {
+                logged = true; // SDO paths log via logger.log_sdo
                 let empty_od = ObjectDictionary::new();
                 let od = find_od(ods, node_id).unwrap_or(&empty_od);
 
@@ -1648,6 +1705,7 @@ fn recv_loop(
 
             // ── SDO request (master → device) ─────────────────────────────
             FrameType::SdoRequest(node_id) => {
+                logged = true; // SDO paths log via logger.log_sdo
                 let empty_od = ObjectDictionary::new();
                 let od = find_od(ods, node_id).unwrap_or(&empty_od);
                 if let Some(sdo_ev) = decode_sdo(node_id, data, od, false) {
@@ -1672,6 +1730,7 @@ fn recv_loop(
 
             // ── TPDO ─────────────────────────────────────────────────────
             FrameType::Tpdo(frame_pdo_num, frame_node_id) => {
+                logged = true; // PDO paths log via logger.log_pdo
                 let (node_id, eff_pdo_num, values) = if let Some((actual_id, d)) =
                     find_pdo_decoder_for_cob_id(pdo_decoders, cob_id)
                 {
@@ -1701,6 +1760,7 @@ fn recv_loop(
 
             // ── RPDO (master → device) ────────────────────────────────────
             FrameType::Rpdo(frame_pdo_num, frame_node_id) => {
+                logged = true; // PDO paths log via logger.log_pdo
                 let (node_id, eff_pdo_num, values) = if let Some((actual_id, d)) =
                     find_pdo_decoder_for_cob_id(pdo_decoders, cob_id)
                 {
@@ -1728,7 +1788,12 @@ fn recv_loop(
                 }
             }
 
-            _ => {}
+            _ => {
+                // Log as raw frame if not handled by DBC or CANopen
+                if !logged {
+                    logger.log_raw_frame(ts, cob_id, data);
+                }
+            }
         }
 
         // ── SDO timeout scan ─────────────────────────────────────────────────

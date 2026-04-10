@@ -341,6 +341,64 @@ impl EventLogger {
         self.log(entry);
         self.write_text_line(&ts_str, "PDO", &cob_id_str, raw);
     }
+
+    /// Log a DBC-decoded signal frame.
+    pub fn log_dbc_signal(
+        &mut self,
+        ts: DateTime<Utc>,
+        frame_signals: &crate::dbc::types::DbcFrameSignals,
+        raw: &[u8],
+        cob_id: u16,
+    ) {
+        let ts_str = ts.to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
+        let cob_id_str = format!("0x{cob_id:03X}");
+
+        // Build signals map: signal_name → {raw, physical, unit, description}
+        let mut signals = serde_json::Map::new();
+        for sig in &frame_signals.values {
+            let mut sig_obj = serde_json::Map::new();
+            sig_obj.insert("raw".to_string(), json!(sig.raw_int));
+            sig_obj.insert("physical".to_string(), json!(sig.physical));
+            sig_obj.insert("unit".to_string(), json!(sig.unit));
+            sig_obj.insert(
+                "description".to_string(),
+                sig.description
+                    .as_ref()
+                    .map(|s| json!(s))
+                    .unwrap_or(json!(null)),
+            );
+            signals.insert(sig.signal_name.clone(), json!(sig_obj));
+        }
+
+        let entry = json!({
+            "ts": ts_str,
+            "type": "DBC_SIGNAL",
+            "cob_id": cob_id_str,
+            "source_node": json!(null), // DBC frames don't infer source from COB-ID
+            "message": frame_signals.message_name,
+            "source_dbc": frame_signals.source_dbc,
+            "signals": signals,
+            "raw": bytes_to_hex(raw),
+        });
+        self.log(entry);
+        self.write_text_line(&ts_str, "DBC_SIGNAL", &cob_id_str, raw);
+    }
+
+    /// Log a raw CAN frame (fallback for frames not decoded by DBC or CANopen).
+    pub fn log_raw_frame(&mut self, ts: DateTime<Utc>, can_id: u16, raw: &[u8]) {
+        let ts_str = ts.to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
+        let cob_id_str = format!("0x{can_id:03X}");
+
+        let entry = json!({
+            "ts": ts_str,
+            "type": "RAW_FRAME",
+            "cob_id": cob_id_str,
+            "source_node": json!(null),
+            "raw": bytes_to_hex(raw),
+        });
+        self.log(entry);
+        self.write_text_line(&ts_str, "RAW_FRAME", &cob_id_str, raw);
+    }
 }
 
 impl Drop for EventLogger {

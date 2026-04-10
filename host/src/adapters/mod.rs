@@ -61,7 +61,7 @@ impl fmt::Display for AdapterError {
 }
 
 /// Selects which adapter backend to use when opening a session.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub enum AdapterKind {
     /// PEAK PCAN-USB dongle accessed via `host-can` / libPCBUSB.
     ///

@@ -9,6 +9,9 @@
 //! - **Dongle polling** — a one-shot background thread probes the adapter every
 //!   [`PROBE_INTERVAL_SECS`] seconds. The Connect button is disabled (with a
 //!   tooltip) until the probe returns `true`.
+//! - **Automatic adapter fallback** — if the configured adapter is not found,
+//!   automatically tries other available adapter types (PEAK ↔ KCAN) and
+//!   displays a notice. Manually switching adapters clears the notice.
 //! - **Listen-only mode** — checkbox that sets [`SessionConfig::listen_only`];
 //!   all [`CanCommand`] variants are silently dropped in the recv thread so
 //!   no frames are ever transmitted.
@@ -18,7 +21,12 @@
 //!   hex (`05H`). The box remains freely editable.
 //! - **EDS optional** — leaving the EDS path blank is allowed; the node will
 //!   appear in the NMT table and any PDO frames will show as raw Byte0…ByteN.
-//! - **Zero nodes** is valid — the monitor captures all heartbeats on the bus.
+//! - **CANopen Nodes optional** — nodes with empty IDs are filtered out; zero
+//!   CANopen nodes is valid when using DBC files or raw frame monitoring only.
+//! - **Configuration persistence** — form state (port, baud, nodes, DBC files,
+//!   etc.) is saved to `~/Library/Application Support/RustyCAN/config.json` on
+//!   successful connect and restored on app launch. Non-existent file paths
+//!   are silently filtered out during load.
 //!
 //! ## Monitor
 //! Three collapsible panels updated every frame by draining the event channel:
@@ -98,7 +106,8 @@ mod icons {
     pub const PDO_HEADER: &str = "\u{f1de}"; // sliders
     pub const SDO_HEADER: &str = "\u{f0f6}"; // file-text
     pub const SDO_BROWSER: &str = "\u{f002}"; // search
-                                              // NMT states
+    pub const DBC_HEADER: &str = "\u{f1c9}"; // file-code-o
+                                             // NMT states
     pub const STATE_OP: &str = "\u{f058}"; // check-circle
     pub const STATE_PREOP: &str = "\u{f017}"; // clock
     pub const STATE_STOP: &str = "\u{f057}"; // times-circle
@@ -227,6 +236,14 @@ struct ConnectForm {
     kcan_devices: Vec<(String, String)>,
     /// Selected KCAN device serial (empty = auto-select first).
     kcan_serial: String,
+    /// DBC files to load for signal decoding.
+    dbc_files: Vec<DbcEntry>,
+    /// Index of the DBC file awaiting remove-confirmation, if any.
+    confirm_remove_dbc: Option<usize>,
+    /// Notice message to display (e.g., adapter auto-switch notification).
+    adapter_notice: Option<String>,
+    /// Originally configured adapter before any auto-switching.
+    original_adapter_kind: Option<AdapterKind>,
 }
 
 impl Clone for ConnectForm {
@@ -250,35 +267,164 @@ impl Clone for ConnectForm {
             adapter_kind: self.adapter_kind.clone(),
             kcan_devices: self.kcan_devices.clone(),
             kcan_serial: self.kcan_serial.clone(),
+            dbc_files: self.dbc_files.clone(),
+            confirm_remove_dbc: self.confirm_remove_dbc,
+            adapter_notice: self.adapter_notice.clone(),
+            original_adapter_kind: self.original_adapter_kind.clone(),
         }
     }
 }
 
-#[derive(Clone, Default)]
+#[derive(Clone, Default, serde::Serialize, serde::Deserialize)]
 struct NodeEntry {
     id_str: String,
     eds_path: String,
 }
 
-impl Default for ConnectForm {
-    fn default() -> Self {
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
+struct DbcEntry {
+    path: String,
+}
+
+// ── Configuration persistence ────────────────────────────────────────────────
+
+/// Subset of ConnectForm that is persisted to disk between sessions.
+/// Excludes runtime state (probe results, errors, confirmation dialogs).
+#[derive(serde::Serialize, serde::Deserialize)]
+struct PersistedConfig {
+    port: String,
+    baud: String,
+    nodes: Vec<NodeEntry>,
+    log_path: String,
+    sdo_timeout_str: String,
+    listen_only: bool,
+    text_log: bool,
+    adapter_kind: AdapterKind,
+    kcan_serial: String,
+    dbc_files: Vec<DbcEntry>,
+}
+
+impl PersistedConfig {
+    /// Get the config file path in the platform-specific app data directory.
+    fn config_path() -> std::path::PathBuf {
+        let mut path = if cfg!(target_os = "macos") {
+            dirs::data_dir().unwrap_or_else(|| std::path::PathBuf::from("."))
+        } else if cfg!(target_os = "linux") {
+            dirs::data_dir().unwrap_or_else(|| std::path::PathBuf::from("."))
+        } else {
+            // Windows
+            dirs::data_dir().unwrap_or_else(|| std::path::PathBuf::from("."))
+        };
+        path.push("RustyCAN");
+        std::fs::create_dir_all(&path).ok();
+        path.push("config.json");
+        path
+    }
+
+    /// Save configuration to disk as JSON.
+    fn save(&self) -> Result<(), String> {
+        let path = Self::config_path();
+        let json = serde_json::to_string_pretty(self)
+            .map_err(|e| format!("Failed to serialize config: {e}"))?;
+        std::fs::write(&path, json)
+            .map_err(|e| format!("Failed to write config to {}: {e}", path.display()))?;
+        Ok(())
+    }
+
+    /// Load configuration from disk, filtering out non-existent file paths.
+    fn load() -> Option<Self> {
+        let path = Self::config_path();
+        let json = std::fs::read_to_string(&path).ok()?;
+        let mut config: PersistedConfig = serde_json::from_str(&json).ok()?;
+
+        // Filter out nodes with non-existent EDS files
+        config.nodes.retain(|node| {
+            if node.eds_path.trim().is_empty() {
+                return true; // Keep nodes without EDS paths
+            }
+            std::path::Path::new(&node.eds_path).exists()
+        });
+
+        // Filter out non-existent DBC files
+        config
+            .dbc_files
+            .retain(|dbc| std::path::Path::new(&dbc.path).exists());
+
+        Some(config)
+    }
+
+    /// Convert to ConnectForm with runtime state initialized to defaults.
+    fn into_form(self) -> ConnectForm {
         ConnectForm {
-            port: "1".into(),
-            baud: "250000".into(),
-            nodes: vec![NodeEntry::default()],
-            log_path: "rustycan.jsonl".into(),
-            sdo_timeout_str: "500".into(),
+            port: self.port,
+            baud: self.baud,
+            nodes: self.nodes,
+            log_path: self.log_path,
+            sdo_timeout_str: self.sdo_timeout_str,
             error: None,
             warnings: vec![],
             confirm_remove: None,
             dongle_connected: false,
             probe_rx: None,
             last_probe: None,
-            listen_only: false,
-            text_log: false,
-            adapter_kind: AdapterKind::Peak,
+            listen_only: self.listen_only,
+            text_log: self.text_log,
+            adapter_kind: self.adapter_kind,
             kcan_devices: vec![],
-            kcan_serial: String::new(),
+            kcan_serial: self.kcan_serial,
+            dbc_files: self.dbc_files,
+            confirm_remove_dbc: None,
+            adapter_notice: None,
+            original_adapter_kind: None,
+        }
+    }
+}
+
+impl From<&ConnectForm> for PersistedConfig {
+    fn from(form: &ConnectForm) -> Self {
+        PersistedConfig {
+            port: form.port.clone(),
+            baud: form.baud.clone(),
+            nodes: form.nodes.clone(),
+            log_path: form.log_path.clone(),
+            sdo_timeout_str: form.sdo_timeout_str.clone(),
+            listen_only: form.listen_only,
+            text_log: form.text_log,
+            adapter_kind: form.adapter_kind.clone(),
+            kcan_serial: form.kcan_serial.clone(),
+            dbc_files: form.dbc_files.clone(),
+        }
+    }
+}
+
+impl Default for ConnectForm {
+    fn default() -> Self {
+        // Try to load persisted config; fall back to hardcoded defaults if not found
+        if let Some(config) = PersistedConfig::load() {
+            config.into_form()
+        } else {
+            ConnectForm {
+                port: "1".into(),
+                baud: "250000".into(),
+                nodes: vec![],
+                log_path: "rustycan.jsonl".into(),
+                sdo_timeout_str: "500".into(),
+                error: None,
+                warnings: vec![],
+                confirm_remove: None,
+                dongle_connected: false,
+                probe_rx: None,
+                last_probe: None,
+                listen_only: false,
+                text_log: false,
+                adapter_kind: AdapterKind::Peak,
+                kcan_devices: vec![],
+                kcan_serial: String::new(),
+                dbc_files: vec![],
+                confirm_remove_dbc: None,
+                adapter_notice: None,
+                original_adapter_kind: None,
+            }
         }
     }
 }
@@ -308,6 +454,7 @@ impl ConnectForm {
         let nodes: Vec<(u8, Option<PathBuf>)> = self
             .nodes
             .iter()
+            .filter(|e| !e.id_str.trim().is_empty())
             .map(|e| {
                 let id: u8 = eds::parse_node_id_str(e.id_str.trim()).ok_or_else(|| {
                     format!(
@@ -346,9 +493,21 @@ impl ConnectForm {
             block_end_timeout_ms: 1000,
             block_size: 64,
             adapter_kind: self.adapter_kind.clone(),
+            dbc_paths: self
+                .dbc_files
+                .iter()
+                .filter(|e| !e.path.trim().is_empty())
+                .map(|e| PathBuf::from(e.path.trim()))
+                .collect(),
         };
 
         let (rx, cmd_tx, node_labels, actual_log_path) = session::start(config)?;
+
+        // Save configuration to disk for next session
+        let persisted = PersistedConfig::from(self);
+        if let Err(e) = persisted.save() {
+            eprintln!("Warning: failed to save config: {e}");
+        }
 
         let mut state = AppState::new(actual_log_path, baud);
         state.init_nodes(&node_labels);
@@ -406,6 +565,48 @@ const BAUD_OPTIONS: &[&str] = &[
 /// How often to re-probe the dongle (seconds).
 const PROBE_INTERVAL_SECS: u64 = 2;
 
+/// Return a human-readable display name for an adapter kind.
+fn adapter_display_name(kind: &AdapterKind) -> &'static str {
+    match kind {
+        AdapterKind::Peak => "PEAK PCAN-USB",
+        AdapterKind::KCan { .. } => "KCAN Dongle",
+    }
+}
+
+/// Try to find an available adapter when the configured one is not found.
+/// Returns true if a fallback adapter was found and switched to.
+fn try_fallback_adapter(form: &mut ConnectForm) -> bool {
+    // Save original adapter kind if not already saved
+    if form.original_adapter_kind.is_none() {
+        form.original_adapter_kind = Some(form.adapter_kind.clone());
+    }
+
+    let port = form.port.trim();
+    let baud: u32 = form.baud.trim().parse().unwrap_or(250_000);
+
+    // Try other adapter types
+    let fallbacks: Vec<AdapterKind> = match &form.adapter_kind {
+        AdapterKind::Peak => vec![AdapterKind::KCan { serial: None }],
+        AdapterKind::KCan { .. } => vec![AdapterKind::Peak],
+    };
+
+    for fallback_kind in fallbacks {
+        if session::probe_adapter_with_kind(&fallback_kind, port, baud) {
+            let original_name = adapter_display_name(form.original_adapter_kind.as_ref().unwrap());
+            let new_name = adapter_display_name(&fallback_kind);
+
+            form.adapter_kind = fallback_kind;
+            form.adapter_notice = Some(format!(
+                "⚠ {} not found, automatically switched to {}",
+                original_name, new_name
+            ));
+            return true;
+        }
+    }
+
+    false
+}
+
 fn render_connect(
     ctx: &egui::Context,
     form: &mut ConnectForm,
@@ -415,7 +616,14 @@ fn render_connect(
     // 1. Drain any pending probe result.
     if let Some(rx) = &form.probe_rx {
         if let Ok(result) = rx.try_recv() {
-            form.dongle_connected = result;
+            if result {
+                // Configured adapter found successfully
+                form.dongle_connected = true;
+                form.adapter_notice = None; // Clear any previous notice
+            } else {
+                // Configured adapter not found, try fallback
+                form.dongle_connected = try_fallback_adapter(form);
+            }
             form.probe_rx = None;
         }
     }
@@ -488,6 +696,8 @@ fn render_connect(
                                     if ui.radio(is_peak, "PEAK PCAN-USB").clicked() {
                                         form.adapter_kind = AdapterKind::Peak;
                                         form.last_probe = None; // force re-probe
+                                        form.adapter_notice = None; // clear auto-switch notice
+                                        form.original_adapter_kind = None; // reset tracking
                                     }
                                     let is_kcan =
                                         matches!(form.adapter_kind, AdapterKind::KCan { .. });
@@ -499,6 +709,8 @@ fn render_connect(
                                         };
                                         form.adapter_kind = AdapterKind::KCan { serial };
                                         form.last_probe = None;
+                                        form.adapter_notice = None; // clear auto-switch notice
+                                        form.original_adapter_kind = None; // reset tracking
                                     }
                                 });
                                 ui.end_row();
@@ -693,185 +905,340 @@ fn render_connect(
 
             ui.add_space(16.0);
 
-            // ── Node configuration ────────────────────────────────────────
+            // ── CANopen node configuration ────────────────────────────────
             egui::Frame::group(ui.style())
                 .corner_radius(egui::CornerRadius::same(8))
                 .inner_margin(egui::Margin::same(12))
                 .show(ui, |ui| {
                     ui.set_min_width(ui.available_width());
-                    egui::CollapsingHeader::new(egui::RichText::new("Nodes").size(20.0).strong())
-                        .default_open(true)
-                        .show(ui, |ui| {
-                            let mut to_remove: Option<usize> = None;
-                            let node_count = form.nodes.len();
-                            // Snapshot confirm state before iter_mut() to avoid borrow conflict.
-                            let confirming = form.confirm_remove;
-                            let mut new_confirm: Option<Option<usize>> = None;
+                    egui::CollapsingHeader::new(
+                        egui::RichText::new("CANopen Nodes").size(20.0).strong(),
+                    )
+                    .default_open(true)
+                    .show(ui, |ui| {
+                        let mut to_remove: Option<usize> = None;
+                        // Snapshot confirm state before iter_mut() to avoid borrow conflict.
+                        let confirming = form.confirm_remove;
+                        let mut new_confirm: Option<Option<usize>> = None;
 
-                            egui::Grid::new("nodes_grid")
-                                .num_columns(2)
-                                .spacing([12.0, 10.0])
-                                .show(ui, |ui| {
+                        egui::Grid::new("nodes_grid")
+                            .num_columns(2)
+                            .spacing([12.0, 10.0])
+                            .show(ui, |ui| {
+                                if !form.nodes.is_empty() {
                                     ui.label("Node ID");
                                     ui.label("EDS file path");
                                     ui.end_row();
+                                }
 
-                                    for (i, entry) in form.nodes.iter_mut().enumerate() {
-                                        ui.add(
-                                            egui::TextEdit::singleline(&mut entry.id_str)
-                                                .desired_width(60.0)
-                                                .hint_text("e.g. 1 or 0x01"),
-                                        );
-                                        // EDS path + browse + remove all in one expanding cell
-                                        ui.with_layout(
-                                            egui::Layout::right_to_left(egui::Align::Center),
-                                            |ui| {
-                                                if confirming == Some(i) {
-                                                    // ── Inline confirmation ──────────────────────────
-                                                    if ui
-                                                        .add_sized(
-                                                            vec2(46.0, 28.0),
-                                                            Button::new(
-                                                                egui::RichText::new("Yes")
-                                                                    .color(Color32::WHITE),
-                                                            )
-                                                            .fill(Color32::from_rgb(200, 50, 50)),
-                                                        )
-                                                        .on_hover_text("Confirm removal")
-                                                        .clicked()
-                                                    {
-                                                        to_remove = Some(i);
-                                                        new_confirm = Some(None);
-                                                    }
-                                                    if ui
-                                                        .add_sized(
-                                                            vec2(60.0, 28.0),
-                                                            Button::new("Cancel"),
-                                                        )
-                                                        .on_hover_text("Keep this node")
-                                                        .clicked()
-                                                    {
-                                                        new_confirm = Some(None);
-                                                    }
-                                                    ui.with_layout(
-                                                        egui::Layout::left_to_right(
-                                                            egui::Align::Center,
-                                                        ),
-                                                        |ui| {
-                                                            ui.label("Remove this node?");
-                                                        },
-                                                    );
-                                                    return; // skip browse + EDS field while confirming
-                                                }
-
-                                                // ── Normal mode ─────────────────────────────────────
-                                                let can_remove = node_count > 1;
+                                for (i, entry) in form.nodes.iter_mut().enumerate() {
+                                    ui.add(
+                                        egui::TextEdit::singleline(&mut entry.id_str)
+                                            .desired_width(60.0)
+                                            .hint_text("e.g. 1 or 0x01"),
+                                    );
+                                    // EDS path + browse + remove all in one expanding cell
+                                    ui.with_layout(
+                                        egui::Layout::right_to_left(egui::Align::Center),
+                                        |ui| {
+                                            if confirming == Some(i) {
+                                                // ── Inline confirmation ──────────────────────────
                                                 if ui
-                                                    .add_enabled(
-                                                        can_remove,
+                                                    .add_sized(
+                                                        vec2(46.0, 28.0),
                                                         Button::new(
-                                                            egui::RichText::new(icons::REMOVE_NODE)
-                                                                .size(16.0)
-                                                                .color(if can_remove {
-                                                                    Color32::from_rgb(220, 60, 60)
-                                                                } else {
-                                                                    Color32::from_gray(100)
-                                                                }),
+                                                            egui::RichText::new("Yes")
+                                                                .color(Color32::WHITE),
                                                         )
-                                                        .min_size(vec2(36.0, 28.0)),
+                                                        .fill(Color32::from_rgb(200, 50, 50)),
                                                     )
-                                                    .on_hover_text(if can_remove {
-                                                        "Remove this node"
-                                                    } else {
-                                                        "At least one node is required"
-                                                    })
+                                                    .on_hover_text("Confirm removal")
                                                     .clicked()
                                                 {
-                                                    new_confirm = Some(Some(i));
+                                                    to_remove = Some(i);
+                                                    new_confirm = Some(None);
                                                 }
                                                 if ui
                                                     .add_sized(
-                                                        vec2(36.0, 28.0),
-                                                        Button::new(
-                                                            egui::RichText::new(icons::BROWSE)
-                                                                .size(16.0),
-                                                        )
-                                                        .fill(Color32::from_rgb(170, 130, 0)),
+                                                        vec2(60.0, 28.0),
+                                                        Button::new("Cancel"),
                                                     )
-                                                    .on_hover_text("Browse for EDS file…")
+                                                    .on_hover_text("Keep this node")
                                                     .clicked()
                                                 {
-                                                    if let Some(path) = FileDialog::new()
-                                                        .add_filter("EDS", &["eds", "EDS"])
-                                                        .set_title("Select EDS file")
-                                                        .pick_file()
-                                                    {
-                                                        // Auto-populate node ID from [DeviceComissioning] NodeId if present.
-                                                        if let Some(id) = eds::parse_node_id(&path)
-                                                        {
-                                                            entry.id_str = id.to_string();
-                                                        }
-                                                        entry.eds_path =
-                                                            path.to_string_lossy().into_owned();
-                                                    }
+                                                    new_confirm = Some(None);
                                                 }
-                                                let eds_id = egui::Id::new(("eds_path", i));
-                                                let eds_focused =
-                                                    ui.ctx().memory(|m| m.has_focus(eds_id));
-                                                // When idle show just the filename; when focused show full path.
-                                                let mut eds_display = if eds_focused {
-                                                    entry.eds_path.clone()
-                                                } else {
-                                                    std::path::Path::new(&entry.eds_path)
-                                                        .file_name()
-                                                        .map(|f| f.to_string_lossy().into_owned())
-                                                        .unwrap_or_else(|| entry.eds_path.clone())
-                                                };
-                                                let eds_resp = ui.add(
-                                                    egui::TextEdit::singleline(&mut eds_display)
-                                                        .id(eds_id)
-                                                        .desired_width(f32::INFINITY)
-                                                        .hint_text("/path/to/device.eds"),
+                                                ui.with_layout(
+                                                    egui::Layout::left_to_right(
+                                                        egui::Align::Center,
+                                                    ),
+                                                    |ui| {
+                                                        ui.label("Remove this node?");
+                                                    },
                                                 );
-                                                if eds_focused && eds_resp.changed() {
-                                                    entry.eds_path = eds_display;
-                                                }
-                                                if !entry.eds_path.is_empty() {
-                                                    eds_resp.on_hover_text(&entry.eds_path);
-                                                }
-                                            },
-                                        );
-                                        ui.end_row();
-                                    }
-                                });
+                                                return; // skip browse + EDS field while confirming
+                                            }
 
-                            if let Some(v) = new_confirm {
-                                form.confirm_remove = v;
-                            }
-                            if let Some(i) = to_remove {
-                                form.nodes.remove(i);
-                                // Clear any stale confirmation index after removal.
-                                if form.confirm_remove.is_some() {
-                                    form.confirm_remove = None;
+                                            // ── Normal mode ─────────────────────────────────────
+                                            if ui
+                                                .add(
+                                                    Button::new(
+                                                        egui::RichText::new(icons::REMOVE_NODE)
+                                                            .size(16.0)
+                                                            .color(Color32::from_rgb(220, 60, 60)),
+                                                    )
+                                                    .min_size(vec2(36.0, 28.0)),
+                                                )
+                                                .on_hover_text("Remove this node")
+                                                .clicked()
+                                            {
+                                                new_confirm = Some(Some(i));
+                                            }
+                                            if ui
+                                                .add_sized(
+                                                    vec2(36.0, 28.0),
+                                                    Button::new(
+                                                        egui::RichText::new(icons::BROWSE)
+                                                            .size(16.0),
+                                                    )
+                                                    .fill(Color32::from_rgb(170, 130, 0)),
+                                                )
+                                                .on_hover_text("Browse for EDS file…")
+                                                .clicked()
+                                            {
+                                                if let Some(path) = FileDialog::new()
+                                                    .add_filter("EDS", &["eds", "EDS"])
+                                                    .set_title("Select EDS file")
+                                                    .pick_file()
+                                                {
+                                                    // Auto-populate node ID from [DeviceComissioning] NodeId if present.
+                                                    if let Some(id) = eds::parse_node_id(&path) {
+                                                        entry.id_str = id.to_string();
+                                                    }
+                                                    entry.eds_path =
+                                                        path.to_string_lossy().into_owned();
+                                                }
+                                            }
+                                            let eds_id = egui::Id::new(("eds_path", i));
+                                            let eds_focused =
+                                                ui.ctx().memory(|m| m.has_focus(eds_id));
+                                            // When idle show just the filename; when focused show full path.
+                                            let mut eds_display = if eds_focused {
+                                                entry.eds_path.clone()
+                                            } else {
+                                                std::path::Path::new(&entry.eds_path)
+                                                    .file_name()
+                                                    .map(|f| f.to_string_lossy().into_owned())
+                                                    .unwrap_or_else(|| entry.eds_path.clone())
+                                            };
+                                            let eds_resp = ui.add(
+                                                egui::TextEdit::singleline(&mut eds_display)
+                                                    .id(eds_id)
+                                                    .desired_width(f32::INFINITY)
+                                                    .hint_text("/path/to/device.eds"),
+                                            );
+                                            if eds_focused && eds_resp.changed() {
+                                                entry.eds_path = eds_display;
+                                            }
+                                            if !entry.eds_path.is_empty() {
+                                                eds_resp.on_hover_text(&entry.eds_path);
+                                            }
+                                        },
+                                    );
+                                    ui.end_row();
                                 }
-                            }
+                            });
 
-                            if ui
-                                .add_sized(
-                                    vec2(36.0, 28.0),
-                                    Button::new(
-                                        egui::RichText::new(icons::ADD_NODE)
-                                            .size(16.0)
-                                            .color(Color32::from_rgb(60, 130, 220)),
-                                    ),
-                                )
-                                .on_hover_text("Add new node")
-                                .clicked()
-                            {
-                                form.nodes.push(NodeEntry::default());
+                        if let Some(v) = new_confirm {
+                            form.confirm_remove = v;
+                        }
+                        if let Some(i) = to_remove {
+                            form.nodes.remove(i);
+                            // Clear any stale confirmation index after removal.
+                            if form.confirm_remove.is_some() {
+                                form.confirm_remove = None;
                             }
-                        }); // close Nodes CollapsingHeader
+                        }
+
+                        if ui
+                            .add_sized(
+                                vec2(36.0, 28.0),
+                                Button::new(
+                                    egui::RichText::new(icons::ADD_NODE)
+                                        .size(16.0)
+                                        .color(Color32::from_rgb(60, 130, 220)),
+                                ),
+                            )
+                            .on_hover_text("Add new node")
+                            .clicked()
+                        {
+                            form.nodes.push(NodeEntry::default());
+                        }
+                    }); // close Nodes CollapsingHeader
                 }); // close Nodes Frame
+
+            ui.add_space(16.0);
+
+            // ── DBC nodes (signal decoders) ───────────────────────────────
+            egui::Frame::group(ui.style())
+                .corner_radius(egui::CornerRadius::same(8))
+                .inner_margin(egui::Margin::same(12))
+                .show(ui, |ui| {
+                    ui.set_min_width(ui.available_width());
+                    egui::CollapsingHeader::new(
+                        egui::RichText::new(format!("{} DBC Nodes", icons::DBC_HEADER))
+                            .size(20.0)
+                            .strong(),
+                    )
+                    .default_open(false)
+                    .show(ui, |ui| {
+                        let mut to_remove_dbc: Option<usize> = None;
+                        let _dbc_count = form.dbc_files.len();
+                        let confirming_dbc = form.confirm_remove_dbc;
+                        let mut new_confirm_dbc: Option<Option<usize>> = None;
+
+                        egui::Grid::new("dbc_grid")
+                            .num_columns(1)
+                            .spacing([12.0, 10.0])
+                            .show(ui, |ui| {
+                                ui.label("DBC file path");
+                                ui.end_row();
+
+                                for (i, entry) in form.dbc_files.iter_mut().enumerate() {
+                                    ui.with_layout(
+                                        egui::Layout::right_to_left(egui::Align::Center),
+                                        |ui| {
+                                            if confirming_dbc == Some(i) {
+                                                // ── Inline confirmation ──────────────────────────
+                                                if ui
+                                                    .add_sized(
+                                                        vec2(46.0, 28.0),
+                                                        Button::new(
+                                                            egui::RichText::new("Yes")
+                                                                .color(Color32::WHITE),
+                                                        )
+                                                        .fill(Color32::from_rgb(200, 50, 50)),
+                                                    )
+                                                    .on_hover_text("Confirm removal")
+                                                    .clicked()
+                                                {
+                                                    to_remove_dbc = Some(i);
+                                                    new_confirm_dbc = Some(None);
+                                                }
+                                                if ui
+                                                    .add_sized(
+                                                        vec2(60.0, 28.0),
+                                                        Button::new("Cancel"),
+                                                    )
+                                                    .on_hover_text("Keep this DBC file")
+                                                    .clicked()
+                                                {
+                                                    new_confirm_dbc = Some(None);
+                                                }
+                                                ui.with_layout(
+                                                    egui::Layout::left_to_right(
+                                                        egui::Align::Center,
+                                                    ),
+                                                    |ui| {
+                                                        ui.label("Remove this DBC file?");
+                                                    },
+                                                );
+                                                return; // skip browse + field while confirming
+                                            }
+
+                                            // ── Normal mode ─────────────────────────────────────
+                                            if ui
+                                                .add(
+                                                    Button::new(
+                                                        egui::RichText::new(icons::REMOVE_NODE)
+                                                            .size(16.0)
+                                                            .color(Color32::from_rgb(220, 60, 60)),
+                                                    )
+                                                    .min_size(vec2(36.0, 28.0)),
+                                                )
+                                                .on_hover_text("Remove this DBC file")
+                                                .clicked()
+                                            {
+                                                new_confirm_dbc = Some(Some(i));
+                                            }
+                                            if ui
+                                                .add_sized(
+                                                    vec2(36.0, 28.0),
+                                                    Button::new(
+                                                        egui::RichText::new(icons::BROWSE)
+                                                            .size(16.0),
+                                                    )
+                                                    .fill(Color32::from_rgb(170, 130, 0)),
+                                                )
+                                                .on_hover_text("Browse for DBC file…")
+                                                .clicked()
+                                            {
+                                                if let Some(path) = FileDialog::new()
+                                                    .add_filter("DBC", &["dbc", "DBC"])
+                                                    .set_title("Select DBC file")
+                                                    .pick_file()
+                                                {
+                                                    entry.path =
+                                                        path.to_string_lossy().into_owned();
+                                                }
+                                            }
+                                            let dbc_id = egui::Id::new(("dbc_path", i));
+                                            let dbc_focused =
+                                                ui.ctx().memory(|m| m.has_focus(dbc_id));
+                                            let mut dbc_display = if dbc_focused {
+                                                entry.path.clone()
+                                            } else {
+                                                std::path::Path::new(&entry.path)
+                                                    .file_name()
+                                                    .map(|f| f.to_string_lossy().into_owned())
+                                                    .unwrap_or_else(|| entry.path.clone())
+                                            };
+                                            let dbc_resp = ui.add(
+                                                egui::TextEdit::singleline(&mut dbc_display)
+                                                    .id(dbc_id)
+                                                    .desired_width(f32::INFINITY)
+                                                    .hint_text("/path/to/signals.dbc"),
+                                            );
+                                            if dbc_focused && dbc_resp.changed() {
+                                                entry.path = dbc_display;
+                                            }
+                                            if !entry.path.is_empty() {
+                                                dbc_resp.on_hover_text(&entry.path);
+                                            }
+                                        },
+                                    );
+                                    ui.end_row();
+                                }
+                            });
+
+                        if let Some(v) = new_confirm_dbc {
+                            form.confirm_remove_dbc = v;
+                        }
+                        if let Some(i) = to_remove_dbc {
+                            form.dbc_files.remove(i);
+                            if form.confirm_remove_dbc.is_some() {
+                                form.confirm_remove_dbc = None;
+                            }
+                        }
+
+                        if ui
+                            .add_sized(
+                                vec2(36.0, 28.0),
+                                Button::new(
+                                    egui::RichText::new(icons::ADD_NODE)
+                                        .size(16.0)
+                                        .color(Color32::from_rgb(60, 130, 220)),
+                                ),
+                            )
+                            .on_hover_text("Add new DBC file")
+                            .clicked()
+                        {
+                            form.dbc_files.push(DbcEntry {
+                                path: String::new(),
+                            });
+                        }
+                    });
+                });
 
             ui.add_space(20.0);
 
@@ -903,6 +1270,16 @@ fn render_connect(
                                 .color(Color32::from_rgb(220, 60, 60)),
                         );
                         ui.colored_label(Color32::from_rgb(220, 60, 60), err);
+                    });
+                } else if let Some(notice) = &form.adapter_notice {
+                    // Adapter auto-switch notice
+                    ui.horizontal(|ui| {
+                        ui.label(
+                            egui::RichText::new(icons::WARN)
+                                .size(16.0)
+                                .color(Color32::from_rgb(60, 160, 220)),
+                        );
+                        ui.colored_label(Color32::from_rgb(60, 160, 220), notice);
                     });
                 } else if !form.warnings.is_empty() {
                     for w in &form.warnings.clone() {
@@ -1116,7 +1493,15 @@ fn render_monitor(ctx: &egui::Context, view: &mut MonitorView) -> Option<Screen>
             }
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 if ui
-                    .button(format!("{} Disconnect", icons::DISCONNECT))
+                    .add_sized(
+                        vec2(120.0, 32.0),
+                        Button::new(
+                            egui::RichText::new(format!("{} Disconnect", icons::DISCONNECT))
+                                .color(Color32::WHITE),
+                        )
+                        .fill(Color32::from_rgb(220, 60, 60)),
+                    )
+                    .on_hover_text("Return to configuration screen")
                     .clicked()
                 {
                     disconnect_clicked = true;
@@ -1172,6 +1557,8 @@ fn render_monitor(ctx: &egui::Context, view: &mut MonitorView) -> Option<Screen>
             );
             ui.add_space(4.0);
             pdo_section(ui, &view.state);
+            ui.add_space(4.0);
+            dbc_section(ui, &view.state);
             ui.add_space(4.0);
             sdo_browser_section(
                 ui,
@@ -1554,6 +1941,101 @@ fn pdo_value_ui(ui: &mut egui::Ui, val: &PdoRawValue) {
     } else {
         ui.label(val.to_string());
     }
+}
+
+// ─── DBC Signals section ─────────────────────────────────────────────────────
+
+fn dbc_section(ui: &mut egui::Ui, state: &AppState) {
+    egui::CollapsingHeader::new(
+        egui::RichText::new(format!("{} DBC Signals", icons::DBC_HEADER)).strong(),
+    )
+    .default_open(true)
+    .show(ui, |ui| {
+        match &state.dbc_loaded {
+            None => {
+                ui.label(
+                    egui::RichText::new(
+                        "(no DBC loaded — browse for a .dbc file on the Connect screen)",
+                    )
+                    .italics()
+                    .color(Color32::from_gray(120)),
+                );
+            }
+            Some(filename) => {
+                if state.dbc_signals.is_empty() {
+                    ui.label(
+                        egui::RichText::new(format!(
+                            "DBC: {} — waiting for matching frames…",
+                            filename
+                        ))
+                        .color(Color32::from_gray(160)),
+                    );
+                    return;
+                }
+
+                // Collect and sort signals by (can_id, signal_name)
+                let mut entries: Vec<&crate::app::DbcSignalEntry> =
+                    state.dbc_signals.values().collect();
+                entries.sort_by(|a, b| {
+                    a.can_id
+                        .cmp(&b.can_id)
+                        .then_with(|| a.signal_name.cmp(&b.signal_name))
+                });
+
+                egui::Grid::new("dbc_signals_grid")
+                    .striped(true)
+                    .min_col_width(60.0)
+                    .spacing([12.0, 4.0])
+                    .show(ui, |ui| {
+                        ui.strong("Message");
+                        ui.strong("Signal");
+                        ui.strong("Value");
+                        ui.strong("Unit");
+                        ui.strong("Age");
+                        ui.strong("Count");
+                        ui.end_row();
+
+                        for entry in entries {
+                            let age_secs = entry.last_seen.elapsed().as_secs_f64();
+                            let age_str = if age_secs < 60.0 {
+                                format!("{age_secs:.2}s ago")
+                            } else {
+                                format!("{:.0}m ago", age_secs / 60.0)
+                            };
+
+                            let value_str =
+                                if entry.physical.fract() == 0.0 && entry.physical.abs() < 1e12 {
+                                    format!("{}", entry.physical as i64)
+                                } else {
+                                    format!("{:.4}", entry.physical)
+                                };
+
+                            ui.label(format!("0x{:03X} {}", entry.can_id, &entry.message_name))
+                                .on_hover_text(format!("CAN ID 0x{:03X}", entry.can_id));
+                            ui.label(&entry.signal_name);
+                            // If there's a VAL_ description, show it with the raw integer too.
+                            let val_lbl = match &entry.description {
+                                Some(desc) => {
+                                    let lbl = ui
+                                        .label(
+                                            egui::RichText::new(format!("{value_str} ({desc})"))
+                                                .color(Color32::from_rgb(130, 200, 255)),
+                                        )
+                                        .on_hover_text(format!("raw = {}", entry.raw_int));
+                                    lbl
+                                }
+                                None => ui.label(&value_str),
+                            };
+                            drop(val_lbl);
+                            ui.label(&entry.unit);
+                            ui.label(age_str);
+                            ui.label(entry.count.to_string());
+                            ui.end_row();
+                        }
+                    });
+            }
+        }
+    });
 }
 
 // ─── SDO Browser section ─────────────────────────────────────────────────────

@@ -182,3 +182,67 @@ fn classify_tpdo_rpdo() {
     assert_eq!(classify_frame(0x201), FrameType::Rpdo(1, 1));
     assert_eq!(classify_frame(0x281), FrameType::Tpdo(2, 1));
 }
+
+// ─── DBC parser and decoder ───────────────────────────────────────────────────
+
+#[test]
+fn dbc_parse_fixture_message_name() {
+    let db = rustycan::dbc::load_dbc(&fixture("sample_bus.dbc"))
+        .expect("failed to parse sample_bus.dbc");
+    // CAN ID 770 (0x302) should map to "EngineData"
+    let frame = db.decode_frame(770, &[0x00; 8]);
+    assert!(frame.is_some(), "No signals decoded for CAN ID 770");
+    assert_eq!(frame.unwrap().message_name, "EngineData");
+}
+
+#[test]
+fn dbc_decode_engine_speed_intel_le() {
+    // EngineSpeed: start_bit=0, length=16, Intel LE, factor=0.125, offset=0
+    // raw = 800 (0x0320) → physical = 800 * 0.125 = 100.0 rpm
+    let payload: [u8; 8] = [0x20, 0x03, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00];
+
+    let db = rustycan::dbc::load_dbc(&fixture("sample_bus.dbc"))
+        .expect("failed to parse sample_bus.dbc");
+    let frame = db
+        .decode_frame(770, &payload)
+        .expect("decode returned None");
+
+    let sig = frame
+        .values
+        .iter()
+        .find(|s| s.signal_name == "EngineSpeed")
+        .expect("EngineSpeed signal not found");
+    assert_eq!(sig.raw_int, 800);
+    assert!(
+        (sig.physical - 100.0).abs() < 1e-6,
+        "Expected 100.0 rpm, got {}",
+        sig.physical
+    );
+    assert_eq!(sig.unit, "rpm");
+}
+
+#[test]
+fn dbc_decode_coolant_temp_with_val_description() {
+    // CoolantTemp: start_bit=16, length=8, Intel LE, factor=1, offset=-40
+    // raw = 0 → physical = -40 degC → VAL_ description = "Sensor_Error"
+    let payload: [u8; 8] = [0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00];
+
+    let db = rustycan::dbc::load_dbc(&fixture("sample_bus.dbc"))
+        .expect("failed to parse sample_bus.dbc");
+    let frame = db
+        .decode_frame(770, &payload)
+        .expect("decode returned None");
+
+    let sig = frame
+        .values
+        .iter()
+        .find(|s| s.signal_name == "CoolantTemp")
+        .expect("CoolantTemp signal not found");
+    assert_eq!(sig.raw_int, 0);
+    assert!(
+        (sig.physical - (-40.0)).abs() < 1e-6,
+        "Expected -40.0, got {}",
+        sig.physical
+    );
+    assert_eq!(sig.description.as_deref(), Some("Sensor_Error"));
+}
