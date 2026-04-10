@@ -81,6 +81,7 @@ use crate::canopen::sdo::{
     encode_value_for_type, parse_hex_bytes, SdoDirection, SdoTransferMode, SdoValue,
 };
 use crate::eds;
+use crate::http_server::SseServer;
 use crate::session::{self, CanCommand, SessionConfig};
 
 // ─── Icon glyphs (Font Awesome codepoints present in MesloLGS NF) ────────────
@@ -153,6 +154,7 @@ fn format_bps(s: &str) -> String {
 pub struct RustyCanApp {
     screen: Screen,
     logo: egui::TextureHandle,
+    sse_server: SseServer,
 }
 
 #[allow(clippy::large_enum_variant)]
@@ -173,9 +175,11 @@ impl RustyCanApp {
         let logo = cc
             .egui_ctx
             .load_texture("app_logo", color_image, egui::TextureOptions::LINEAR);
+        let sse_server = SseServer::start(7878);
         RustyCanApp {
             screen: Screen::Connect(ConnectForm::default()),
             logo,
+            sse_server,
         }
     }
 }
@@ -188,7 +192,7 @@ impl eframe::App for RustyCanApp {
 
         match &mut self.screen {
             Screen::Connect(form) => {
-                if let Some(s) = render_connect(ctx, form, &self.logo) {
+                if let Some(s) = render_connect(ctx, form, &self.logo, self.sse_server.tx.clone()) {
                     next_screen = Some(s);
                 }
             }
@@ -451,7 +455,10 @@ impl Default for ConnectForm {
 
 impl ConnectForm {
     /// Validate the form and start a session.
-    fn try_connect(&self) -> Result<MonitorView, String> {
+    fn try_connect(
+        &self,
+        sse_tx: tokio::sync::broadcast::Sender<String>,
+    ) -> Result<MonitorView, String> {
         let baud: u32 = self
             .baud
             .trim()
@@ -519,6 +526,7 @@ impl ConnectForm {
                 .filter(|e| !e.path.trim().is_empty())
                 .map(|e| PathBuf::from(e.path.trim()))
                 .collect(),
+            sse_tx: Some(sse_tx),
         };
 
         let (rx, cmd_tx, node_labels, actual_log_path) = session::start(config)?;
@@ -631,6 +639,7 @@ fn render_connect(
     ctx: &egui::Context,
     form: &mut ConnectForm,
     logo: &egui::TextureHandle,
+    sse_tx: tokio::sync::broadcast::Sender<String>,
 ) -> Option<Screen> {
     // ── Dongle probe cycle ────────────────────────────────────────────────────
     // 1. Drain any pending probe result.
@@ -724,7 +733,7 @@ fn render_connect(
                 } else if has_dupes {
                     resp.on_disabled_hover_text("Fix duplicate node IDs before connecting");
                 } else if resp.clicked() {
-                    match form.try_connect() {
+                    match form.try_connect(sse_tx) {
                         Ok(view) => transition = Some(Screen::Monitor(Box::new(view))),
                         Err(e) => form.error = Some(e),
                     }

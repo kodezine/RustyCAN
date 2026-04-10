@@ -47,6 +47,7 @@ The GUI window opens immediately. See [Building from Source](.readme/building.md
 - 📊 **PDO & SDO decoding** — Live signal values with EDS support (optional)
 - 🚗 **DBC signal decoding** — Full DBC support alongside CANopen
 - 📝 **JSONL logging** — Every frame logged with structured JSON
+- 🌐 **Live browser dashboard** — `http://localhost:7878/` streams events via SSE; NMT node grid + colour-coded event log; works in any browser
 
 [→ View complete feature list](.readme/features.md)
 
@@ -61,6 +62,7 @@ Comprehensive documentation is organized in the [`.readme/`](.readme/) directory
 
 ### Reference
 - [JSONL Log Format](.readme/jsonl-format.md) — Complete logging specification
+- [Live HTTP Dashboard](.readme/live-dashboard.md) — Browser-based live event viewer
 - [DBC Signal Decoding](.readme/dbc-signal-decoding.md) — DBC file support details
 - [Project Structure](.readme/project-structure.md) — Codebase organization
 - [Features](.readme/features.md) — Complete feature list & status

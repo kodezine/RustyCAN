@@ -1,0 +1,687 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>RustyCAN · Live Dashboard</title>
+  <style>
+    /* ── CSS custom properties — light / dark ── */
+    :root {
+      --bg:        #f5f5f7;
+      --surface:   #ffffff;
+      --surface2:  #f0f0f2;
+      --border:    #d2d2d7;
+      --text:      #1d1d1f;
+      --text2:     #6e6e73;
+      --text3:     #8e8e93;
+      --accent:    #0071e3;
+
+      --nmt-op:    #1a7f37;  --nmt-op-bg:    #dafbe1;
+      --nmt-preop: #9a6700;  --nmt-preop-bg: #fff3cd;
+      --nmt-stop:  #cf222e;  --nmt-stop-bg:  #ffd7d5;
+      --nmt-boot:  #6639ba;  --nmt-boot-bg:  #ede8ff;
+      --nmt-unk:   #57606a;  --nmt-unk-bg:   #e8e8e8;
+
+      --row-nmt:    #f0faf4;  --type-nmt:    #1a7f37;
+      --row-nmtcmd: #fdfbf0;  --type-nmtcmd: #9a6700;
+      --row-sdo-r:  #f0f6ff;  --type-sdo-r:  #0550ae;
+      --row-sdo-w:  #fdf0ff;  --type-sdo-w:  #8250df;
+      --row-pdo:    #fff5f0;  --type-pdo:    #bc4c00;
+      --row-dbc:    #f0fff8;  --type-dbc:    #0e7a6e;
+      --row-raw:    #f7f7f7;  --type-raw:    #595959;
+      --row-sess:   #f6f6f6;  --type-sess:   #6e6e73;
+    }
+
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --bg:        #161617;
+        --surface:   #1c1c1e;
+        --surface2:  #2c2c2e;
+        --border:    #3a3a3c;
+        --text:      #f5f5f7;
+        --text2:     #a1a1a6;
+        --text3:     #636366;
+        --accent:    #2997ff;
+
+        --nmt-op:    #56d364;  --nmt-op-bg:    #1a3a22;
+        --nmt-preop: #e3b341;  --nmt-preop-bg: #3a2e10;
+        --nmt-stop:  #ff7b72;  --nmt-stop-bg:  #3a1a1a;
+        --nmt-boot:  #bc8cff;  --nmt-boot-bg:  #2a1a4a;
+        --nmt-unk:   #8b949e;  --nmt-unk-bg:   #2c2c2e;
+
+        --row-nmt:    #141f14;  --type-nmt:    #56d364;
+        --row-nmtcmd: #1f1e10;  --type-nmtcmd: #e3b341;
+        --row-sdo-r:  #101824;  --type-sdo-r:  #79c0ff;
+        --row-sdo-w:  #1a1028;  --type-sdo-w:  #d2a8ff;
+        --row-pdo:    #1f1208;  --type-pdo:    #ffa657;
+        --row-dbc:    #0a1f1a;  --type-dbc:    #3dd6c8;
+        --row-raw:    #1e1e1e;  --type-raw:    #7d7d7d;
+        --row-sess:   #1c1c1e;  --type-sess:   #8b949e;
+      }
+    }
+
+    /* ── Reset & base ── */
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", system-ui, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+    }
+
+    /* ── Top header ── */
+    header {
+      background: var(--surface);
+      border-bottom: 1px solid var(--border);
+      padding: 0 20px;
+      height: 52px;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      position: sticky;
+      top: 0;
+      z-index: 100;
+    }
+
+    .logo {
+      font-size: 0.9rem;
+      font-weight: 600;
+      color: var(--text);
+      letter-spacing: -0.01em;
+    }
+
+    .logo span { color: var(--accent); }
+
+    .divider { width: 1px; height: 20px; background: var(--border); }
+
+    .conn-badge {
+      display: flex;
+      align-items: center;
+      gap: 5px;
+      font-size: 0.72rem;
+      font-weight: 500;
+      padding: 3px 8px;
+      border-radius: 999px;
+      border: 1px solid var(--border);
+      background: var(--surface2);
+      color: var(--text2);
+    }
+
+    .conn-dot {
+      width: 7px;
+      height: 7px;
+      border-radius: 50%;
+      background: var(--text3);
+      transition: background 0.3s;
+    }
+
+    .conn-dot.connected    { background: var(--nmt-op); }
+    .conn-dot.reconnecting { background: var(--nmt-preop); animation: pulse 1s infinite; }
+    .conn-dot.disconnected { background: var(--nmt-stop); }
+
+    @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.4; } }
+
+    /* Push stats to the right */
+    .header-stats {
+      margin-left: auto;
+      display: flex;
+      gap: 16px;
+      font-size: 0.72rem;
+      color: var(--text2);
+    }
+
+    .header-stats strong { color: var(--text); }
+
+    /* ── Main layout ── */
+    main {
+      flex: 1;
+      padding: 16px 20px;
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+      max-width: 1400px;
+      width: 100%;
+      margin: 0 auto;
+    }
+
+    /* ── Section card ── */
+    .card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      overflow: hidden;
+    }
+
+    .card-header {
+      padding: 10px 16px;
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      background: var(--surface2);
+    }
+
+    .card-title {
+      font-size: 0.78rem;
+      font-weight: 600;
+      color: var(--text);
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+    }
+
+    .card-badge {
+      font-size: 0.68rem;
+      font-weight: 500;
+      padding: 1px 6px;
+      border-radius: 999px;
+      background: var(--border);
+      color: var(--text2);
+    }
+
+    /* ── NMT grid ── */
+    #nmt-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+      gap: 10px;
+      padding: 14px;
+    }
+
+    .node-card {
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 10px 12px;
+      display: flex;
+      flex-direction: column;
+      gap: 5px;
+      background: var(--surface);
+      transition: border-color 0.2s;
+    }
+
+    .node-id {
+      font-size: 0.68rem;
+      font-weight: 600;
+      color: var(--text2);
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+    }
+
+    .node-label {
+      font-size: 0.8rem;
+      font-weight: 500;
+      color: var(--text);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .node-state {
+      font-size: 0.7rem;
+      font-weight: 600;
+      padding: 2px 7px;
+      border-radius: 4px;
+      align-self: flex-start;
+      margin-top: 2px;
+    }
+
+    .state-op    { color: var(--nmt-op);    background: var(--nmt-op-bg); }
+    .state-preop { color: var(--nmt-preop); background: var(--nmt-preop-bg); }
+    .state-stop  { color: var(--nmt-stop);  background: var(--nmt-stop-bg); }
+    .state-boot  { color: var(--nmt-boot);  background: var(--nmt-boot-bg); }
+    .state-unk   { color: var(--nmt-unk);   background: var(--nmt-unk-bg); }
+
+    .node-age {
+      font-size: 0.65rem;
+      color: var(--text3);
+    }
+
+    #nmt-empty {
+      grid-column: 1 / -1;
+      padding: 24px;
+      text-align: center;
+      font-size: 0.8rem;
+      color: var(--text3);
+    }
+
+    /* ── Event log ── */
+    .log-controls {
+      padding: 8px 14px;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      border-bottom: 1px solid var(--border);
+      background: var(--surface2);
+    }
+
+    .filter-btn {
+      font-size: 0.7rem;
+      font-weight: 500;
+      padding: 3px 8px;
+      border-radius: 5px;
+      border: 1px solid var(--border);
+      background: var(--surface);
+      color: var(--text2);
+      cursor: pointer;
+      transition: background 0.15s, color 0.15s;
+    }
+
+    .filter-btn.active {
+      background: var(--accent);
+      color: #fff;
+      border-color: var(--accent);
+    }
+
+    .pause-btn {
+      margin-left: auto;
+      font-size: 0.7rem;
+      font-weight: 500;
+      padding: 3px 10px;
+      border-radius: 5px;
+      border: 1px solid var(--border);
+      background: var(--surface);
+      color: var(--text2);
+      cursor: pointer;
+    }
+
+    .pause-btn.paused { background: var(--nmt-preop-bg); color: var(--nmt-preop); border-color: var(--nmt-preop); }
+
+    /* Column header row */
+    .log-header {
+      display: grid;
+      grid-template-columns: 9ch 16ch 8ch 1fr;
+      gap: 8px;
+      padding: 5px 14px;
+      border-bottom: 1px solid var(--border);
+      font-size: 0.65rem;
+      font-weight: 600;
+      color: var(--text3);
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      background: var(--surface);
+    }
+
+    #event-log {
+      font-family: ui-monospace, "SF Mono", "Cascadia Code", "Fira Mono", monospace;
+      overflow-y: auto;
+      max-height: 480px;
+    }
+
+    .log-entry {
+      display: grid;
+      grid-template-columns: 9ch 16ch 8ch 1fr;
+      gap: 8px;
+      padding: 4px 14px;
+      font-size: 0.73rem;
+      border-bottom: 1px solid transparent;
+      animation: slide-in 0.1s ease;
+    }
+
+    @keyframes slide-in { from { opacity: 0; } to { opacity: 1; } }
+
+    .log-entry:hover { filter: brightness(0.97); }
+    @media (prefers-color-scheme: dark) { .log-entry:hover { filter: brightness(1.1); } }
+
+    .e-ts     { color: var(--text3); }
+    .e-type   { font-weight: 600; }
+    .e-node   { color: var(--accent); }
+    .e-detail { color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+    .e-NMT_STATE   { background: var(--row-nmt); }
+    .e-NMT_STATE   .e-type { color: var(--type-nmt); }
+    .e-NMT_COMMAND { background: var(--row-nmtcmd); }
+    .e-NMT_COMMAND .e-type { color: var(--type-nmtcmd); }
+    .e-SDO_READ    { background: var(--row-sdo-r); }
+    .e-SDO_READ    .e-type { color: var(--type-sdo-r); }
+    .e-SDO_WRITE   { background: var(--row-sdo-w); }
+    .e-SDO_WRITE   .e-type { color: var(--type-sdo-w); }
+    .e-PDO         { background: var(--row-pdo); }
+    .e-PDO         .e-type { color: var(--type-pdo); }
+    .e-session     { background: var(--row-sess); }
+    .e-session     .e-type { color: var(--type-sess); }
+
+    /* ── Footer ── */
+    footer {
+      border-top: 1px solid var(--border);
+      background: var(--surface2);
+      padding: 7px 20px;
+      font-size: 0.68rem;
+      color: var(--text3);
+      display: flex;
+      gap: 20px;
+      align-items: center;
+    }
+
+    footer a { color: var(--accent); text-decoration: none; }
+  </style>
+</head>
+<body>
+
+<!-- ── Header ────────────────────────────────────────────────────────────── -->
+<header>
+  <div class="logo">Rusty<span>CAN</span></div>
+  <div class="divider"></div>
+  <div class="conn-badge">
+    <div class="conn-dot" id="conn-dot"></div>
+    <span id="conn-label">Connecting…</span>
+  </div>
+  <div class="header-stats">
+    <div>NMT <strong id="s-nmt">0</strong></div>
+    <div>SDO <strong id="s-sdo">0</strong></div>
+    <div>PDO <strong id="s-pdo">0</strong></div>
+    <div>DBC <strong id="s-dbc">0</strong></div>
+    <div>Raw <strong id="s-raw">0</strong></div>
+    <div>Total <strong id="s-total">0</strong></div>
+  </div>
+</header>
+
+<!-- ── Main ──────────────────────────────────────────────────────────────── -->
+<main>
+
+  <!-- NMT Node Grid -->
+  <div class="card">
+    <div class="card-header">
+      <span class="card-title">NMT Node States</span>
+      <span class="card-badge" id="node-count">0 nodes</span>
+    </div>
+    <div id="nmt-grid">
+      <div id="nmt-empty">No nodes seen yet — waiting for heartbeats…</div>
+    </div>
+  </div>
+
+  <!-- Event Log -->
+  <div class="card">
+    <div class="card-header">
+      <span class="card-title">Event Log</span>
+      <span class="card-badge" id="log-count">0 events</span>
+    </div>
+
+    <div class="log-controls">
+      <button class="filter-btn active" data-type="ALL">All</button>
+      <button class="filter-btn" data-type="NMT">NMT</button>
+      <button class="filter-btn" data-type="SDO">SDO</button>
+      <button class="filter-btn" data-type="PDO">PDO</button>
+      <button class="filter-btn" data-type="DBC">DBC</button>
+      <button class="filter-btn" data-type="RAW">Raw</button>
+      <button class="pause-btn" id="pause-btn">⏸ Pause</button>
+    </div>
+
+    <div class="log-header">
+      <div>Time</div>
+      <div>Type</div>
+      <div>Node</div>
+      <div>Detail</div>
+    </div>
+
+    <div id="event-log"></div>
+  </div>
+
+</main>
+
+<!-- ── Footer ────────────────────────────────────────────────────────────── -->
+<footer>
+  <span>RustyCAN Live Dashboard</span>
+  <span>·</span>
+  <span><a href="/events" target="_blank">/events</a> — raw SSE stream</span>
+  <span>·</span>
+  <span id="footer-status">Not connected</span>
+</footer>
+
+<script>
+'use strict';
+
+// ── State ──────────────────────────────────────────────────────────────────────
+const nodes   = {};          // node_id → { label, state, lastSeen }
+const counts  = { nmt: 0, sdo: 0, pdo: 0, dbc: 0, raw: 0, total: 0 };
+const MAX_LOG = 200;
+let   totalLogRows = 0;
+let   activeFilter = 'ALL';
+let   paused = false;
+let   retryDelay = 1000;     // ms, for exponential back-off
+let   es = null;
+
+// ── DOM refs ───────────────────────────────────────────────────────────────────
+const connDot    = document.getElementById('conn-dot');
+const connLabel  = document.getElementById('conn-label');
+const nmtGrid    = document.getElementById('nmt-grid');
+const nmtEmpty   = document.getElementById('nmt-empty');
+const nodeCount  = document.getElementById('node-count');
+const eventLog   = document.getElementById('event-log');
+const logCount   = document.getElementById('log-count');
+const footerSt   = document.getElementById('footer-status');
+const pauseBtn   = document.getElementById('pause-btn');
+
+// ── Helpers ────────────────────────────────────────────────────────────────────
+function pad(n, w = 2) { return String(n).padStart(w, '0'); }
+
+function fmtTime(isoStr) {
+  const d = isoStr ? new Date(isoStr) : new Date();
+  return `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}.${pad(d.getMilliseconds(), 3)}`;
+}
+
+function setConn(state) {
+  connDot.className = 'conn-dot ' + state;
+  const labels = { connected: 'Connected', reconnecting: 'Reconnecting…', disconnected: 'Disconnected' };
+  connLabel.textContent = labels[state] || state;
+  footerSt.textContent = `http://localhost:7878/events — ${labels[state] || state}`;
+}
+
+// ── NMT grid ──────────────────────────────────────────────────────────────────
+function stateClass(state) {
+  if (!state) return 'state-unk';
+  const s = state.toLowerCase();
+  if (s.includes('operational') && !s.includes('pre')) return 'state-op';
+  if (s.includes('pre'))    return 'state-preop';
+  if (s.includes('stop'))   return 'state-stop';
+  if (s.includes('boot'))   return 'state-boot';
+  return 'state-unk';
+}
+
+function updateNodeCard(id, label, state) {
+  nodes[id] = { label: label || nodes[id]?.label || `Node ${id}`, state, lastSeen: Date.now() };
+
+  let card = document.getElementById(`node-${id}`);
+  if (!card) {
+    // Remove "no nodes" placeholder
+    if (nmtEmpty) nmtEmpty.remove();
+
+    card = document.createElement('div');
+    card.className = 'node-card';
+    card.id = `node-${id}`;
+    nmtGrid.appendChild(card);
+  }
+
+  card.innerHTML = `
+    <div class="node-id">Node ${id}</div>
+    <div class="node-label" title="${nodes[id].label}">${nodes[id].label}</div>
+    <div class="node-state ${stateClass(state)}">${state || 'Unknown'}</div>
+    <div class="node-age">just now</div>`;
+
+  nodeCount.textContent = `${Object.keys(nodes).length} node${Object.keys(nodes).length !== 1 ? 's' : ''}`;
+}
+
+// Refresh "X s ago" labels every second
+setInterval(() => {
+  for (const [id, n] of Object.entries(nodes)) {
+    const card = document.getElementById(`node-${id}`);
+    if (!card) continue;
+    const age = Math.round((Date.now() - n.lastSeen) / 1000);
+    const ageEl = card.querySelector('.node-age');
+    if (ageEl) ageEl.textContent = age < 2 ? 'just now' : `${age} s ago`;
+  }
+}, 1000);
+
+// ── Event log ─────────────────────────────────────────────────────────────────
+function rowClass(type) {
+  if (!type) return '';
+  if (type === 'session_start') return 'e-session';
+  if (type === 'NMT_STATE')     return 'e-NMT_STATE';
+  if (type === 'NMT_COMMAND' || type === 'NMT_COMMAND_SENT') return 'e-NMT_COMMAND';
+  if (type === 'SDO_READ')      return 'e-SDO_READ';
+  if (type === 'SDO_WRITE')     return 'e-SDO_WRITE';
+  if (type === 'PDO')           return 'e-PDO';
+  if (type === 'DBC_SIGNAL')    return 'e-DBC_SIGNAL';
+  if (type === 'RAW_FRAME')     return 'e-RAW_FRAME';
+  return '';
+}
+
+function formatDetail(ev) {
+  switch (ev.type) {
+    case 'session_start':
+      return `adapter=${ev.adapter ?? '—'}  baud=${ev.baud ?? '—'}`;
+    case 'NMT_STATE':
+      return `state=${ev.state}  cob_id=${ev.cob_id}`;
+    case 'NMT_COMMAND':
+    case 'NMT_COMMAND_SENT':
+      return `cmd=${ev.command}  → node ${ev.target_node ?? ev.target_node}  cob_id=${ev.cob_id}`;
+    case 'SDO_READ':
+    case 'SDO_WRITE': {
+      const val = ev.value !== undefined ? `= ${JSON.stringify(ev.value)}` : ev.abort_code ? `ABORT 0x${ev.abort_code.toString(16).toUpperCase()}` : '';
+      return `${ev.index}/${ev.subindex}  ${ev.name ?? ''}  ${val}`;
+    }
+    case 'PDO': {
+      if (ev.signals && typeof ev.signals === 'object') {
+        const parts = Array.isArray(ev.signals)
+          ? ev.signals.map(s => `${s.name}=${s.value}${s.unit ? '\u202f' + s.unit : ''}`)
+          : Object.entries(ev.signals).map(([k, v]) => `${k}=${v}`);
+        return parts.join('   ');
+      }
+      return `cob_id=${ev.cob_id}`;
+    }
+    case 'DBC_SIGNAL': {
+      // signals is an object: { SignalName: { raw, physical, unit, description } }
+      if (ev.signals && typeof ev.signals === 'object') {
+        const parts = Object.entries(ev.signals).map(([name, s]) => {
+          const phys = s.physical !== undefined ? s.physical : s.raw ?? '';
+          const unit = s.unit ? '\u202f' + s.unit : '';
+          return `${name}=${phys}${unit}`;
+        });
+        return `[${ev.message ?? ev.source_dbc ?? ''}]  ${parts.join('   ')}`;
+      }
+      return `msg=${ev.message ?? '—'}  cob_id=${ev.cob_id}`;
+    }
+    case 'RAW_FRAME': {
+      const rawHex = Array.isArray(ev.raw) ? ev.raw.join(' ') : (ev.raw ?? '');
+      return `cob_id=${ev.cob_id}  raw=[${rawHex}]`;
+    }
+    default:
+      return ev.cob_id ? `cob_id=${ev.cob_id}` : '';
+  }
+}
+
+function matchesFilter(type) {
+  if (activeFilter === 'ALL') return true;
+  if (activeFilter === 'NMT') return type?.startsWith('NMT');
+  if (activeFilter === 'SDO') return type?.startsWith('SDO');
+  if (activeFilter === 'PDO') return type === 'PDO';
+  if (activeFilter === 'DBC') return type === 'DBC_SIGNAL';
+  if (activeFilter === 'RAW') return type === 'RAW_FRAME';
+  return true;
+}
+
+function pushLogRow(ev) {
+  if (!matchesFilter(ev.type)) return;
+
+  const row = document.createElement('div');
+  row.className = `log-entry ${rowClass(ev.type)}`;
+  row.dataset.type = ev.type;
+
+  const nodeLabel = (ev.node !== undefined && ev.node !== null && ev.node !== 0)
+    ? `node ${ev.node}` : (ev.type === 'NMT_COMMAND_SENT' ? 'master' : '—');
+
+  const detail = formatDetail(ev);
+  row.innerHTML =
+    `<span class="e-ts">${fmtTime(ev.ts)}</span>` +
+    `<span class="e-type">${ev.type}</span>` +
+    `<span class="e-node">${nodeLabel}</span>` +
+    `<span class="e-detail" title="${detail.replace(/"/g, '&quot;')}">${detail}</span>`;
+
+  eventLog.prepend(row);
+  totalLogRows++;
+
+  // Trim oldest rows
+  while (eventLog.children.length > MAX_LOG) {
+    eventLog.removeChild(eventLog.lastChild);
+  }
+
+  logCount.textContent = `${totalLogRows} events`;
+}
+
+// ── Main event processor ───────────────────────────────────────────────────────
+function processEvent(ev) {
+  // Update counters
+  counts.total++;
+  if (ev.type?.startsWith('NMT'))      counts.nmt++;
+  else if (ev.type?.startsWith('SDO')) counts.sdo++;
+  else if (ev.type === 'PDO')          counts.pdo++;
+  else if (ev.type === 'DBC_SIGNAL')   counts.dbc++;
+  else if (ev.type === 'RAW_FRAME')    counts.raw++;
+
+  document.getElementById('s-nmt').textContent   = counts.nmt;
+  document.getElementById('s-sdo').textContent   = counts.sdo;
+  document.getElementById('s-pdo').textContent   = counts.pdo;
+  document.getElementById('s-dbc').textContent   = counts.dbc;
+  document.getElementById('s-raw').textContent   = counts.raw;
+  document.getElementById('s-total').textContent = counts.total;
+
+  // Update NMT node grid
+  if (ev.type === 'NMT_STATE') {
+    updateNodeCard(ev.node, null, ev.state);
+  }
+
+  // Push to log (unless paused)
+  if (!paused) {
+    pushLogRow(ev);
+  }
+}
+
+// ── SSE connection with auto-reconnect ────────────────────────────────────────
+function connect() {
+  setConn('reconnecting');
+  es = new EventSource('/events');
+
+  es.onopen = () => {
+    setConn('connected');
+    retryDelay = 1000;
+  };
+
+  es.onmessage = (e) => {
+    try {
+      processEvent(JSON.parse(e.data));
+    } catch (_) { /* ignore malformed lines */ }
+  };
+
+  es.onerror = () => {
+    es.close();
+    setConn('disconnected');
+    setTimeout(connect, retryDelay);
+    retryDelay = Math.min(retryDelay * 2, 16000); // exponential back-off, cap at 16 s
+  };
+}
+
+connect();
+
+// ── Filter buttons ────────────────────────────────────────────────────────────
+document.querySelectorAll('.filter-btn').forEach(btn => {
+  btn.addEventListener('click', () => {
+    activeFilter = btn.dataset.type;
+    document.querySelectorAll('.filter-btn').forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+
+    // Re-render visible rows according to new filter
+    document.querySelectorAll('#event-log .log-entry').forEach(row => {
+      row.style.display = matchesFilter(row.dataset.type) ? '' : 'none';
+    });
+  });
+});
+
+// ── Pause / resume ────────────────────────────────────────────────────────────
+pauseBtn.addEventListener('click', () => {
+  paused = !paused;
+  pauseBtn.textContent = paused ? '▶ Resume' : '⏸ Pause';
+  pauseBtn.classList.toggle('paused', paused);
+});
+</script>
+</body>
+</html>

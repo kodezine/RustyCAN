@@ -25,6 +25,10 @@ kcan-protocol = { path = "../kcan-protocol", features = ["std"] }
 futures-lite = "2.6.1"
 # DBC file support
 can-dbc = "9"
+# Live HTTP/SSE server — streams JSONL events to http://localhost:7878/
+axum = { version = "0.8", default-features = false, features = ["http1", "json", "tokio"] }
+tokio = { version = "1", features = ["rt-multi-thread", "net", "sync", "macros"] }
+tokio-stream = { version = "0.1", features = ["sync"] }
 
 # host-can: pcan feature is only available on macOS and Windows.
 # On Linux, PEAK hardware uses SocketCAN (kernel driver) and the proprietary

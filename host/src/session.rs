@@ -110,6 +110,12 @@ pub struct SessionConfig {
     /// DBC databases and the results emitted as [`CanEvent::DbcSignal`] events.
     /// Empty vector disables DBC decoding entirely.
     pub dbc_paths: Vec<std::path::PathBuf>,
+    /// Optional SSE broadcast sender from [`crate::http_server::SseServer`].
+    ///
+    /// When `Some`, every JSONL log entry is also broadcast to all connected
+    /// browser clients via the live HTTP dashboard at `http://localhost:7878/`.
+    /// Pass `Some(server.tx.clone())` from the GUI after starting the server.
+    pub sse_tx: Option<tokio::sync::broadcast::Sender<String>>,
 }
 
 /// Load EDS files, open the log, spawn the recv thread.
@@ -181,12 +187,18 @@ pub fn start(config: SessionConfig) -> SessionResult {
     let timestamped_log_path =
         crate::logger::add_timestamp_to_path(std::path::Path::new(&config.log_path));
 
-    let logger = EventLogger::with_text_log(&config.log_path, config.text_log).map_err(|e| {
-        format!(
-            "Failed to open log file {}: {e}",
-            timestamped_log_path.display()
-        )
-    })?;
+    let mut logger =
+        EventLogger::with_text_log(&config.log_path, config.text_log).map_err(|e| {
+            format!(
+                "Failed to open log file {}: {e}",
+                timestamped_log_path.display()
+            )
+        })?;
+
+    // Attach the SSE broadcast sender if the HTTP server is running.
+    if let Some(tx) = config.sse_tx {
+        logger.attach_sse(tx);
+    }
 
     // Convert to absolute path for display in the UI
     let actual_log_path = std::fs::canonicalize(&timestamped_log_path)

@@ -8,5 +8,6 @@ pub mod canopen;
 pub mod dbc;
 pub mod eds;
 pub mod gui;
+pub mod http_server;
 pub mod logger;
 pub mod session;

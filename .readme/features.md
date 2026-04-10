@@ -24,6 +24,7 @@
 | 📶 **Bus load bar** | 20-block colour-coded bar in the status strip: blue ≤30 %, yellow 30–70 %, red >70 % |
 | 🎞️ **Frame rate** | Rolling fps counter (2 s window) shown alongside total frame count |
 | 📝 **JSONL logging** | Every event (received and sent) appended to a newline-delimited JSON file |
+| 🌐 **Live browser dashboard** | HTTP server on `http://localhost:7878/`; streams events via SSE; NMT node grid + colour-coded log; auto-reconnects; works in any browser |
 
 ## ✅ Feature Status
 
@@ -45,6 +46,7 @@
 | Raw PDO bytes for nodes without EDS | ✅ |
 | Multi-node EDS mapping | ✅ |
 | JSONL logging (received + sent) | ✅ |
+| Live HTTP dashboard (SSE, port 7878) | ✅ |
 | SDO segmented transfers | ✅ |
 | SDO block transfers | ✅ |
 | KCAN Phase 3: STM32H563 HW encryption | planned |
