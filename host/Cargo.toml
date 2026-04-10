@@ -23,12 +23,21 @@ dirs = "5"
 nusb = "0.1"
 kcan-protocol = { path = "../kcan-protocol", features = ["std"] }
 futures-lite = "2.6.1"
+# Terminal UI (TUI mode)
+ratatui = "0.29"
+crossterm = "0.28"
+ctrlc = "3"
 # DBC file support
 can-dbc = "9"
 # Live HTTP/SSE server — streams JSONL events to http://localhost:7878/
 axum = { version = "0.8", default-features = false, features = ["http1", "json", "tokio"] }
 tokio = { version = "1", features = ["rt-multi-thread", "net", "sync", "macros"] }
 tokio-stream = { version = "0.1", features = ["sync"] }
+
+[target.'cfg(unix)'.dependencies]
+# Used to redirect stderr to a file while the TUI is active, preventing
+# background eprintln!/panic output from corrupting the terminal display.
+libc = "0.2"
 
 # host-can: pcan feature is only available on macOS and Windows.
 # On Linux, PEAK hardware uses SocketCAN (kernel driver) and the proprietary
