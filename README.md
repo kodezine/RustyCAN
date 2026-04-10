@@ -384,6 +384,23 @@ Additional documentation is available in the [`.readme/`](.readme/) folder:
 - **[Multi-Node Stability Guide](.readme/multi-node-stability.md)** — Fixes for connection issues with 7-10+ nodes, error recovery, and troubleshooting
 - **[Logging Performance](.readme/logging-performance.md)** — Optimization details for high-traffic scenarios, batched flushing, and configuration tuning
 
+## 🛠️ Development
+
+### Updating the app icon
+
+When editing icon images in `host/assets/RustyCAN.iconset/`, regenerate the `.icns` file and commit both:
+
+```sh
+cd host/assets
+iconutil -c icns RustyCAN.iconset -o RustyCAN.icns
+git add RustyCAN.iconset/ RustyCAN.icns
+git commit -m "Update app icon"
+```
+
+**Why?** The `.icns` file is a versioned build artifact tracked in the repository. CI builds use the committed version to ensure deterministic, reproducible releases without modifying the working tree during builds (which would add a `-dirty` suffix to version strings from `git describe --dirty`).
+
+The `.iconset` folder contains source PNG images at multiple resolutions (16×16 through 512×512, with @2x variants). macOS's `iconutil` combines these into the installable `.icns` format required by DMG/app bundles.
+
 ## License
 
 Licensed under either of [Apache-2.0](LICENSE) or MIT at your option.
