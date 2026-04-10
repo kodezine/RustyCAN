@@ -21,10 +21,36 @@ struct CliArgs {
     /// supplied.  Defaults to 7878 when absent from both the CLI and the file.
     #[arg(long, value_name = "PORT")]
     http_port: Option<u16>,
+
+    /// Start RustyCAN as a full-screen terminal UI instead of opening a GUI window.
+    ///
+    /// Requires `--config` to be supplied.  The TUI displays live NMT, PDO, and
+    /// SDO panels.  Press `n` to send an NMT command, `s` for SDO read, `w` for
+    /// SDO write, `L` to toggle the event-log panel, and `q` / Ctrl-C to quit.
+    #[arg(long)]
+    tui: bool,
+
+    /// Print decoded CAN events as timestamped text lines to stdout and exit
+    /// when the adapter disconnects or Ctrl-C is pressed.
+    ///
+    /// Requires `--config` to be supplied.  No GUI or TUI window is opened;
+    /// output can be piped directly to a file or another tool.
+    #[arg(long)]
+    log_to_stdout: bool,
 }
 
-fn main() -> Result<(), eframe::Error> {
+fn main() {
     let args = CliArgs::parse();
+
+    // Validate flags that require --config.
+    if args.tui && args.config.is_none() {
+        eprintln!("error: --tui requires --config <FILE>");
+        std::process::exit(1);
+    }
+    if args.log_to_stdout && args.config.is_none() {
+        eprintln!("error: --log-to-stdout requires --config <FILE>");
+        std::process::exit(1);
+    }
 
     // Resolve the effective HTTP port:
     //   1. CLI --http-port (highest priority)
@@ -43,5 +69,23 @@ fn main() -> Result<(), eframe::Error> {
             .unwrap_or(7878)
     });
 
-    rustycan::gui::run(args.config, effective_port)
+    if args.log_to_stdout {
+        // SAFETY: config is Some — validated above.
+        let path = args.config.as_deref().unwrap();
+        if let Err(e) = rustycan::tui::log_stream::stream(path, effective_port) {
+            eprintln!("error: {e}");
+            std::process::exit(1);
+        }
+    } else if args.tui {
+        let path = args.config.as_deref().unwrap();
+        if let Err(e) = rustycan::tui::run_from_config(path, effective_port) {
+            eprintln!("error: {e}");
+            std::process::exit(1);
+        }
+    } else {
+        if let Err(e) = rustycan::gui::run(args.config, effective_port) {
+            eprintln!("error: {e}");
+            std::process::exit(1);
+        }
+    }
 }

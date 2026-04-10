@@ -41,7 +41,8 @@ The GUI window opens immediately. See [Building from Source](.readme/building.md
 ## ✨ Key Features
 
 - 🖥️ **Native GUI** — egui/eframe window, no terminal required
-- 🔌 **Dual adapter support** — PEAK PCAN-USB or KCAN Dongle (STM32H753ZI)
+- � **CLI Modes** — `--tui` for a full-screen terminal UI; `--log-to-stdout` to stream events to a pipe or file
+- �🔌 **Dual adapter support** — PEAK PCAN-USB or KCAN Dongle (STM32H753ZI)
 - ⏱️ **Hardware timestamps** — µs-precision timestamps from FDCAN TIM2 (KCAN only)
 - 💓 **NMT monitoring & control** — Live node states with broadcast/per-node commands
 - 📊 **PDO & SDO decoding** — Live signal values with EDS support (optional)
@@ -62,6 +63,7 @@ Comprehensive documentation is organized in the [`.readme/`](.readme/) directory
 
 ### Reference
 - [CLI Configuration File](.readme/cli-config.md) — `--config` flag, JSON schema, auto-connect
+- [CLI Modes: TUI & Log Streaming](.readme/cli-tui.md) — `--tui` terminal UI and `--log-to-stdout` streaming
 - [JSONL Log Format](.readme/jsonl-format.md) — Complete logging specification
 - [Live HTTP Dashboard](.readme/live-dashboard.md) — Browser-based live event viewer
 - [DBC Signal Decoding](.readme/dbc-signal-decoding.md) — DBC file support details

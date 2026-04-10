@@ -3091,3 +3091,90 @@ pub fn run(config_path: Option<std::path::PathBuf>, http_port: u16) -> Result<()
         }),
     )
 }
+
+// ─── Public helper for non-GUI entry points ───────────────────────────────────
+
+/// Load a [`crate::session::SessionConfig`] from a JSON config file (the same
+/// format written by the GUI and documented in `config.example.json`).
+///
+/// This function is used by the `--tui` and `--log-to-stdout` CLI modes so
+/// they can share the exact same config schema without duplicating any parsing
+/// logic.  Pass `Some(sender)` when an SSE broadcast server is already running;
+/// pass `None` to disable live-dashboard mirroring.
+///
+/// # Errors
+/// Returns a human-readable error string if the file cannot be read, parsed,
+/// or if any required field (e.g. baud rate) is invalid.
+pub fn load_session_config(
+    path: &std::path::Path,
+    sse_tx: Option<tokio::sync::broadcast::Sender<String>>,
+) -> Result<crate::session::SessionConfig, String> {
+    let config = PersistedConfig::load_from(path)
+        .ok_or_else(|| format!("Cannot read or parse config file: {}", path.display()))?;
+
+    let baud: u32 = config
+        .baud
+        .trim()
+        .parse()
+        .map_err(|_| format!("Invalid baud rate in config: {:?}", config.baud))?;
+
+    let sdo_timeout_ms: u64 = config
+        .sdo_timeout_str
+        .trim()
+        .parse::<u64>()
+        .ok()
+        .filter(|&v| v > 0)
+        .ok_or_else(|| {
+            format!(
+                "SDO timeout must be a positive integer (ms), got {:?}",
+                config.sdo_timeout_str
+            )
+        })?;
+
+    let nodes: Vec<(u8, Option<std::path::PathBuf>)> = config
+        .nodes
+        .iter()
+        .filter(|e| !e.id_str.trim().is_empty())
+        .map(|e| {
+            let id: u8 = eds::parse_node_id_str(e.id_str.trim()).ok_or_else(|| {
+                format!(
+                    "Invalid node ID: {:?} (expected 1–127, decimal or 0x/H hex)",
+                    e.id_str
+                )
+            })?;
+            let path = if e.eds_path.trim().is_empty() {
+                None
+            } else {
+                Some(std::path::PathBuf::from(e.eds_path.trim()))
+            };
+            Ok((id, path))
+        })
+        .collect::<Result<_, String>>()?;
+
+    let log_path = match config.log_path {
+        Some(p) if !p.trim().is_empty() => p,
+        _ => "rustycan.jsonl".into(),
+    };
+
+    Ok(crate::session::SessionConfig {
+        port: config.port.trim().to_string(),
+        baud,
+        nodes,
+        log_path,
+        listen_only: config.listen_only,
+        text_log: config.text_log,
+        sdo_timeout_ms,
+        block_initiate_timeout_ms: 1000,
+        block_subblock_timeout_ms: 500,
+        block_end_timeout_ms: 1000,
+        block_size: 64,
+        adapter_kind: config.adapter_kind,
+        dbc_paths: config
+            .dbc_files
+            .iter()
+            .filter(|e| !e.path.trim().is_empty())
+            .map(|e| std::path::PathBuf::from(e.path.trim()))
+            .collect(),
+        sse_tx,
+    })
+}

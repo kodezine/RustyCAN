@@ -11,3 +11,4 @@ pub mod gui;
 pub mod http_server;
 pub mod logger;
 pub mod session;
+pub mod tui;
