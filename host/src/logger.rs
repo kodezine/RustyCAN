@@ -5,6 +5,7 @@ use std::time::Instant;
 
 use chrono::{DateTime, Local, Utc};
 use serde_json::{json, Value};
+use tokio::sync::broadcast;
 
 use crate::canopen::nmt::{NmtCommand, NmtEvent, NmtState};
 use crate::canopen::pdo::{PdoRawValue, PdoValue};
@@ -32,6 +33,12 @@ pub struct EventLogger {
     /// log call; cleared after each [`log`][Self::log] so it is only included
     /// in the entry it belongs to.  `None` for PEAK (no hardware timestamps).
     hw_timestamp_us: Option<u32>,
+    /// Optional SSE broadcast sender for the live HTTP dashboard.
+    ///
+    /// When set via [`attach_sse`][Self::attach_sse], every serialized log line
+    /// is also broadcast to all connected browser clients.  The send is
+    /// non-blocking — lagged subscribers are silently dropped by the channel.
+    sse_tx: Option<broadcast::Sender<String>>,
 }
 
 impl EventLogger {
@@ -72,6 +79,7 @@ impl EventLogger {
             flush_interval_entries: 50,
             flush_interval_ms: 100,
             hw_timestamp_us: None,
+            sse_tx: None,
         })
     }
 
@@ -106,6 +114,7 @@ impl EventLogger {
             flush_interval_entries,
             flush_interval_ms,
             hw_timestamp_us: None,
+            sse_tx: None,
         })
     }
 
@@ -119,6 +128,15 @@ impl EventLogger {
     /// logger.set_hw_timestamp(hardware_timestamp_us);
     /// logger.log_nmt(ts, &ev, data, cob_id);
     /// ```
+    /// Attach a tokio broadcast sender so every logged line is also streamed
+    /// to the live HTTP dashboard at `http://localhost:7878/events`.
+    ///
+    /// Call this once after [`with_text_log`][Self::with_text_log] returns and
+    /// before the CAN recv thread starts producing events.
+    pub fn attach_sse(&mut self, tx: broadcast::Sender<String>) {
+        self.sse_tx = Some(tx);
+    }
+
     pub fn set_hw_timestamp(&mut self, ts: Option<u32>) {
         self.hw_timestamp_us = ts;
     }
@@ -134,6 +152,11 @@ impl EventLogger {
         }
 
         if let Ok(s) = serde_json::to_string(&entry) {
+            // Broadcast to live HTTP dashboard (non-blocking; lagged receivers dropped).
+            if let Some(tx) = &self.sse_tx {
+                let _ = tx.send(s.clone());
+            }
+
             // Write the entry (buffered)
             if writeln!(self.writer, "{s}").is_err() {
                 // Silently skip this entry if write fails

@@ -1,0 +1,254 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>RustyCAN Live Feed</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: ui-monospace, "Cascadia Code", "Fira Mono", monospace;
+      background: #1a1a1a;
+      color: #d4d4d4;
+      padding: 16px;
+      min-height: 100vh;
+    }
+
+    header {
+      display: flex;
+      align-items: baseline;
+      gap: 16px;
+      margin-bottom: 12px;
+    }
+
+    h1 { color: #cba6f7; font-size: 0.95rem; font-weight: 600; }
+
+    #badge {
+      font-size: 0.72rem;
+      padding: 2px 8px;
+      border-radius: 999px;
+      background: #1e3a2a;
+      color: #a6e3a1;
+    }
+    #badge.disconnected { background: #3a1e1e; color: #f38ba8; }
+
+    #meta {
+      font-size: 0.72rem;
+      color: #6c7086;
+      margin-bottom: 10px;
+    }
+
+    /* Stats bar */
+    #stats {
+      display: flex;
+      gap: 20px;
+      font-size: 0.72rem;
+      color: #89b4fa;
+      margin-bottom: 12px;
+      padding: 6px 10px;
+      background: #222;
+      border-radius: 6px;
+    }
+    #stats span { color: #cdd6f4; }
+
+    /* Column headers */
+    .header-row {
+      display: grid;
+      grid-template-columns: 10ch 16ch 8ch 1fr;
+      gap: 8px;
+      padding: 3px 8px;
+      font-size: 0.68rem;
+      color: #6c7086;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      border-bottom: 1px solid #333;
+      margin-bottom: 4px;
+    }
+
+    #log { display: flex; flex-direction: column; gap: 3px; }
+
+    .entry {
+      display: grid;
+      grid-template-columns: 10ch 16ch 8ch 1fr;
+      gap: 8px;
+      padding: 4px 8px;
+      border-radius: 4px;
+      font-size: 0.76rem;
+      animation: fadeIn 0.15s ease;
+    }
+
+    @keyframes fadeIn { from { opacity: 0; transform: translateY(-4px); } to { opacity: 1; } }
+
+    .ts     { color: #6c7086; }
+    .type   { font-weight: 600; }
+    .node   { color: #89b4fa; }
+    .detail { color: #cdd6f4; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+    .NMT_STATE   { background: #1e3a2a; } .NMT_STATE .type   { color: #a6e3a1; }
+    .NMT_COMMAND { background: #2a2a1e; } .NMT_COMMAND .type { color: #f9e2af; }
+    .SDO_READ    { background: #1e2a3a; } .SDO_READ .type    { color: #89dceb; }
+    .SDO_WRITE   { background: #2a1e2a; } .SDO_WRITE .type   { color: #cba6f7; }
+    .PDO         { background: #2a1e1e; } .PDO .type         { color: #f38ba8; }
+    .session     { background: #272727; } .session .type     { color: #6c7086; }
+  </style>
+</head>
+<body>
+
+<header>
+  <h1>RustyCAN · Live CAN Feed</h1>
+  <div id="badge">● SIMULATED</div>
+</header>
+
+<div id="meta">Connecting to http://localhost:7878/events &mdash; showing last 120 events</div>
+
+<div id="stats">
+  <div>NMT &nbsp;<span id="cnt-nmt">0</span></div>
+  <div>SDO &nbsp;<span id="cnt-sdo">0</span></div>
+  <div>PDO &nbsp;<span id="cnt-pdo">0</span></div>
+  <div>Total <span id="cnt-total">0</span></div>
+</div>
+
+<div class="header-row">
+  <div>Time</div><div>Type</div><div>Node</div><div>Detail</div>
+</div>
+<div id="log"></div>
+
+<script>
+// ── Counters ──────────────────────────────────────────────────────────────────
+const counts = { nmt: 0, sdo: 0, pdo: 0, total: 0 };
+
+function bumpCount(type) {
+  counts.total++;
+  if (type.startsWith('NMT')) counts.nmt++;
+  else if (type.startsWith('SDO')) counts.sdo++;
+  else if (type === 'PDO') counts.pdo++;
+  document.getElementById('cnt-nmt').textContent   = counts.nmt;
+  document.getElementById('cnt-sdo').textContent   = counts.sdo;
+  document.getElementById('cnt-pdo').textContent   = counts.pdo;
+  document.getElementById('cnt-total').textContent = counts.total;
+}
+
+// ── Dummy data — shapes match RustyCAN JSONL exactly ─────────────────────────
+const POOL = [
+  { type:"NMT_STATE",   node:1, state:"Operational",    cob_id:"0x701", raw:"05" },
+  { type:"NMT_STATE",   node:2, state:"Operational",    cob_id:"0x702", raw:"05" },
+  { type:"NMT_STATE",   node:3, state:"PreOperational", cob_id:"0x703", raw:"7F" },
+  { type:"NMT_STATE",   node:4, state:"Operational",    cob_id:"0x704", raw:"05" },
+  { type:"NMT_COMMAND", node:0, command:"StartRemoteNode",   target_node:3, cob_id:"0x000", raw:"01 03" },
+  { type:"NMT_COMMAND", node:0, command:"EnterPreOperational", target_node:2, cob_id:"0x000", raw:"80 02" },
+  { type:"SDO_READ",    node:1, index:"0x1000", subindex:"0x00", name:"Device Type",            value:"0x00000402" },
+  { type:"SDO_READ",    node:2, index:"0x1008", subindex:"0x00", name:"Device Name",            value:'"MotorDrive_v2"' },
+  { type:"SDO_READ",    node:3, index:"0x6064", subindex:"0x00", name:"Position Actual Value",  value:14928 },
+  { type:"SDO_READ",    node:1, index:"0x1017", subindex:"0x00", name:"Producer Heartbeat Time",value:100 },
+  { type:"SDO_WRITE",   node:3, index:"0x6040", subindex:"0x00", name:"Controlword",            value:"0x000F" },
+  { type:"SDO_WRITE",   node:2, index:"0x6081", subindex:"0x00", name:"Profile Velocity",       value:3000 },
+  {
+    type:"PDO", node:1, cob_id:"0x181",
+    signals:[{name:"ActualVelocity",value:1234.5,unit:"rpm"},{name:"ActualTorque",value:12.3,unit:"Nm"}]
+  },
+  {
+    type:"PDO", node:2, cob_id:"0x182",
+    signals:[{name:"BusVoltage",value:48.2,unit:"V"},{name:"MotorTemp",value:62.1,unit:"°C"}]
+  },
+  {
+    type:"PDO", node:3, cob_id:"0x183",
+    signals:[{name:"StatusWord",value:39,unit:""},{name:"ModeDisplay",value:1,unit:""}]
+  },
+  {
+    type:"PDO", node:4, cob_id:"0x184",
+    signals:[{name:"ActualCurrent",value:4.7,unit:"A"},{name:"DigitalInputs",value:0b00001101,unit:""}]
+  },
+];
+
+// ── Helpers ───────────────────────────────────────────────────────────────────
+function pad(n, w=2) { return String(n).padStart(w, '0'); }
+
+function nowTs() {
+  const d = new Date();
+  return `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}.${pad(d.getMilliseconds(),3)}`;
+}
+
+function formatDetail(ev) {
+  switch (ev.type) {
+    case 'session_start':
+      return `adapter=${ev.adapter}  baud=${ev.baud}`;
+    case 'NMT_STATE':
+      return `state=${ev.state}  cob_id=${ev.cob_id}  raw=[${ev.raw}]`;
+    case 'NMT_COMMAND':
+      return `cmd=${ev.command} → node ${ev.target_node}  cob_id=${ev.cob_id}  raw=[${ev.raw}]`;
+    case 'SDO_READ':
+    case 'SDO_WRITE':
+      return `${ev.index}/${ev.subindex}  ${ev.name}  =  ${ev.value}`;
+    case 'PDO':
+      return ev.signals.map(s => `${s.name}=${s.value}${s.unit ? '\u202f'+s.unit : ''}`).join('   ');
+    default:
+      return '';
+  }
+}
+
+function cssClass(type) {
+  if (type === 'session_start') return 'session';
+  if (type === 'NMT_STATE')    return 'NMT_STATE';
+  if (type === 'NMT_COMMAND')  return 'NMT_COMMAND';
+  if (type === 'SDO_READ')     return 'SDO_READ';
+  if (type === 'SDO_WRITE')    return 'SDO_WRITE';
+  if (type === 'PDO')          return 'PDO';
+  return '';
+}
+
+const MAX_ROWS = 120;
+
+function pushEvent(ev) {
+  bumpCount(ev.type);
+
+  const log = document.getElementById('log');
+  const row = document.createElement('div');
+  row.className = `entry ${cssClass(ev.type)}`;
+
+  const nodeLabel = (ev.node !== undefined && ev.node !== null) ? `node ${ev.node}` : '—';
+
+  row.innerHTML =
+    `<span class="ts">${nowTs()}</span>` +
+    `<span class="type">${ev.type}</span>` +
+    `<span class="node">${nodeLabel}</span>` +
+    `<span class="detail" title="${formatDetail(ev).replace(/"/g,'&quot;')}">${formatDetail(ev)}</span>`;
+
+  log.prepend(row);
+  while (log.children.length > MAX_ROWS) log.removeChild(log.lastChild);
+}
+
+// ── Simulation (replace with EventSource block below when server is live) ─────
+pushEvent({ type:"session_start", node:null, adapter:"KCAN-USB", baud:500000 });
+
+let poolIdx = 0;
+setInterval(() => {
+  poolIdx = (poolIdx + 1) % POOL.length;
+  const ev = structuredClone(POOL[poolIdx]);
+
+  // Drift PDO values slightly so they look live
+  if (ev.type === 'PDO' && ev.signals) {
+    ev.signals = ev.signals.map(s => ({
+      ...s,
+      value: typeof s.value === 'number'
+        ? Math.round((s.value + (Math.random() - 0.5) * s.value * 0.02) * 10) / 10
+        : s.value
+    }));
+  }
+
+  pushEvent(ev);
+}, 350);
+
+// ── Real EventSource (uncomment when RustyCAN HTTP server is running) ─────────
+// const es = new EventSource("http://localhost:7878/events");
+// es.onmessage = e => pushEvent(JSON.parse(e.data));
+// es.onopen    = () => {
+//   document.getElementById('badge').textContent = '● CONNECTED';
+//   document.getElementById('badge').classList.remove('disconnected');
+// };
+// es.onerror   = () => {
+//   document.getElementById('badge').textContent = '● DISCONNECTED';
+//   document.getElementById('badge').classList.add('disconnected');
+// };
+</script>
+</body>
+</html>
