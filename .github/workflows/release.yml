@@ -46,11 +46,6 @@ jobs:
         if: matrix.os == 'windows-latest'
         run: cargo check -p rustycan
 
-      # macOS: regenerate .icns from source PNGs to ensure CI always has a fresh copy
-      - name: Generate .icns (macOS)
-        if: matrix.os == 'macos-latest'
-        run: iconutil -c icns host/assets/RustyCAN.iconset -o host/assets/RustyCAN.icns
-
       # Linux: install AppImage / deb packaging tools needed by cargo-packager
       - name: Install Linux packaging deps
         if: matrix.os == 'ubuntu-22.04'
