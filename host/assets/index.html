@@ -86,14 +86,21 @@
       z-index: 100;
     }
 
-    .logo {
+    .logo img {
+      width: 32px;
+      height: 32px;
+      border-radius: 6px;
+      display: block;
+    }
+
+    .logo-title {
       font-size: 0.9rem;
       font-weight: 600;
       color: var(--text);
       letter-spacing: -0.01em;
     }
 
-    .logo span { color: var(--accent); }
+    .logo-title span { color: var(--accent); }
 
     .divider { width: 1px; height: 20px; background: var(--border); }
 
@@ -360,7 +367,10 @@
 
 <!-- ── Header ────────────────────────────────────────────────────────────── -->
 <header>
-  <div class="logo">Rusty<span>CAN</span></div>
+  <div class="logo">
+    <img src="/logo.png" alt="RustyCAN" title="RustyCAN" />
+  </div>
+  <div class="logo-title">Rusty<span>CAN</span></div>
   <div class="divider"></div>
   <div class="conn-badge">
     <div class="conn-dot" id="conn-dot"></div>

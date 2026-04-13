@@ -13,8 +13,9 @@
 //!
 //! | Path       | Description                                              |
 //! |------------|----------------------------------------------------------|
-//! | `GET /`    | Serves the embedded dashboard HTML page                  |
-//! | `GET /events` | SSE stream — one JSONL event per `data:` message      |
+//! | `GET /`          | Serves the embedded dashboard HTML page               |
+//! | `GET /logo.png`  | Serves the embedded app icon (256 × 256 PNG)          |
+//! | `GET /events`    | SSE stream — one JSONL event per `data:` message      |
 //!
 //! The server binds exclusively to `127.0.0.1` so it is never reachable
 //! from outside the local machine.  HTTPS is unnecessary on loopback.
@@ -35,6 +36,9 @@ use tokio_stream::StreamExt as _;
 
 /// The dashboard HTML page, compiled into the binary at build time.
 const INDEX_HTML: &str = include_str!("../assets/index.html");
+
+/// The app icon PNG, served at `/logo.png` for the browser dashboard.
+const LOGO_PNG: &[u8] = include_bytes!("../assets/RustyCAN.iconset/icon_256x256.png");
 
 // ─── Broadcast channel capacity ───────────────────────────────────────────────
 
@@ -83,6 +87,7 @@ impl SseServer {
 
                     let app = Router::new()
                         .route("/", get(serve_index))
+                        .route("/logo.png", get(serve_logo))
                         .route("/events", get(move || sse_handler(tx_clone.clone())));
 
                     match tokio::net::TcpListener::bind(addr).await {
@@ -112,6 +117,11 @@ async fn serve_index() -> impl IntoResponse {
         [(header::CONTENT_TYPE, "text/html; charset=utf-8")],
         Html(INDEX_HTML),
     )
+}
+
+/// Serve the embedded app icon with correct `Content-Type`.
+async fn serve_logo() -> impl IntoResponse {
+    ([(header::CONTENT_TYPE, "image/png")], LOGO_PNG)
 }
 
 /// SSE handler — subscribes a new client to the broadcast channel and streams
