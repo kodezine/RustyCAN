@@ -215,6 +215,8 @@ button to manually return to the Connect screen when needed.
 - **Disconnect button** — red button with warning icon (⚠️) to return to Connect screen
   - Tooltip: "Return to configuration screen"
   - Preserves form state (no data loss)
+- **Globe icon (🌐)** — hyperlink that opens the live browser dashboard (`http://localhost:7878/`) in a new browser tab; blue while monitoring
+- **Chart icon (📈)** — toggles the native plot window; grey when closed, blue when open
 
 ### Footer Status Bar
 

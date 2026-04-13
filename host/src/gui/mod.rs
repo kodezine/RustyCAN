@@ -84,6 +84,8 @@ use crate::eds;
 use crate::http_server::SseServer;
 use crate::session::{self, CanCommand, SessionConfig};
 
+mod plot_view;
+
 // ─── Icon glyphs (Font Awesome codepoints present in MesloLGS NF) ────────────
 mod icons {
     // App / toolbar
@@ -125,6 +127,7 @@ mod icons {
     pub const ERROR: &str = "\u{f06a}"; // exclamation-circle
     pub const INFO: &str = "\u{f05a}"; // info-circle
     pub const DASHBOARD: &str = "\u{f0ac}"; // globe
+    pub const PLOT: &str = "\u{f201}"; // line-chart
 }
 
 /// Fixed width for every NMT action column — sized so the widest header ("Pre-Op") fits.
@@ -640,6 +643,8 @@ impl ConnectForm {
             node_labels: node_labels_clone,
             node_ods,
             sdo_browser: SdoBrowserPanel::default(),
+            plot_state: plot_view::PlotState::default(),
+            plot_open: false,
         })
     }
 }
@@ -1582,6 +1587,10 @@ struct MonitorView {
     node_ods: std::collections::HashMap<u8, crate::eds::types::ObjectDictionary>,
     /// State for the SDO Browser panel.
     sdo_browser: SdoBrowserPanel,
+    /// All plot-related state (ring buffers, chart configs).
+    plot_state: plot_view::PlotState,
+    /// Whether the plot window is currently open.
+    plot_open: bool,
 }
 
 /// Smart truncation of file paths for display.
@@ -1772,7 +1781,14 @@ fn render_monitor(
                 adapter_error = Some(e);
                 break;
             }
-            Ok(ev) => apply_event(&mut view.state, ev),
+            Ok(ev) => {
+                let t_secs = SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_secs_f64();
+                view.plot_state.feed_event(&ev, t_secs);
+                apply_event(&mut view.state, ev);
+            }
             Err(mpsc::TryRecvError::Empty) => break,
             Err(mpsc::TryRecvError::Disconnected) => {
                 view.disconnected = true;
@@ -1844,6 +1860,29 @@ fn render_monitor(
                     .open_in_new_tab(true),
                 )
                 .on_hover_text(format!("Open live dashboard at {}", url));
+
+                // Plot window toggle button
+                ui.separator();
+                if ui
+                    .add(
+                        egui::Button::new(egui::RichText::new(icons::PLOT).size(22.0).color(
+                            if view.plot_open {
+                                Color32::from_rgb(60, 160, 220)
+                            } else {
+                                Color32::from_gray(140)
+                            },
+                        ))
+                        .frame(false),
+                    )
+                    .on_hover_text(if view.plot_open {
+                        "Close plot window"
+                    } else {
+                        "Open plot window"
+                    })
+                    .clicked()
+                {
+                    view.plot_open = !view.plot_open;
+                }
             });
         });
     });
@@ -1942,6 +1981,22 @@ fn render_monitor(
         let mut form = std::mem::take(&mut view.form);
         form.error = None;
         return Some(Screen::Connect(form));
+    }
+
+    // ── Plot window (second OS window, immediate viewport) ────────────────
+    if view.plot_open {
+        let vp_id = egui::ViewportId(egui::Id::new("rustycan_plots"));
+        let builder = egui::ViewportBuilder::default()
+            .with_title("RustyCAN – Plots")
+            .with_inner_size(egui::vec2(1020.0, 660.0));
+        let plot_state = &mut view.plot_state;
+        let plot_open = &mut view.plot_open;
+        ctx.show_viewport_immediate(vp_id, builder, |ctx, class| {
+            if ctx.input(|i| i.viewport().close_requested()) {
+                *plot_open = false;
+            }
+            plot_view::render(ctx, class, plot_state);
+        });
     }
 
     None
