@@ -24,7 +24,8 @@
 | 📶 **Bus load bar** | 20-block colour-coded bar in the status strip: blue ≤30 %, yellow 30–70 %, red >70 % |
 | 🎞️ **Frame rate** | Rolling fps counter (2 s window) shown alongside total frame count |
 | 📝 **JSONL logging** | Every event (received and sent) appended to a newline-delimited JSON file |
-| 🌐 **Live browser dashboard** | HTTP server on `http://localhost:7878/`; streams events via SSE; NMT node grid + colour-coded log; auto-reconnects; works in any browser |
+| 🌐 **Live browser dashboard** | HTTP server on `http://localhost:7878/`; streams events via SSE; NMT node grid + colour-coded log; auto-reconnects; works in any browser; globe icon in toolbar opens it in one click |
+| 📈 **Native plot window** | Second OS window with 8 chart pages; assign any PDO or DBC signal via the picker sidebar; rolling time window (10 s / 30 s / 1 min / 5 min); horizontal threshold lines; built on `egui_plot` — no browser needed |
 
 ## ✅ Feature Status
 
@@ -47,6 +48,7 @@
 | Multi-node EDS mapping | ✅ |
 | JSONL logging (received + sent) | ✅ |
 | Live HTTP dashboard (SSE, port 7878) | ✅ |
+| Native plot window (egui_plot, 8 charts) | ✅ |
 | SDO segmented transfers | ✅ |
 | SDO block transfers | ✅ |
 | KCAN Phase 3: STM32H563 HW encryption | planned |
