@@ -124,6 +124,7 @@ mod icons {
     pub const WARN: &str = "\u{f071}"; // exclamation-triangle
     pub const ERROR: &str = "\u{f06a}"; // exclamation-circle
     pub const INFO: &str = "\u{f05a}"; // info-circle
+    pub const DASHBOARD: &str = "\u{f0ac}"; // globe
 }
 
 /// Fixed width for every NMT action column — sized so the widest header ("Pre-Op") fits.
@@ -155,6 +156,7 @@ pub struct RustyCanApp {
     screen: Screen,
     logo: egui::TextureHandle,
     sse_server: SseServer,
+    http_port: u16,
 }
 
 #[allow(clippy::large_enum_variant)]
@@ -209,6 +211,7 @@ impl RustyCanApp {
             screen,
             logo,
             sse_server,
+            http_port,
         }
     }
 }
@@ -221,12 +224,18 @@ impl eframe::App for RustyCanApp {
 
         match &mut self.screen {
             Screen::Connect(form) => {
-                if let Some(s) = render_connect(ctx, form, &self.logo, self.sse_server.tx.clone()) {
+                if let Some(s) = render_connect(
+                    ctx,
+                    form,
+                    &self.logo,
+                    self.sse_server.tx.clone(),
+                    self.http_port,
+                ) {
                     next_screen = Some(s);
                 }
             }
             Screen::Monitor(view) => {
-                if let Some(s) = render_monitor(ctx, view.as_mut(), &self.logo) {
+                if let Some(s) = render_monitor(ctx, view.as_mut(), &self.logo, self.http_port) {
                     next_screen = Some(s);
                 }
             }
@@ -689,6 +698,7 @@ fn render_connect(
     form: &mut ConnectForm,
     logo: &egui::TextureHandle,
     sse_tx: tokio::sync::broadcast::Sender<String>,
+    http_port: u16,
 ) -> Option<Screen> {
     // ── Dongle probe cycle ────────────────────────────────────────────────────
     // 1. Drain any pending probe result.
@@ -763,8 +773,9 @@ fn render_connect(
                 ui.label(egui::RichText::new("Not detected").color(Color32::from_rgb(200, 60, 60)));
             }
 
-            // Right side: Connect button (green, mirrors Disconnect button style)
+            // Right side: dashboard link (greyed) + Connect button
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                // Connect button
                 let has_dupes = !form.warnings.is_empty();
                 let can_connect = form.dongle_connected && !has_dupes;
                 let resp = ui.add_enabled(
@@ -787,6 +798,20 @@ fn render_connect(
                         Err(e) => form.error = Some(e),
                     }
                 }
+
+                // Dashboard link — greyed out; not live until monitoring starts
+                ui.separator();
+                let url = format!("http://127.0.0.1:{}/", http_port);
+                ui.add(
+                    egui::Hyperlink::from_label_and_url(
+                        egui::RichText::new(icons::DASHBOARD)
+                            .size(22.0)
+                            .color(Color32::from_gray(90)),
+                        &url,
+                    )
+                    .open_in_new_tab(true),
+                )
+                .on_hover_text("Live dashboard is available once monitoring starts");
             });
         });
     });
@@ -1737,6 +1762,7 @@ fn render_monitor(
     ctx: &egui::Context,
     view: &mut MonitorView,
     logo: &egui::TextureHandle,
+    http_port: u16,
 ) -> Option<Screen> {
     // Drain all pending CAN events; intercept AdapterError before rendering.
     let mut adapter_error: Option<String> = None;
@@ -1804,6 +1830,20 @@ fn render_monitor(
                 {
                     disconnect_clicked = true;
                 }
+
+                // Dashboard link — active (full colour) while monitoring
+                ui.separator();
+                let url = format!("http://127.0.0.1:{}/", http_port);
+                ui.add(
+                    egui::Hyperlink::from_label_and_url(
+                        egui::RichText::new(icons::DASHBOARD)
+                            .size(22.0)
+                            .color(Color32::from_rgb(60, 160, 220)),
+                        &url,
+                    )
+                    .open_in_new_tab(true),
+                )
+                .on_hover_text(format!("Open live dashboard at {}", url));
             });
         });
     });
