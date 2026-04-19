@@ -75,6 +75,9 @@ Comprehensive documentation is organized in the [`.readme/`](.readme/) directory
 - [Logging Performance](.readme/logging-performance.md) — High-traffic optimization
 - [Testing](.readme/testing.md) — Running tests & verification
 
+### Tools
+- [bbd — BinaryBlockDownload](.readme/bbd.md) — CANopen firmware update CLI tool (PEAK & KCAN, developer build only)
+
 ## 💡 30-Second Demo
 
 1. Launch RustyCAN

@@ -8,6 +8,12 @@ description = "CANopen viewer: log and analyze SDO/PDO/NMT events from multiple 
 name = "rustycan"
 path = "src/main.rs"
 
+# BinaryBlockDownload tool — built alongside rustycan but not included in
+# packaged releases (see binaries = ["rustycan"] in [package.metadata.packager]).
+[[bin]]
+name = "bbd"
+path = "src/bin/bbd/main.rs"
+
 [dependencies]
 # host-can: pcan feature not enabled here — see target-specific sections below.
 embedded-can = "0.4"
@@ -63,6 +69,8 @@ authors      = ["Kodezine"]
 license-file = "../LICENSE"
 copyright    = "Copyright (c) Kodezine"
 category     = "Utility"
+# Only the main GUI binary is shipped — bbd is built but not packaged.
+binaries     = ["rustycan"]
 icons        = [
   "assets/RustyCAN.icns",
   "assets/RustyCAN.ico",
