@@ -205,17 +205,17 @@ impl PlotState {
 
 /// Entry point called from `ctx.show_viewport_immediate`.
 ///
-/// Handles the `ViewportClass::Embedded` fallback (when the egui backend does
-/// not support multiple OS windows) by wrapping content in an `egui::Window`.
-pub fn render(ctx: &egui::Context, class: egui::ViewportClass, state: &mut PlotState) {
+/// Handles the `ViewportClass::EmbeddedWindow` fallback (when the egui backend
+/// does not support multiple OS windows) by wrapping content in an `egui::Window`.
+pub fn render(ui: &mut egui::Ui, class: egui::ViewportClass, state: &mut PlotState) {
     match class {
-        egui::ViewportClass::Embedded => {
+        egui::ViewportClass::EmbeddedWindow => {
             egui::Window::new("Plots")
                 .resizable(true)
-                .show(ctx, |ui| render_inner(ui, state));
+                .show(ui.ctx(), |ui| render_inner(ui, state));
         }
         _ => {
-            egui::CentralPanel::default().show(ctx, |ui| render_inner(ui, state));
+            egui::CentralPanel::default().show_inside(ui, |ui| render_inner(ui, state));
         }
     }
 }
@@ -278,9 +278,9 @@ fn render_inner(ui: &mut egui::Ui, state: &mut PlotState) {
     // ── Split: chart + optional picker sidebar ────────────────────────────
     if state.picker_open {
         // Borrow disjointly: chart from charts, picker from registry.
-        egui::SidePanel::right("signal_picker")
+        egui::Panel::right("signal_picker")
             .resizable(true)
-            .default_width(220.0)
+            .default_size(220.0)
             .show_inside(ui, |ui| {
                 render_picker(ui, &mut state.charts[state.active_chart], &state.registry);
             });
@@ -343,11 +343,11 @@ fn render_chart(
                 format!("{} [{}]", key.label(), hist.unit)
             };
 
-            plot_ui.line(Line::new(PlotPoints::new(pts)).name(name));
+            plot_ui.line(Line::new(name, PlotPoints::new(pts)));
         }
 
         for &thr in &chart.thresholds {
-            plot_ui.hline(HLine::new(thr));
+            plot_ui.hline(HLine::new(format!("threshold {thr:.3}"), thr));
         }
     });
 }

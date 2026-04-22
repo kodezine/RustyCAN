@@ -220,15 +220,15 @@ impl RustyCanApp {
 }
 
 impl eframe::App for RustyCanApp {
-    fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
-        ctx.request_repaint();
+    fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+        ui.ctx().request_repaint();
 
         let mut next_screen: Option<Screen> = None;
 
         match &mut self.screen {
             Screen::Connect(form) => {
                 if let Some(s) = render_connect(
-                    ctx,
+                    ui,
                     form,
                     &self.logo,
                     self.sse_server.tx.clone(),
@@ -238,7 +238,7 @@ impl eframe::App for RustyCanApp {
                 }
             }
             Screen::Monitor(view) => {
-                if let Some(s) = render_monitor(ctx, view.as_mut(), &self.logo, self.http_port) {
+                if let Some(s) = render_monitor(ui, view.as_mut(), &self.logo, self.http_port) {
                     next_screen = Some(s);
                 }
             }
@@ -699,7 +699,7 @@ fn try_fallback_adapter(form: &mut ConnectForm) -> bool {
 }
 
 fn render_connect(
-    ctx: &egui::Context,
+    ui: &mut egui::Ui,
     form: &mut ConnectForm,
     logo: &egui::TextureHandle,
     sse_tx: tokio::sync::broadcast::Sender<String>,
@@ -748,7 +748,7 @@ fn render_connect(
     const CONNECT_CONTENT_H: f32 = 500.0;
 
     // ── Top toolbar (consistent with Monitor screen) ──────────────────────
-    egui::TopBottomPanel::top("connect_toolbar").show(ctx, |ui| {
+    egui::Panel::top("connect_toolbar").show_inside(ui, |ui| {
         ui.horizontal(|ui| {
             // Logo and title spanning two lines
             ui.add(
@@ -822,7 +822,7 @@ fn render_connect(
     });
 
     // ── Bottom status bar (greyed-out, for visual symmetry with Monitor screen) ──
-    egui::TopBottomPanel::bottom("status_bar").show(ctx, |ui| {
+    egui::Panel::bottom("status_bar").show_inside(ui, |ui| {
         ui.vertical(|ui| {
             // Line 1: Greyed-out Bus Load and FPS
             ui.horizontal(|ui| {
@@ -863,7 +863,7 @@ fn render_connect(
         });
     });
 
-    egui::CentralPanel::default().show(ctx, |ui| {
+    egui::CentralPanel::default().show_inside(ui, |ui| {
         egui::ScrollArea::vertical().show(ui, |ui| {
             let top_pad = ((ui.available_height() - CONNECT_CONTENT_H) / 2.0).max(20.0);
             ui.vertical_centered(|ui| {
@@ -1602,7 +1602,7 @@ fn truncate_path_smart(full_path: &str, ui: &egui::Ui, available_width: f32) -> 
 
     // Measure full path width
     let font_id = egui::TextStyle::Body.resolve(ui.style());
-    let full_width = ui.fonts(|f| {
+    let full_width = ui.ctx().fonts_mut(|f| {
         f.layout_no_wrap(full_path.to_string(), font_id.clone(), egui::Color32::WHITE)
             .rect
             .width()
@@ -1623,7 +1623,7 @@ fn truncate_path_smart(full_path: &str, ui: &egui::Ui, available_width: f32) -> 
     // Reserve space for ellipsis and filename
     let ellipsis = "...";
     let suffix = format!("{}{}", ellipsis, filename);
-    let suffix_width = ui.fonts(|f| {
+    let suffix_width = ui.ctx().fonts_mut(|f| {
         f.layout_no_wrap(suffix.clone(), font_id.clone(), egui::Color32::WHITE)
             .rect
             .width()
@@ -1650,7 +1650,7 @@ fn truncate_path_smart(full_path: &str, ui: &egui::Ui, available_width: f32) -> 
         let mid = (left + right) / 2;
         let prefix = &parent[..mid];
         let candidate = format!("{}{}{}", prefix, ellipsis, filename);
-        let candidate_width = ui.fonts(|f| {
+        let candidate_width = ui.ctx().fonts_mut(|f| {
             f.layout_no_wrap(candidate.clone(), font_id.clone(), egui::Color32::WHITE)
                 .rect
                 .width()
@@ -1768,7 +1768,7 @@ fn bus_load_bar(ui: &mut egui::Ui, load: f64) {
 }
 
 fn render_monitor(
-    ctx: &egui::Context,
+    ui: &mut egui::Ui,
     view: &mut MonitorView,
     logo: &egui::TextureHandle,
     http_port: u16,
@@ -1800,7 +1800,7 @@ fn render_monitor(
     let mut disconnect_clicked = false;
 
     // ── Top toolbar ───────────────────────────────────────────────────────
-    egui::TopBottomPanel::top("toolbar").show(ctx, |ui| {
+    egui::Panel::top("toolbar").show_inside(ui, |ui| {
         ui.horizontal(|ui| {
             // Logo and title spanning two lines
             ui.add(
@@ -1888,7 +1888,7 @@ fn render_monitor(
     });
 
     // ── Bottom status bar ─────────────────────────────────────────────────
-    egui::TopBottomPanel::bottom("status_bar").show(ctx, |ui| {
+    egui::Panel::bottom("status_bar").show_inside(ui, |ui| {
         ui.vertical(|ui| {
             // Line 1: Bus Load and FPS
             ui.horizontal(|ui| {
@@ -1942,7 +1942,7 @@ fn render_monitor(
     });
 
     // ── Central panel ─────────────────────────────────────────────────────
-    egui::CentralPanel::default().show(ctx, |ui| {
+    egui::CentralPanel::default().show_inside(ui, |ui| {
         egui::ScrollArea::vertical().show(ui, |ui| {
             nmt_section(
                 ui,
@@ -1991,11 +1991,12 @@ fn render_monitor(
             .with_inner_size(egui::vec2(1020.0, 660.0));
         let plot_state = &mut view.plot_state;
         let plot_open = &mut view.plot_open;
-        ctx.show_viewport_immediate(vp_id, builder, |ctx, class| {
-            if ctx.input(|i| i.viewport().close_requested()) {
+        let ctx = ui.ctx().clone();
+        ctx.show_viewport_immediate(vp_id, builder, |ui, class| {
+            if ui.ctx().input(|i| i.viewport().close_requested()) {
                 *plot_open = false;
             }
-            plot_view::render(ctx, class, plot_state);
+            plot_view::render(ui, class, plot_state);
         });
     }
 
@@ -2778,7 +2779,7 @@ fn sdo_browser_section(
                                             let sub_response = ui
                                                 .add_sized(
                                                     [sub_width, 0.0],
-                                                    egui::SelectableLabel::new(
+                                                    egui::Button::selectable(
                                                         is_selected,
                                                         row_text(&format!("{}", sub)),
                                                     ),
@@ -2790,7 +2791,7 @@ fn sdo_browser_section(
 
                                             let name_response = ui.add_sized(
                                                 [name_width, 0.0],
-                                                egui::SelectableLabel::new(
+                                                egui::Button::selectable(
                                                     is_selected,
                                                     row_text(entry.name.as_str()),
                                                 ),
@@ -2798,7 +2799,7 @@ fn sdo_browser_section(
 
                                             let type_response = ui.add_sized(
                                                 [type_width, 0.0],
-                                                egui::SelectableLabel::new(
+                                                egui::Button::selectable(
                                                     is_selected,
                                                     row_text(
                                                         &format!("{:?}", entry.data_type)
@@ -2821,7 +2822,7 @@ fn sdo_browser_section(
                                             };
                                             let access_response = ui.add_sized(
                                                 [access_width, 0.0],
-                                                egui::SelectableLabel::new(
+                                                egui::Button::selectable(
                                                     is_selected,
                                                     egui::RichText::new(acc_str).color(acc_color),
                                                 ),
@@ -3158,7 +3159,7 @@ pub fn run(config_path: Option<std::path::PathBuf>, http_port: u16) -> Result<()
             cc.egui_ctx.set_fonts(fonts);
 
             // ── Bump text sizes ───────────────────────────────────────────
-            cc.egui_ctx.style_mut(|s| {
+            cc.egui_ctx.global_style_mut(|s| {
                 use egui::{FontId, TextStyle};
                 s.text_styles.insert(
                     TextStyle::Body,
