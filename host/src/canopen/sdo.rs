@@ -216,6 +216,17 @@ pub fn encode_upload_request(index: u16, subindex: u8) -> [u8; 8] {
     [0x40, idx_lo, idx_hi, subindex, 0, 0, 0, 0]
 }
 
+/// Build an SDO abort transfer frame (CS = 0x80).
+///
+/// Sending this resets the SDO server's state machine on the node, clearing
+/// any in-progress transfer. Use `abort_code = 0x0504_0000` ("SDO protocol
+/// timed out") to cleanly abort a stale transfer left from a previous session.
+pub fn encode_abort(index: u16, subindex: u8, abort_code: u32) -> [u8; 8] {
+    let [idx_lo, idx_hi] = index.to_le_bytes();
+    let [ab0, ab1, ab2, ab3] = abort_code.to_le_bytes();
+    [0x80, idx_lo, idx_hi, subindex, ab0, ab1, ab2, ab3]
+}
+
 /// Build an expedited SDO download initiate (master writes ≤4 bytes to node).
 /// Returns `None` if `data` is longer than 4 bytes.
 /// COB-ID: 0x600 + node_id.

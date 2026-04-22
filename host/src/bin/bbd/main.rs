@@ -12,6 +12,7 @@ mod file;
 mod sdo_client;
 mod state_machine;
 
+use std::io::{self, Write};
 use std::path::PathBuf;
 use std::process;
 use std::time::Duration;
@@ -21,7 +22,7 @@ use clap::{ArgGroup, Parser};
 use rustycan::adapters::{open_adapter, AdapterKind};
 
 use sdo_client::{SdoClient, SdoClientConfig, SdocType};
-use state_machine::{run_firmware_download, ActionType, DownloadConfig, Progress};
+use state_machine::{run_firmware_download, ActionType, DownloadConfig, DownloadSummary, Progress};
 
 // ─── Version string ───────────────────────────────────────────────────────────
 
@@ -168,6 +169,54 @@ fn parse_u32_auto(s: &str) -> Result<u32, String> {
     }
 }
 
+/// Format a bootloader version from 0x1018/5 (0xXXYYZZDD) as `XX.YY.ZZ.DD`.
+fn fmt_bl_version(v: u32) -> String {
+    format!(
+        "{}.{}.{}.{}",
+        (v >> 24) & 0xFF,
+        (v >> 16) & 0xFF,
+        (v >> 8) & 0xFF,
+        v & 0xFF
+    )
+}
+
+/// Print a download summary table.
+fn print_summary(summary: &DownloadSummary) {
+    println!("--------------------------------------------------------------------");
+    println!("Download Summary");
+    println!("--------------------------------------------------------------------");
+    let bl = summary
+        .bootloader_version
+        .map(fmt_bl_version)
+        .unwrap_or_else(|| "N/A".to_string());
+    println!("  Bootloader version : {bl}");
+    let before = summary.app_version_before.as_deref().unwrap_or("unknown");
+    let after = summary.app_version_after.as_deref().unwrap_or("unknown");
+    println!("  Application (old)  : {before}");
+    println!("  Application (new)  : {after}");
+    println!("  Blocks written     : {}", summary.blocks_written);
+    println!("--------------------------------------------------------------------");
+}
+
+/// Render an in-place terminal progress bar.
+///
+/// Uses `\r` to overwrite the current line. Call with `done = true` on the
+/// last update to emit a final newline.
+fn print_progress_bar(bytes_done: u64, total_bytes: u64, done: bool) {
+    const BAR_WIDTH: usize = 36;
+    let pct = (bytes_done * 100)
+        .checked_div(total_bytes)
+        .unwrap_or(0)
+        .min(100);
+    let filled = (pct as usize * BAR_WIDTH) / 100;
+    let bar: String = "█".repeat(filled) + &"░".repeat(BAR_WIDTH - filled);
+    print!("\r[BBD] [{bar}] {pct:>3}%  {bytes_done:>7} / {total_bytes} bytes  ");
+    if done {
+        println!();
+    }
+    let _ = io::stdout().flush();
+}
+
 // ─── Entry point ─────────────────────────────────────────────────────────────
 
 fn main() {
@@ -301,36 +350,47 @@ fn main() {
     };
 
     // ── Progress callback ─────────────────────────────────────────────────────
-    let mut total_blocks_done = 0u32;
+    let mut total_bytes_for_bar: u64 = 0;
+    let mut bar_finalized = false;
     let mut progress_cb = |p: Progress| match p {
         Progress::State(s) => println!("[BBD] State: {s}"),
+        Progress::CheckBootloader {
+            already_in_bootloader,
+        } => {
+            let status = if already_in_bootloader {
+                "bootloader"
+            } else {
+                "application"
+            };
+            println!("[BBD] State: CheckBootloader ({status} running)");
+        }
         Progress::BlockDownloaded {
-            block_num,
             bytes_done,
             total_bytes,
         } => {
-            total_blocks_done += 1;
-            let pct = (bytes_done * 100)
-                .checked_div(total_bytes)
-                .unwrap_or(0)
-                .min(100);
-            println!(
-                "[BBD] Block {:>4} downloaded  ({} %)  [{} / {} bytes]",
-                block_num, pct, bytes_done, total_bytes
-            );
+            total_bytes_for_bar = total_bytes;
+            let done = bytes_done >= total_bytes;
+            print_progress_bar(bytes_done, total_bytes, done);
+            if done {
+                bar_finalized = true;
+            }
         }
-        Progress::Percent(p) => println!("[BBD] Progress: {p} %"),
     };
 
     // ── Run state machine ─────────────────────────────────────────────────────
     match run_firmware_download(&mut client, &dl_cfg, &cli.input_file, &mut progress_cb) {
-        Ok(()) => {
-            println!("--------------------------------------------------------------------");
-            println!("Firmware download SUCCESSFUL ({total_blocks_done} block(s) written).");
+        Ok(summary) => {
+            // Only close the bar if the last event didn't already do so.
+            if total_bytes_for_bar > 0 && !bar_finalized {
+                print_progress_bar(total_bytes_for_bar, total_bytes_for_bar, true);
+            }
+            print_summary(&summary);
+            println!("Firmware download SUCCESSFUL.");
             println!("--------------------------------------------------------------------");
             process::exit(0);
         }
         Err(e) => {
+            eprintln!();
             eprintln!("--------------------------------------------------------------------");
             eprintln!("Firmware download FAILED: {e}");
             eprintln!("--------------------------------------------------------------------");

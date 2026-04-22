@@ -6,9 +6,9 @@
 //! CheckBootloader → (StartBootloader →) CheckVendorId → CheckProductCode
 //!   → Clear → WaitClear → Download(loop) → FirstStartApp
 //!   → DelayCheckApp → CheckAppWorks
-//!     → (success) → done
-//!     → (still bootloader) → RestartBootloader → SetSignature
-//!       → WaitSetSignature → FinalStartApp → FinalCheckApp → done
+//!     → (still bootloader) → error: image broken, no signature written
+//!     → (app running)  → RestartBootloader → CheckReenterBootloader
+//!       → SetSignature → WaitSetSignature → FinalStartApp → FinalCheckApp → done
 
 use std::path::Path;
 use std::thread;
@@ -24,22 +24,29 @@ const OBJ_VENDOR_ID: u16 = 0x1018;
 const SUB_VENDOR_ID: u8 = 0x01;
 const OBJ_PRODUCT_CODE: u16 = 0x1018;
 const SUB_PRODUCT_CODE: u8 = 0x02;
+/// Bootloader version: 0x1018 subindex 5, UNSIGNED32, format 0xXXYYZZDD.
+const OBJ_BL_VERSION: u16 = 0x1018;
+const SUB_BL_VERSION: u8 = 0x05;
+/// Application software version: 0x100A, visible string, app only.
+const OBJ_APP_VERSION: u16 = 0x100A;
 const OBJ_PROGRAM_DATA: u16 = 0x1F50;
 const OBJ_PROGRAM_CONTROL: u16 = 0x1F51;
 const OBJ_FLASH_STATUS: u16 = 0x1F57;
 
 // ─── Program control commands (written to 0x1F51) ────────────────────────────
 
-const CMD_START_APP: u32 = 0x01;
-const CMD_CLEAR_PROGRAM: u32 = 0x03;
-const CMD_START_BOOTLOADER: u32 = 0x80;
-const CMD_SET_SIGNATURE: u32 = 0x83;
+const CMD_START_APP: u8 = 0x01;
+const CMD_CLEAR_PROGRAM: u8 = 0x03;
+const CMD_START_BOOTLOADER: u8 = 0x80;
+const CMD_SET_SIGNATURE: u8 = 0x83;
 
 // ─── Flash status codes (read from 0x1F57) ───────────────────────────────────
 
 const STAT_OK: u32 = 0x0000_0000;
 const STAT_BUSY: u32 = 0x0000_0001;
 const STAT_CRC_BUSY: u32 = 0x0000_0006;
+/// Device-specific "erase in progress" status returned by some bootloaders.
+const STAT_ERASE_BUSY: u32 = 0x1000_0000;
 
 // ─── Action type ─────────────────────────────────────────────────────────────
 
@@ -88,20 +95,32 @@ pub struct DownloadConfig {
 
 // ─── Progress callback ───────────────────────────────────────────────────────
 
+/// Summary of a completed firmware download.
+#[derive(Debug, Clone, Default)]
+pub struct DownloadSummary {
+    /// Application version string (0x100A) read before entering the bootloader.
+    /// `None` if the bootloader was already active at startup (old version unknown).
+    pub app_version_before: Option<String>,
+    /// Bootloader version from 0x1018/5 (0xXXYYZZDD), read while bootloader is active.
+    pub bootloader_version: Option<u32>,
+    /// Application version string (0x100A) read after the new application started.
+    pub app_version_after: Option<String>,
+    /// Total number of blocks written.
+    pub blocks_written: u32,
+}
+
 /// Progress event emitted by the state machine.
 #[derive(Debug, Clone)]
 pub enum Progress {
     /// Entered a new state.
     State(&'static str),
-    /// Block downloaded: `(block_num, bytes_transferred, total_bytes)`.
-    BlockDownloaded {
-        block_num: u32,
-        bytes_done: u64,
-        total_bytes: u64,
+    /// CheckBootloader completed; indicates what was running at startup.
+    CheckBootloader {
+        /// `true` if the bootloader was already active at startup.
+        already_in_bootloader: bool,
     },
-    /// Overall percentage (0–100). Reserved for future progress-bar integration.
-    #[allow(dead_code)]
-    Percent(u8),
+    /// Block downloaded: `(bytes_transferred, total_bytes)`.
+    BlockDownloaded { bytes_done: u64, total_bytes: u64 },
 }
 
 /// Errors returned by the state machine.
@@ -162,7 +181,7 @@ enum FlashStatus {
 fn classify_flash_status(raw: u32) -> FlashStatus {
     match raw {
         STAT_OK => FlashStatus::Ok,
-        STAT_BUSY => FlashStatus::Busy,
+        STAT_BUSY | STAT_ERASE_BUSY => FlashStatus::Busy,
         STAT_CRC_BUSY => FlashStatus::CrcBusy,
         other => FlashStatus::Error(other),
     }
@@ -173,19 +192,35 @@ fn classify_flash_status(raw: u32) -> FlashStatus {
 /// Run the complete firmware download sequence.
 ///
 /// `progress_cb` is called on significant events (state changes, block counts).
+/// Returns a [`DownloadSummary`] with version information on success.
 pub fn run_firmware_download(
     client: &mut SdoClient,
     cfg: &DownloadConfig,
     binary_path: &Path,
     progress_cb: &mut dyn FnMut(Progress),
-) -> Result<(), DownloadError> {
+) -> Result<DownloadSummary, DownloadError> {
+    let mut summary = DownloadSummary::default();
+
+    // ── 0. Reset node SDO state ───────────────────────────────────────────────
+    // If a previous run was interrupted mid-transfer the node's SDO server may
+    // still be expecting download segments. Send an abort to clear that state
+    // before issuing any new requests. No response is expected — ignore errors.
+    let _ = client.send_abort(OBJ_PROGRAM_DATA, cfg.program_number);
+
     // ── 1. Check / enter bootloader ──────────────────────────────────────────
-    progress_cb(Progress::State("CheckBootloader"));
     let bootloader_running = is_bootloader_active(client, cfg.action)?;
+    progress_cb(Progress::CheckBootloader {
+        already_in_bootloader: bootloader_running,
+    });
     if !bootloader_running {
+        // App is running — read its version before switching to bootloader.
+        summary.app_version_before = client.read_string(OBJ_APP_VERSION, 0).ok();
         progress_cb(Progress::State("StartBootloader"));
         start_bootloader(client, cfg)?;
     }
+
+    // Bootloader is now active — read its version.
+    summary.bootloader_version = client.read_u32(OBJ_BL_VERSION, SUB_BL_VERSION).ok();
 
     // ── 2. Validate vendor ID ────────────────────────────────────────────────
     if cfg.vendor_id != 0 {
@@ -213,7 +248,7 @@ pub fn run_firmware_download(
 
     // ── 4. Clear flash ───────────────────────────────────────────────────────
     progress_cb(Progress::State("ClearFlash"));
-    client.write_u32(OBJ_PROGRAM_CONTROL, cfg.program_number, CMD_CLEAR_PROGRAM)?;
+    client.write_u8(OBJ_PROGRAM_CONTROL, cfg.program_number, CMD_CLEAR_PROGRAM)?;
 
     progress_cb(Progress::State("WaitClear"));
     wait_flash_status(client, cfg, cfg.max_retries_busy, cfg.max_retries_crc)?;
@@ -222,10 +257,10 @@ pub fn run_firmware_download(
     progress_cb(Progress::State("Download"));
     let iter = BinaryBlockIter::open(binary_path)?;
     let total_bytes = iter.total_size;
+    let mut bytes_so_far: u64 = 0;
 
     for block_result in iter {
         let block = block_result?;
-        let block_num = block.block_num;
 
         client.download(
             OBJ_PROGRAM_DATA,
@@ -237,37 +272,40 @@ pub fn run_firmware_download(
         // Poll flash status after each block
         wait_flash_status(client, cfg, cfg.max_retries_busy, cfg.max_retries_crc)?;
 
-        let bytes_done = {
-            // Re-open not possible inside the loop; estimate from block.raw.len()
-            // The total is tracked via BinaryBlockIter::bytes_read but we consume
-            // the iterator, so we track manually.
-            block.raw.len() as u64
-        };
+        bytes_so_far += block.raw.len() as u64;
+        summary.blocks_written += 1;
         progress_cb(Progress::BlockDownloaded {
-            block_num,
-            bytes_done,
+            bytes_done: bytes_so_far,
             total_bytes,
         });
     }
 
-    // ── 6. First start attempt ───────────────────────────────────────────────
+    // ── 6. First start — smoke test ──────────────────────────────────────────
     progress_cb(Progress::State("FirstStartApp"));
-    client.write_u32(OBJ_PROGRAM_CONTROL, cfg.program_number, CMD_START_APP)?;
+    client.write_u8(OBJ_PROGRAM_CONTROL, cfg.program_number, CMD_START_APP)?;
 
     progress_cb(Progress::State("DelayCheckApp"));
     thread::sleep(dur_100us(cfg.delay_check_app_100us));
 
     progress_cb(Progress::State("CheckAppWorks"));
     let app_running = !is_bootloader_active(client, cfg.action)?;
-
-    if app_running {
-        progress_cb(Progress::State("Done"));
-        return Ok(());
+    if !app_running {
+        // Image is broken — don't write the signature for a bad binary.
+        return Err(DownloadError::AppStartFailed);
     }
 
-    // ── 7. App did not start — set signature path ────────────────────────────
+    // App verified — read its version while it's running.
+    summary.app_version_after = client.read_string(OBJ_APP_VERSION, 0).ok();
+    if summary.bootloader_version.is_none() {
+        summary.bootloader_version = client.read_u32(OBJ_BL_VERSION, SUB_BL_VERSION).ok();
+    }
+
+    // ── 7. Return to bootloader to write signature ───────────────────────────
+    // Only the bootloader has write access to the protected flash region where
+    // the CRC signature lives. The application cannot write flash, so we must
+    // switch back to bootloader mode before issuing CMD_SET_SIGNATURE.
     progress_cb(Progress::State("RestartBootloader"));
-    client.write_u32(
+    client.write_u8(
         OBJ_PROGRAM_CONTROL,
         cfg.program_number,
         CMD_START_BOOTLOADER,
@@ -285,13 +323,14 @@ pub fn run_firmware_download(
     }
 
     progress_cb(Progress::State("SetSignature"));
-    client.write_u32(OBJ_PROGRAM_CONTROL, cfg.program_number, CMD_SET_SIGNATURE)?;
+    client.write_u8(OBJ_PROGRAM_CONTROL, cfg.program_number, CMD_SET_SIGNATURE)?;
 
     progress_cb(Progress::State("WaitSetSignature"));
     wait_flash_status(client, cfg, cfg.max_retries_busy, cfg.max_retries_crc)?;
 
+    // ── 8. Final start — app is now permanent ────────────────────────────────
     progress_cb(Progress::State("FinalStartApp"));
-    client.write_u32(OBJ_PROGRAM_CONTROL, cfg.program_number, CMD_START_APP)?;
+    client.write_u8(OBJ_PROGRAM_CONTROL, cfg.program_number, CMD_START_APP)?;
 
     progress_cb(Progress::State("DelayFinalCheckApp"));
     thread::sleep(dur_100us(cfg.delay_check_app_100us));
@@ -303,7 +342,7 @@ pub fn run_firmware_download(
     }
 
     progress_cb(Progress::State("Done"));
-    Ok(())
+    Ok(summary)
 }
 
 // ─── Internal helpers ─────────────────────────────────────────────────────────
@@ -323,7 +362,7 @@ fn is_bootloader_active(client: &mut SdoClient, action: ActionType) -> Result<bo
 
 /// Send `CMD_START_BOOTLOADER` and wait until the bootloader reports active.
 fn start_bootloader(client: &mut SdoClient, cfg: &DownloadConfig) -> Result<(), DownloadError> {
-    client.write_u32(
+    client.write_u8(
         OBJ_PROGRAM_CONTROL,
         cfg.program_number,
         CMD_START_BOOTLOADER,
@@ -353,37 +392,47 @@ fn start_bootloader(client: &mut SdoClient, cfg: &DownloadConfig) -> Result<(), 
     ))
 }
 
-/// Poll object 0x1F57 until the flash status is `OK`, retrying on `BUSY`/`CRC_BUSY`.
+/// Maximum wall-clock time to wait for flash erase / CRC to complete.
+const FLASH_WAIT_TIMEOUT: Duration = Duration::from_secs(120);
+
+/// Poll object 0x1F57 until the flash status is `OK`, with a 120-second
+/// wall-clock deadline.
+///
+/// Some bootloaders reject SDO requests entirely while flash erase is in
+/// progress, responding with an SDO abort or timeout. Those are treated as
+/// BUSY and retried until the deadline expires.
 fn wait_flash_status(
     client: &mut SdoClient,
     cfg: &DownloadConfig,
-    max_retries_busy: u32,
-    max_retries_crc: u32,
+    _max_retries_busy: u32,
+    _max_retries_crc: u32,
 ) -> Result<(), DownloadError> {
-    let mut busy_retries = 0u32;
-    let mut crc_retries = 0u32;
+    let deadline = std::time::Instant::now() + FLASH_WAIT_TIMEOUT;
 
     loop {
         thread::sleep(dur_100us(cfg.poll_delay_100us));
 
-        let raw = client.read_u32(OBJ_FLASH_STATUS, cfg.program_number)?;
+        if std::time::Instant::now() >= deadline {
+            return Err(DownloadError::BootloaderTimeout(
+                "flash operation timed out after 120 s".into(),
+            ));
+        }
+
+        let raw = match client.read_u32(OBJ_FLASH_STATUS, cfg.program_number) {
+            Ok(v) => v,
+            Err(SdoError::Abort(_)) | Err(SdoError::Timeout) | Err(SdoError::Protocol(_)) => {
+                // Bootloader is busy (e.g. erasing) and cannot service SDO
+                // requests — it may return a timeout, abort, or an unexpected
+                // response frame. Keep waiting until the deadline.
+                continue;
+            }
+            Err(e) => return Err(DownloadError::Sdo(e)),
+        };
+
         match classify_flash_status(raw) {
             FlashStatus::Ok => return Ok(()),
-            FlashStatus::Busy => {
-                busy_retries += 1;
-                if busy_retries >= max_retries_busy {
-                    return Err(DownloadError::BootloaderTimeout(
-                        "flash BUSY timeout exceeded".into(),
-                    ));
-                }
-            }
-            FlashStatus::CrcBusy => {
-                crc_retries += 1;
-                if crc_retries >= max_retries_crc {
-                    return Err(DownloadError::BootloaderTimeout(
-                        "flash CRC-BUSY timeout exceeded".into(),
-                    ));
-                }
+            FlashStatus::Busy | FlashStatus::CrcBusy => {
+                // Still erasing/verifying — keep polling.
             }
             FlashStatus::Error(code) => {
                 return Err(DownloadError::Sdo(SdoError::Abort(code)));
