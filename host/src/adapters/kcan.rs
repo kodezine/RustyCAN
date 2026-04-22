@@ -7,9 +7,8 @@
 use std::sync::mpsc;
 use std::time::Duration;
 
-use futures_lite::future::block_on;
-use nusb::transfer::{Control, ControlType, Recipient, RequestBuffer};
-use nusb::{DeviceInfo, Interface};
+use nusb::transfer::{Buffer, Bulk, ControlIn, ControlOut, ControlType, In, Out, Recipient};
+use nusb::{DeviceInfo, Interface, MaybeFuture};
 
 use host_can::frame::CanFrame;
 
@@ -40,23 +39,22 @@ impl KCanAdapter {
         let dev_info = find_device_info(serial)?;
         let device = dev_info
             .open()
+            .wait()
             .map_err(|e| AdapterError::Io(format!("open device: {e}")))?;
         let iface = device
             .claim_interface(0)
+            .wait()
             .map_err(|e| AdapterError::Io(format!("claim interface 0: {e}")))?;
 
         // GET_INFO — verify protocol version (blocking control transfer).
-        let mut info_buf = [0u8; 12];
-        let n = iface
-            .control_in_blocking(
-                ctrl(RequestCode::GetInfo as u8),
-                &mut info_buf,
-                CTRL_TIMEOUT,
-            )
+        let info_data = iface
+            .control_in(ctrl_in(RequestCode::GetInfo as u8, 12), CTRL_TIMEOUT)
+            .wait()
             .map_err(|e| AdapterError::Protocol(format!("GET_INFO: {e:?}")))?;
-        if n < 12 {
+        if info_data.len() < 12 {
             return Err(AdapterError::Protocol("GET_INFO: short response".into()));
         }
+        let info_buf: [u8; 12] = info_data[..12].try_into().unwrap();
         let info = KCanDeviceInfo::from_bytes(&info_buf);
         if info.protocol_version != 1 {
             return Err(AdapterError::Protocol(format!(
@@ -69,19 +67,16 @@ impl KCanAdapter {
         let name = format!("KCAN Dongle v{fw_maj}.{fw_min}.{fw_pat} (uid={uid:08X})");
 
         // GET_BT_CONST.
-        let mut bt_buf = [0u8; 32];
-        let n = iface
-            .control_in_blocking(
-                ctrl(RequestCode::GetBtConst as u8),
-                &mut bt_buf,
-                CTRL_TIMEOUT,
-            )
+        let bt_data = iface
+            .control_in(ctrl_in(RequestCode::GetBtConst as u8, 32), CTRL_TIMEOUT)
+            .wait()
             .map_err(|e| AdapterError::Protocol(format!("GET_BT_CONST: {e:?}")))?;
-        if n < 32 {
+        if bt_data.len() < 32 {
             return Err(AdapterError::Protocol(
                 "GET_BT_CONST: short response".into(),
             ));
         }
+        let bt_buf: [u8; 32] = bt_data[..32].try_into().unwrap();
         let bt_const = KCanBtConst::from_bytes(&bt_buf);
 
         // SET_BITTIMING.
@@ -90,21 +85,21 @@ impl KCanAdapter {
             AdapterError::Protocol(format!("cannot achieve {baud} bps at {clock_hz} Hz"))
         })?;
         iface
-            .control_out_blocking(
-                ctrl(RequestCode::SetBitTiming as u8),
-                &bt.to_bytes(),
+            .control_out(
+                ctrl_out(RequestCode::SetBitTiming as u8, &bt.to_bytes()),
                 CTRL_TIMEOUT,
             )
+            .wait()
             .map_err(|e| AdapterError::Protocol(format!("SET_BITTIMING: {e:?}")))?;
 
         // SET_MODE — bus on.
         let mode = KCanMode::bus_on(listen_only, false);
         iface
-            .control_out_blocking(
-                ctrl(RequestCode::SetMode as u8),
-                &mode.to_bytes(),
+            .control_out(
+                ctrl_out(RequestCode::SetMode as u8, &mode.to_bytes()),
                 CTRL_TIMEOUT,
             )
+            .wait()
             .map_err(|e| AdapterError::Protocol(format!("SET_MODE: {e:?}")))?;
 
         // Spawn background IO thread (owns Interface).
@@ -129,11 +124,11 @@ impl KCanAdapter {
     }
 
     pub fn list_devices() -> Vec<(String, String)> {
-        let Ok(iter) = nusb::list_devices() else {
+        let Ok(iter) = nusb::list_devices().wait() else {
             return vec![];
         };
-        iter.filter(|d| d.vendor_id() == KCAN_VID && d.product_id() == KCAN_PID)
-            .map(|d| {
+        iter.filter(|d: &DeviceInfo| d.vendor_id() == KCAN_VID && d.product_id() == KCAN_PID)
+            .map(|d: DeviceInfo| {
                 let serial = d.serial_number().unwrap_or("").to_string();
                 let name = d.product_string().unwrap_or("KCAN Dongle").to_string();
                 (serial, name)
@@ -193,17 +188,26 @@ fn reader_thread(
     frame_tx: mpsc::Sender<KCanFrame>,
     tx_cmd_rx: mpsc::Receiver<TxCmd>,
 ) {
+    let mut ep_out = iface
+        .endpoint::<Bulk, Out>(BULK_OUT_EP)
+        .expect("open bulk-out endpoint");
+    let mut ep_in = iface
+        .endpoint::<Bulk, In>(BULK_IN_EP)
+        .expect("open bulk-in endpoint");
+
     loop {
-        // Drain pending TX commands (non-blocking), do bulk_out for each.
+        // Drain pending TX commands (non-blocking), do bulk-out for each.
         while let Ok(TxCmd::Send(bytes)) = tx_cmd_rx.try_recv() {
-            let _ = block_on(iface.bulk_out(BULK_OUT_EP, bytes)).into_result();
+            let _ = ep_out.transfer_blocking(bytes.into(), Duration::from_millis(100));
         }
 
-        // Block on next bulk IN frame.
-        match block_on(iface.bulk_in(BULK_IN_EP, RequestBuffer::new(KCAN_FRAME_SIZE))).into_result()
+        // Block on next bulk IN frame (short timeout so TX can be drained regularly).
+        match ep_in
+            .transfer_blocking(Buffer::new(KCAN_FRAME_SIZE), Duration::from_millis(10))
+            .into_result()
         {
             Ok(data) if data.len() == KCAN_FRAME_SIZE => {
-                if let Ok(arr) = <[u8; KCAN_FRAME_SIZE]>::try_from(data) {
+                if let Ok(arr) = <[u8; KCAN_FRAME_SIZE]>::try_from(&data[..]) {
                     if let Some(kf) = KCanFrame::from_bytes(&arr) {
                         if frame_tx.send(kf).is_err() {
                             break; // KCanAdapter dropped — exit.
@@ -221,19 +225,32 @@ fn reader_thread(
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
-fn ctrl(request: u8) -> Control {
-    Control {
+fn ctrl_in(request: u8, length: u16) -> ControlIn {
+    ControlIn {
         control_type: ControlType::Vendor,
         recipient: Recipient::Device,
         request,
         value: 0,
         index: 0,
+        length,
+    }
+}
+
+fn ctrl_out(request: u8, data: &[u8]) -> ControlOut<'_> {
+    ControlOut {
+        control_type: ControlType::Vendor,
+        recipient: Recipient::Device,
+        request,
+        value: 0,
+        index: 0,
+        data,
     }
 }
 
 fn find_device_info(serial: Option<&str>) -> Result<DeviceInfo, AdapterError> {
-    let iter =
-        nusb::list_devices().map_err(|e| AdapterError::Io(format!("USB enumeration: {e}")))?;
+    let iter = nusb::list_devices()
+        .wait()
+        .map_err(|e| AdapterError::Io(format!("USB enumeration: {e}")))?;
     for info in iter {
         if info.vendor_id() != KCAN_VID || info.product_id() != KCAN_PID {
             continue;
