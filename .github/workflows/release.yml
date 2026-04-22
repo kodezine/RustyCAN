@@ -118,7 +118,7 @@ jobs:
 
       # ── Upload to GitHub Release ────────────────────────────────────────
       - name: Upload release artifact
-        uses: softprops/action-gh-release@v2.6.1
+        uses: softprops/action-gh-release@v3.0.0
         with:
           generate_release_notes: false
           fail_on_unmatched_files: true
@@ -175,7 +175,7 @@ jobs:
           echo "FIRMWARE_ELF=$FIRMWARE_ELF" >> "$GITHUB_ENV"
 
       - name: Create GitHub Release (with notes)
-        uses: softprops/action-gh-release@v2.6.1
+        uses: softprops/action-gh-release@v3.0.0
         with:
           generate_release_notes: true
           fail_on_unmatched_files: true
