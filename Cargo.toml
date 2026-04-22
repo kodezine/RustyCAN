@@ -1,3 +1,10 @@
 [workspace]
 members = ["host", "kcan-protocol"]
 resolver = "2"
+
+# Patch phf_generator 0.11.x to use rand 0.9, removing the rand 0.8.6
+# vulnerability (GHSA) that Dependabot flags via the ratatui→termwiz→phf chain.
+# phf_generator is a build-time hash generator; the only change is the rand
+# import path (rand::distributions → rand::distr).
+[patch.crates-io]
+phf_generator = { path = "vendor/phf_generator" }

@@ -29,8 +29,12 @@ impl CanAdapter for PeakAdapter {
             }),
             Err(e) => {
                 let msg = e.to_string();
+                let lower = msg.to_lowercase();
                 // host-can signals timeout via a specific error string.
-                if msg.to_lowercase().contains("timeout") {
+                // The PCAN library also returns "Unable to receive message"
+                // (PCAN_ERROR_QRCVEMPTY) when no frame arrived within the
+                // requested window — treat that as a clean timeout too.
+                if lower.contains("timeout") || lower.contains("unable to receive message") {
                     Err(AdapterError::Timeout)
                 } else {
                     Err(AdapterError::Io(msg))

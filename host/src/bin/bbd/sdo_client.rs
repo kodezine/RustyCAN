@@ -17,10 +17,11 @@ use host_can::frame::CanFrame;
 use rustycan::adapters::{AdapterError, CanAdapter};
 use rustycan::canopen::sdo::{
     calculate_crc16, decode_block_download_end_response, decode_block_download_initiate_response,
-    decode_block_download_subblock_response, encode_block_download_end,
+    decode_block_download_subblock_response, decode_segmented_upload_initiate,
+    decode_upload_segment_response, encode_abort, encode_block_download_end,
     encode_block_download_initiate, encode_block_download_subblock, encode_download_expedited,
     encode_download_initiate_segmented, encode_download_segment, encode_upload_request,
-    is_download_initiate_ack, is_download_segment_ack,
+    encode_upload_segment_ack, is_download_initiate_ack, is_download_segment_ack,
 };
 
 // ─── Constants ───────────────────────────────────────────────────────────────
@@ -190,24 +191,117 @@ impl SdoClient {
 
     // ── Public SDO operations ─────────────────────────────────────────────────
 
-    /// Read a 32-bit value from the node via expedited SDO upload.
+    /// Read a 32-bit value from the node via SDO upload.
+    ///
+    /// Accepts both expedited (≤4-byte objects sent inline) and segmented
+    /// responses. Some bootloaders respond with a segmented initiate even for
+    /// UNSIGNED32 objects, so both paths are handled transparently.
     pub fn read_u32(&mut self, index: u16, subindex: u8) -> Result<u32, SdoError> {
         self.send(encode_upload_request(index, subindex))?;
         let resp = self.recv_response()?;
-        // Validate: scs=2 (bits 7-5 = 010), e=1 (bit 1), s=1 (bit 0) → 0x4B / 0x4F
         let cs = resp[0];
-        if cs & 0xE0 != 0x40 || cs & 0x02 == 0 {
+
+        // Expedited: SCS=2 (bits 7-5 = 010), e=1 (bit 1 set)
+        if cs & 0xE0 == 0x40 && cs & 0x02 != 0 {
+            return Ok(u32::from_le_bytes([resp[4], resp[5], resp[6], resp[7]]));
+        }
+
+        // Segmented upload initiate: SCS=2, e=0
+        if decode_segmented_upload_initiate(&resp).is_none() {
             return Err(SdoError::Protocol(format!(
-                "expected expedited upload response (cs=0x4x), got 0x{cs:02X}"
+                "expected upload response (expedited or segmented), got 0x{cs:02X}"
             )));
         }
-        Ok(u32::from_le_bytes([resp[4], resp[5], resp[6], resp[7]]))
+
+        // Request the first (and for UINT32, only) segment.
+        self.send(encode_upload_segment_ack(false))?;
+        let seg = self.recv_response()?;
+        let (payload, is_last) = decode_upload_segment_response(&seg).ok_or_else(|| {
+            SdoError::Protocol(format!(
+                "expected upload segment response, got 0x{:02X}",
+                seg[0]
+            ))
+        })?;
+
+        if payload.len() < 4 {
+            return Err(SdoError::Protocol(format!(
+                "segmented UINT32 too short: {} bytes",
+                payload.len()
+            )));
+        }
+        // If there are more segments (shouldn't happen for UINT32), abort cleanly.
+        if !is_last {
+            let _ = self.send_abort(index, subindex);
+        }
+        Ok(u32::from_le_bytes([
+            payload[0], payload[1], payload[2], payload[3],
+        ]))
     }
 
-    /// Write a 32-bit value to the node via expedited SDO download.
-    pub fn write_u32(&mut self, index: u16, subindex: u8, value: u32) -> Result<(), SdoError> {
-        let data = value.to_le_bytes();
-        let frame = encode_download_expedited(index, subindex, &data)
+    /// Read a visible string object from the node via segmented SDO upload.
+    ///
+    /// Handles both expedited (short strings ≤4 bytes) and segmented responses.
+    /// Returns the string with any trailing NUL bytes stripped.
+    pub fn read_string(&mut self, index: u16, subindex: u8) -> Result<String, SdoError> {
+        self.send(encode_upload_request(index, subindex))?;
+        let resp = self.recv_response()?;
+        let cs = resp[0];
+
+        // Expedited: e=1 (bit 1 set)
+        if cs & 0xE0 == 0x40 && cs & 0x02 != 0 {
+            let n = ((cs >> 2) & 0x03) as usize; // bytes not used
+            let data_len = 4usize.saturating_sub(n);
+            let bytes = &resp[4..4 + data_len];
+            return Ok(String::from_utf8_lossy(bytes)
+                .trim_end_matches('\0')
+                .to_string());
+        }
+
+        // Segmented: e=0, s may be 0 or 1
+        if decode_segmented_upload_initiate(&resp).is_none() {
+            return Err(SdoError::Protocol(format!(
+                "expected upload initiate response, got 0x{cs:02X}"
+            )));
+        }
+
+        let mut buf: Vec<u8> = Vec::new();
+        let mut toggle = false;
+        loop {
+            self.send(encode_upload_segment_ack(toggle))?;
+            let seg = self.recv_response()?;
+            let (payload, is_last) = decode_upload_segment_response(&seg).ok_or_else(|| {
+                SdoError::Protocol(format!(
+                    "expected upload segment response, got 0x{:02X}",
+                    seg[0]
+                ))
+            })?;
+            buf.extend_from_slice(&payload);
+            toggle = !toggle;
+            if is_last {
+                break;
+            }
+        }
+
+        Ok(String::from_utf8_lossy(&buf)
+            .trim_end_matches('\0')
+            .to_string())
+    }
+
+    /// Send an SDO abort frame to the node, resetting its SDO server state.
+    ///
+    /// Call this at startup to clear any in-progress transfer left by a
+    /// previously interrupted session. No response is expected.
+    pub fn send_abort(&mut self, index: u16, subindex: u8) -> Result<(), SdoError> {
+        // Abort code 0x0504_0000 = "SDO protocol timed out"
+        self.send(encode_abort(index, subindex, 0x0504_0000))
+    }
+
+    /// Write an 8-bit value to the node via expedited SDO download.
+    ///
+    /// Use this for objects whose CANopen data type is UNSIGNED8 (e.g. 0x1F51
+    /// Program Control) to avoid SDO abort 0x06070012 "length too high".
+    pub fn write_u8(&mut self, index: u16, subindex: u8, value: u8) -> Result<(), SdoError> {
+        let frame = encode_download_expedited(index, subindex, &[value])
             .ok_or_else(|| SdoError::Protocol("expedited download data > 4 bytes".into()))?;
         self.send(frame)?;
         let resp = self.recv_response()?;
