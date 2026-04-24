@@ -70,7 +70,7 @@ license-file = "../LICENSE"
 copyright    = "Copyright (c) Kodezine"
 category     = "Utility"
 # Only the main GUI binary is shipped — bbd is built but not packaged.
-binaries     = ["rustycan"]
+binaries     = [{ path = "rustycan", main = true }]
 icons        = [
   "assets/RustyCAN.icns",
   "assets/RustyCAN.ico",
