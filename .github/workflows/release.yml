@@ -112,9 +112,11 @@ jobs:
           APPIMAGE=$(ls dist/*.AppImage 2>/dev/null | head -1)
           DEB=$(ls dist/*.deb 2>/dev/null | head -1)
           DEST_AI="dist/rustycan-${TAG}-x86_64-linux.AppImage"
+          DEST_DEB="dist/rustycan-${TAG}-x86_64-linux.deb"
           [[ -n "$APPIMAGE" ]] && mv "$APPIMAGE" "$DEST_AI"
+          [[ -n "$DEB" ]] && mv "$DEB" "$DEST_DEB"
           echo "ARTIFACT=$DEST_AI" >> "$GITHUB_ENV"
-          [[ -n "$DEB" ]] && echo "DEB_PATH=$DEB" >> "$GITHUB_ENV"
+          [[ -n "$DEB" ]] && echo "DEB_PATH=$DEST_DEB" >> "$GITHUB_ENV"
 
       # ── Upload to GitHub Release ────────────────────────────────────────
       - name: Upload release artifact
