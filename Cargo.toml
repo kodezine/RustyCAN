@@ -8,3 +8,9 @@ resolver = "2"
 # import path (rand::distributions → rand::distr).
 [patch.crates-io]
 phf_generator = { path = "vendor/phf_generator" }
+# Vendored winit 0.30.13 with a one-line fix for the macOS
+# _NSTouchBarFinder KVO crash (NSRangeException on display-cycle flush).
+# touch_bar() now returns an empty NSTouchBar instead of nil so
+# _NSTouchBarFinder stops at WinitView and never registers the KVO
+# observers it later cannot remove.
+winit = { path = "vendor/winit" }
