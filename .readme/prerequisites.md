@@ -48,8 +48,10 @@ or equivalent transceiver required):
 rustup target add thumbv7em-none-eabihf
 cargo install probe-rs-tools
 
-cd firmware
-cargo run --release -p dongle-h743
+# Must cd into the package directory — the per-package .cargo/config.toml
+# (STM32H743XIHx) only applies when CWD is within firmware/dongle-h743/
+cd firmware/dongle-h743
+cargo run --release
 ```
 
 Connect **CN18 Micro-AB USB** to the host. CAN is available on the **CN3 DB9**

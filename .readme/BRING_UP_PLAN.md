@@ -8,7 +8,7 @@ phases; progress is tracked independently.
 | Target | Board | Phase 0 | Phase 1 | Phase 2 | Phase 3 | Phase 4 | Phase 5 | Phase 6 |
 |--------|-------|---------|---------|---------|---------|---------|---------|---------|
 | **dongle-h753** | NUCLEO-H753ZI | ✅ | ✅ | 🔄 ext. bus | 🔄 OUT | ✅ | ✅ partial | ⏳ |
-| **dongle-h743** | STM32H743I-EVAL MB1246 Rev E | ⏳ | ⏳ | ⏳ | ⏳ | ⏳ | ⏳ | ⏳ |
+| **dongle-h743** | STM32H743I-EVAL MB1246 Rev E | ✅ | ⏳ | ✅ | ⏳ | ⏳ | ⏳ | ⏳ |
 
 ## Target Comparison
 
@@ -194,20 +194,25 @@ plug CN13 cable after firmware boots, or close the bridges permanently.
 
 ### Build Commands
 
+> **Important:** Run from the package directory so that
+> `firmware/dongle-h743/.cargo/config.toml` (chip = `STM32H743XIHx`) takes
+> precedence over the workspace-level config (chip = `STM32H753ZITx`).
+> Running `cargo run -p dongle-h743` from `firmware/` will use the wrong chip.
+
 ```sh
-cd firmware
+cd firmware/dongle-h743
 
 # Normal mode
-cargo run --release -p dongle-h743
+cargo run --release
 
 # FDCAN internal loopback self-test (Phase 2)
-cargo run --release -p dongle-h743 --features loopback
+cargo run --release --features loopback
 
 # Periodic echo on FDCAN1 @ 100 ms (Phase 3)
-cargo run --release -p dongle-h743 --features periodic-echo
+cargo run --release --features periodic-echo
 
 # Release binary only (no flash)
-cargo build --release -p dongle-h743
+cargo build --release
 ```
 
 ### Host Config
@@ -216,16 +221,18 @@ cargo build --release -p dongle-h743
 cargo run --release -- --config host/config.kcan-h743.json
 ```
 
-### Phase 0: Bench Setup ⏳
+### Phase 0: Bench Setup ✅
 
 **Gate:** probe-rs detects the chip; defmt RTT output visible
 
-- [ ] Connect barrel jack power supply (5 V) to eval board
-- [ ] Connect Micro-USB cable: host Mac → **C23** (ST-LINK V3E)
-- [ ] `probe-rs list` enumerates STM32H743XIHx
-- [ ] `cargo build --release -p dongle-h743` — confirm `.elf` produced (already verified in CI)
-- [ ] Flash loopback build: `cargo run -p dongle-h743 --features loopback`
-- [ ] Confirm defmt RTT output visible in terminal
+- [x] Connect barrel jack power supply (5 V) to eval board
+- [x] Connect Micro-USB cable: host Mac → **C23** (ST-LINK V3E)
+- [x] `probe-rs list` enumerates STM32H743XIHx (detected as STLink V3)
+- [x] `cargo build --release` (from `firmware/dongle-h743/`) — confirm `.elf` produced (already verified in CI)
+- [x] Flash loopback build: `cargo run --release --features loopback` (from `firmware/dongle-h743/`)
+- [x] Confirm defmt RTT output visible in terminal
+
+**Result:** probe-rs detected, firmware flashed, RTT streaming. HSE=25 MHz, sysclk=480 MHz, pll2_q=32 MHz all confirmed in clock debug log.
 
 ---
 
@@ -233,7 +240,7 @@ cargo run --release -- --config host/config.kcan-h743.json
 
 **Gate:** `system_profiler SPUSBDataType` shows VID=0x1209, PID=0xBEEF, "KCAN Dongle v1 (H743I)"
 
-- [ ] Flash default build: `cargo run -p dongle-h743`
+- [ ] Flash default build: `cargo run --release` (from `firmware/dongle-h743/`)
 - [ ] Connect Micro-USB: host Mac → **CN18** (OTG FS); JP2 must not be fitted
 - [ ] RTT: `KCAN Dongle v1 (H743I) — booting`
 - [ ] `system_profiler SPUSBDataType` shows device
@@ -244,14 +251,15 @@ high immediately at boot.
 
 ---
 
-### Phase 2: FDCAN Loopback Self-Test ⏳
+### Phase 2: FDCAN Loopback Self-Test ✅
 
 **Gate:** RTT: `FDCAN self-test: PASS [ID=0x123, loopback RX matched TX]`
 
-- [ ] Flash: `cargo run -p dongle-h743 --features loopback`
-- [ ] RTT: `FDCAN1: INTERNAL LOOPBACK mode, 250 kbps — Phase 2 self-test`
-- [ ] RTT: `FDCAN self-test: PASS`
-- [ ] If FAIL with timeout → verify PLL2 (25 MHz HSE, prediv=5, mul=64, divq=10 → 32 MHz)
+- [x] Flash: `cargo run --release --features loopback` (from `firmware/dongle-h743/`)
+- [x] RTT: `FDCAN1: INTERNAL LOOPBACK mode, 250 kbps — Phase 2 self-test`
+- [x] RTT: `FDCAN self-test: PASS`
+
+**Result:** PLL2Q = 32 MHz confirmed. FDCAN1 bit timing correct at 250 kbps.
 
 ---
 
@@ -263,7 +271,7 @@ high immediately at boot.
 
 - [ ] Connect CAN cable: CN3 DB9 ↔ CAN analyser or second CAN node
 - [ ] Ensure bus termination (120 Ω at each end)
-- [ ] Flash: `cargo run -p dongle-h743 --features periodic-echo`
+- [ ] Flash: `cargo run --release --features periodic-echo` (from `firmware/dongle-h743/`)
 - [ ] RTT: `echo TX FDCAN1 [ID=0x7E1, counter=N]` every 100 ms
 - [ ] Sniffer sees 0x7E1 @ 250 kbps
 - [ ] RTT: `FDCAN RX [ID=...]` when second node transmits
@@ -274,7 +282,7 @@ high immediately at boot.
 
 **Gate:** `cargo run --release -- --config host/config.kcan-h743.json` connects without error
 
-- [ ] Flash default build: `cargo run -p dongle-h743`
+- [ ] Flash default build: `cargo run --release` (from `firmware/dongle-h743/`)
 - [ ] Plug CN18 to Mac
 - [ ] Run rustycan with H743 config
 - [ ] RTT: `SET_MODE received — signalling BULK_RESTART`
