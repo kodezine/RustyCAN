@@ -1,0 +1,17 @@
+[target.thumbv7em-none-eabihf]
+# Flash firmware via ST-LINK V3E on the STM32H743I-EVAL (MB1246 Rev E) using probe-rs.
+# Usage: cargo run --package dongle-h743
+# Array form avoids whitespace-splitting the --log-format argument.
+runner = ["probe-rs", "run", "--chip", "STM32H743XIHx", "--log-format", "{t} [{L}] {s}"]
+rustflags = [
+	"-C",
+	"link-arg=-Tlink.x",
+	"-C",
+	"link-arg=-Tdefmt.x",
+]
+
+[build]
+target = "thumbv7em-none-eabihf"
+
+[env]
+DEFMT_LOG = "debug"

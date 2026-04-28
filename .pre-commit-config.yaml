@@ -41,8 +41,8 @@ repos:
 
       - id: cargo-clippy-firmware
         name: cargo clippy (firmware)
-        description: Lint firmware with Clippy, treating warnings as errors.
+        description: Lint firmware with Clippy per package (stm32-metapac requires a single chip feature).
         language: system
-        entry: bash -c 'cd firmware && cargo clippy --target thumbv7em-none-eabihf -- -D warnings'
+        entry: bash -c 'cd firmware && cargo clippy -p dongle-h753 --target thumbv7em-none-eabihf -- -D warnings && cargo clippy -p dongle-h743 --target thumbv7em-none-eabihf -- -D warnings'
         pass_filenames: false
         types: [rust]

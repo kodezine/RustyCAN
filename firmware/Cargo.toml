@@ -1,6 +1,7 @@
 [workspace]
 members = [
     "dongle-h753",
+    "dongle-h743",
 ]
 resolver = "2"
 
