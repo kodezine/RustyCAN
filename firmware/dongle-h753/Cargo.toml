@@ -36,6 +36,20 @@ defmt             = "1.0"
 defmt-rtt         = "1.0"
 panic-probe       = { version = "1.0", features = ["print-defmt"] }
 
+[features]
+# Phase 2: enable FDCAN internal loopback for clock/timing self-test.
+# Build with: cargo build --release --features loopback
+# Remove for normal operation (Phase 3+).
+loopback = []
+# Phase 3: cross-channel physical bus TX/RX test.
+# Requires both Waveshare modules wired to the same CAN bus.
+# Build with: cargo run --features bus-test
+bus-test = []
+# Phase 3b: continuous bidirectional echo at 100 ms for PEAK sniffer / RustyCAN
+# verification. Injects 0x7E1 on FDCAN1 and 0x7E2 on FDCAN2 every 100 ms.
+# Build with: cargo run --features periodic-echo
+periodic-echo = []
+
 [profile.release]
 opt-level    = "s"
 lto          = true

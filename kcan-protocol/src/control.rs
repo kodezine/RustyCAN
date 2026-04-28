@@ -284,9 +284,9 @@ pub struct KCanBtConst {
 }
 
 impl KCanBtConst {
-    /// Constants for STM32H753ZI with 64 MHz FDCAN kernel clock.
+    /// Constants for STM32H753ZI with 32 MHz FDCAN kernel clock (PLL2Q = 320 MHz / 10).
     pub const H753_64MHZ: Self = Self {
-        clock_hz: 64_000_000,
+        clock_hz: 32_000_000,
         brp_min: 1,
         brp_max: 512,
         tseg1_min: 2,

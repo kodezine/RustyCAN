@@ -1,7 +1,14 @@
 [target.thumbv7em-none-eabihf]
 # Flash firmware via ST-LINK V3 on the Nucleo board using probe-rs.
 # Usage: cargo run --package dongle-h753
-runner = "probe-rs run --chip STM32H753ZITx --log-format '{t} [{L}] {s}'"
+# Array form avoids whitespace-splitting the --log-format argument.
+runner = ["probe-rs", "run", "--chip", "STM32H753ZITx", "--log-format", "{t} [{L}] {s}"]
+rustflags = [
+	"-C",
+	"link-arg=-Tlink.x",
+	"-C",
+	"link-arg=-Tdefmt.x",
+]
 
 [build]
 target = "thumbv7em-none-eabihf"

@@ -26,6 +26,7 @@ impl CanAdapter for PeakAdapter {
             Ok(frame) => Ok(ReceivedFrame {
                 frame,
                 hardware_timestamp_us: None,
+                channel: 0,
             }),
             Err(e) => {
                 let msg = e.to_string();
@@ -34,7 +35,11 @@ impl CanAdapter for PeakAdapter {
                 // The PCAN library also returns "Unable to receive message"
                 // (PCAN_ERROR_QRCVEMPTY) when no frame arrived within the
                 // requested window — treat that as a clean timeout too.
-                if lower.contains("timeout") || lower.contains("unable to receive message") {
+                // Also handle "timed out" (macOS PCAN driver wording).
+                if lower.contains("timeout")
+                    || lower.contains("timed out")
+                    || lower.contains("unable to receive message")
+                {
                     Err(AdapterError::Timeout)
                 } else {
                     Err(AdapterError::Io(msg))

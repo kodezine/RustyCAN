@@ -34,6 +34,8 @@ pub struct ReceivedFrame {
     pub frame: CanFrame,
     /// µs since dongle bus-on, captured in hardware.  `None` for PEAK.
     pub hardware_timestamp_us: Option<u32>,
+    /// Source CAN channel: 0 = FDCAN1, 1 = FDCAN2.  Always 0 for PEAK.
+    pub channel: u8,
 }
 
 /// Errors returned by adapter operations.
@@ -47,6 +49,8 @@ pub enum AdapterError {
     Io(String),
     /// The KCAN protocol returned an unexpected response.
     Protocol(String),
+    /// Unrecoverable error — the session must be terminated.
+    Fatal(String),
 }
 
 impl fmt::Display for AdapterError {
@@ -56,6 +60,7 @@ impl fmt::Display for AdapterError {
             Self::Timeout => write!(f, "receive timeout"),
             Self::Io(s) => write!(f, "I/O error: {s}"),
             Self::Protocol(s) => write!(f, "protocol error: {s}"),
+            Self::Fatal(s) => write!(f, "fatal error: {s}"),
         }
     }
 }
