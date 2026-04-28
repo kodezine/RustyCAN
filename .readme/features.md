@@ -34,7 +34,10 @@
 | Native egui GUI | ✅ |
 | PEAK PCAN-USB adapter | ✅ |
 | KCAN Dongle adapter (STM32H753ZI) | ✅ |
-| KCAN hardware timestamps (`hw_ts_us`) | ✅ |
+| KCAN EP0 control handler (GET_INFO, GET_BT_CONST, SET_BITTIMING, SET_MODE) | ✅ |
+| KCAN UID-derived USB serial number | ✅ |
+| KCAN dual-channel frame labeling (FDCAN1 / FDCAN2 per frame) | ✅ |
+| KCAN hardware timestamps via TIM2 ISR (replace software Instant) | 🔄 |
 | Adapter selection in GUI | ✅ |
 | Dongle detection polling | ✅ |
 | EDS optional per node | ✅ |
@@ -51,6 +54,8 @@
 | Native plot window (egui_plot, 8 charts) | ✅ |
 | SDO segmented transfers | ✅ |
 | SDO block transfers | ✅ |
+| KCAN TSCC latch (sub-µs timestamp latched at frame SOF in hardware) | planned |
+| KCAN dynamic listen-only mode via SET_MODE | planned |
 | KCAN Phase 3: STM32H563 HW encryption | planned |
 | CAN FD (KCAN firmware + host) | planned |
 | EMCY message decode | planned |

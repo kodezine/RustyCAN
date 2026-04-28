@@ -724,15 +724,20 @@ fn recv_loop(
         }
 
         let recv_result = adapter.recv(Duration::from_millis(500));
-        let (frame, hardware_timestamp_us) = match recv_result {
-            Ok(r) => (r.frame, r.hardware_timestamp_us),
+        let (frame, hardware_timestamp_us, channel) = match recv_result {
+            Ok(r) => (r.frame, r.hardware_timestamp_us, r.channel),
             Err(crate::adapters::AdapterError::Timeout) => {
                 continue;
             }
             Err(e) => {
-                // Log the error but keep trying — the bus might not be powered yet,
-                // or the adapter might be temporarily unavailable. The user can
-                // manually disconnect if they want to give up.
+                // Fatal errors mean the adapter is unrecoverable — terminate the session.
+                if matches!(e, crate::adapters::AdapterError::Fatal(_)) {
+                    let _ = tx.send(CanEvent::AdapterError(e.to_string()));
+                    return;
+                }
+
+                // Log non-fatal errors and keep trying — the bus might not be powered
+                // yet, or the adapter might be temporarily unavailable.
                 eprintln!("CAN recv error (continuing): {e}");
 
                 // Check if GUI has disconnected before continuing
@@ -1812,6 +1817,11 @@ fn recv_loop(
                 // Log as raw frame if not handled by DBC or CANopen
                 if !logged {
                     logger.log_raw_frame(ts, cob_id, data);
+                    let _ = tx.send(CanEvent::RawFrame {
+                        cob_id: cob_id as u32,
+                        data: data.to_vec(),
+                        port: channel,
+                    });
                 }
             }
         }

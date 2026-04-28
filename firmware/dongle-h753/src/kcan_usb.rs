@@ -21,8 +21,26 @@ pub struct KCanReceiver<'d, D: UsbDriver<'d>> {
 }
 
 impl<'d, D: UsbDriver<'d>> KCanSender<'d, D> {
+    /// Write `data` to the Bulk IN endpoint, splitting into max-packet-size
+    /// chunks so the STM32 OTG FS 64-byte FIFO never overflows.
+    ///
+    /// For an 80-byte KCAN frame this produces:
+    ///   packet 1: bytes 0..64  (full-size → host waits for more)
+    ///   packet 2: bytes 64..80 (short → host knows transfer is complete)
     pub async fn write_packet(&mut self, data: &[u8]) -> Result<(), EndpointError> {
-        self.ep.write(data).await
+        const MPS: usize = 64;
+        let mut offset = 0;
+        while offset < data.len() {
+            let end = (offset + MPS).min(data.len());
+            self.ep.write(&data[offset..end]).await?;
+            offset = end;
+        }
+        // Send a zero-length packet if the payload is an exact multiple of MPS,
+        // so the host can distinguish "transfer done" from "more data coming".
+        if data.len().is_multiple_of(MPS) {
+            self.ep.write(&[]).await?;
+        }
+        Ok(())
     }
 }
 

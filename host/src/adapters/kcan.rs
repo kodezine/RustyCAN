@@ -8,7 +8,7 @@ use std::sync::mpsc;
 use std::time::Duration;
 
 use nusb::transfer::{Buffer, Bulk, ControlIn, ControlOut, ControlType, In, Out, Recipient};
-use nusb::{DeviceInfo, Interface, MaybeFuture};
+use nusb::{DeviceInfo, Endpoint, MaybeFuture};
 
 use host_can::frame::CanFrame;
 
@@ -19,8 +19,8 @@ use super::{AdapterError, CanAdapter, ReceivedFrame};
 
 const KCAN_VID: u16 = 0x1209;
 const KCAN_PID: u16 = 0xBEEF;
-const BULK_IN_EP: u8 = 0x81;
-const BULK_OUT_EP: u8 = 0x02;
+const BULK_IN_EP: u8 = 0x81; // device→host  (Embassy allocates as 0x81)
+const BULK_OUT_EP: u8 = 0x01; // host→device  (Embassy allocates as 0x01, not 0x02)
 const CTRL_TIMEOUT: Duration = Duration::from_millis(500);
 
 enum TxCmd {
@@ -29,6 +29,8 @@ enum TxCmd {
 
 pub struct KCanAdapter {
     frame_rx: mpsc::Receiver<KCanFrame>,
+    /// One-shot channel: the reader_thread sends the reason it died before exiting.
+    error_rx: mpsc::Receiver<String>,
     tx_cmd_tx: mpsc::SyncSender<TxCmd>,
     name: String,
     tx_seq: u16,
@@ -41,16 +43,51 @@ impl KCanAdapter {
             .open()
             .wait()
             .map_err(|e| AdapterError::Io(format!("open device: {e}")))?;
+
+        // On macOS (IOUSBHostFamily), claim_interface() internally calls
+        // USBInterfaceOpen with kUSBOptionBitOpenExclusivelyMask, giving us
+        // exclusive access without needing set_configuration().  Calling
+        // set_configuration() triggers a kIOReturnAborted device reset that
+        // cancels subsequent EP0 vendor requests.
+        //
+        // With bDeviceClass=0x00 in the firmware, macOS already creates
+        // IOUSBInterface service nodes on enumeration, so claim_interface()
+        // finds the interface without any prior set_configuration() call.
         let iface = device
             .claim_interface(0)
             .wait()
             .map_err(|e| AdapterError::Io(format!("claim interface 0: {e}")))?;
 
-        // GET_INFO — verify protocol version (blocking control transfer).
-        let info_data = iface
-            .control_in(ctrl_in(RequestCode::GetInfo as u8, 12), CTRL_TIMEOUT)
-            .wait()
-            .map_err(|e| AdapterError::Protocol(format!("GET_INFO: {e:?}")))?;
+        // GET_INFO — verify protocol version (blocking EP0 vendor request).
+        //
+        // On macOS, IOKit may return kIOReturnAborted (Cancelled) on the first
+        // vendor EP0 request immediately after InterfaceOpen().  Retry with
+        // exponential backoff to handle this transient race.
+        let info_data = {
+            let mut last_err = None;
+            let mut delay_ms = 50u64;
+            let mut result = None;
+            for attempt in 0..5 {
+                match iface
+                    .control_in(ctrl_in(RequestCode::GetInfo as u8, 12), CTRL_TIMEOUT)
+                    .wait()
+                {
+                    Ok(data) => {
+                        result = Some(data);
+                        break;
+                    }
+                    Err(e) => {
+                        eprintln!("KCAN: GET_INFO attempt {attempt} failed: {e:?} (retrying in {delay_ms}ms)");
+                        last_err = Some(e);
+                        std::thread::sleep(Duration::from_millis(delay_ms));
+                        delay_ms = (delay_ms * 2).min(500);
+                    }
+                }
+            }
+            result.ok_or_else(|| {
+                AdapterError::Protocol(format!("GET_INFO: {:?}", last_err.unwrap()))
+            })?
+        };
         if info_data.len() < 12 {
             return Err(AdapterError::Protocol("GET_INFO: short response".into()));
         }
@@ -102,17 +139,41 @@ impl KCanAdapter {
             .wait()
             .map_err(|e| AdapterError::Protocol(format!("SET_MODE: {e:?}")))?;
 
-        // Spawn background IO thread (owns Interface).
+        // Open bulk endpoints synchronously so failures surface as AdapterError
+        // rather than dying silently inside the reader thread.
+        let mut ep_out = iface
+            .endpoint::<Bulk, Out>(BULK_OUT_EP)
+            .map_err(|e| AdapterError::Io(format!("open bulk-out ep 0x{BULK_OUT_EP:02X}: {e}")))?;
+        let mut ep_in = iface
+            .endpoint::<Bulk, In>(BULK_IN_EP)
+            .map_err(|e| AdapterError::Io(format!("open bulk-in ep 0x{BULK_IN_EP:02X}: {e}")))?;
+
+        // Reset data toggles on both bulk endpoints.
+        //
+        // On macOS, IOUSBInterfaceOpen does NOT reset host-side data toggles.
+        // If the previous session ended mid-transfer, the device may be at DATA1
+        // while the host starts at DATA0, causing every bulk IN packet to be
+        // silently discarded (NACK loop). CLEAR_FEATURE(ENDPOINT_HALT) resets
+        // both host and device toggles to DATA0 via ClearPipeStallBothEnds.
+        if let Err(e) = ep_out.clear_halt().wait() {
+            eprintln!("KCAN: clear_halt bulk-out: {e} (ignoring)");
+        }
+        if let Err(e) = ep_in.clear_halt().wait() {
+            eprintln!("KCAN: clear_halt bulk-in: {e} (ignoring)");
+        }
+
         let (frame_tx, frame_rx) = mpsc::channel::<KCanFrame>();
         let (tx_cmd_tx, tx_cmd_rx) = mpsc::sync_channel::<TxCmd>(8);
+        let (error_tx, error_rx) = mpsc::sync_channel::<String>(1);
 
         std::thread::Builder::new()
             .name("kcan-reader".into())
-            .spawn(move || reader_thread(iface, frame_tx, tx_cmd_rx))
+            .spawn(move || reader_thread(ep_in, ep_out, frame_tx, tx_cmd_rx, error_tx))
             .map_err(|e| AdapterError::Io(format!("spawn reader: {e}")))?;
 
         Ok(Self {
             frame_rx,
+            error_rx,
             tx_cmd_tx,
             name,
             tx_seq: 0,
@@ -158,11 +219,19 @@ impl CanAdapter for KCanAdapter {
                     return Ok(ReceivedFrame {
                         frame,
                         hardware_timestamp_us: Some(kf.timestamp_us),
+                        channel: kf.channel,
                     });
                 }
                 Err(mpsc::RecvTimeoutError::Timeout) => return Err(AdapterError::Timeout),
                 Err(mpsc::RecvTimeoutError::Disconnected) => {
-                    return Err(AdapterError::Io("KCAN reader thread died".into()))
+                    // Drain the error channel to get the actual failure reason.
+                    let reason = self
+                        .error_rx
+                        .try_recv()
+                        .unwrap_or_else(|_| "unknown — check stderr".to_string());
+                    return Err(AdapterError::Fatal(format!(
+                        "KCAN reader thread died: {reason}"
+                    )));
                 }
             }
         }
@@ -184,17 +253,12 @@ impl CanAdapter for KCanAdapter {
 // ─── Background IO thread ─────────────────────────────────────────────────────
 
 fn reader_thread(
-    iface: Interface,
+    mut ep_in: Endpoint<Bulk, In>,
+    mut ep_out: Endpoint<Bulk, Out>,
     frame_tx: mpsc::Sender<KCanFrame>,
     tx_cmd_rx: mpsc::Receiver<TxCmd>,
+    _error_tx: mpsc::SyncSender<String>,
 ) {
-    let mut ep_out = iface
-        .endpoint::<Bulk, Out>(BULK_OUT_EP)
-        .expect("open bulk-out endpoint");
-    let mut ep_in = iface
-        .endpoint::<Bulk, In>(BULK_IN_EP)
-        .expect("open bulk-in endpoint");
-
     loop {
         // Drain pending TX commands (non-blocking), do bulk-out for each.
         while let Ok(TxCmd::Send(bytes)) = tx_cmd_rx.try_recv() {
@@ -202,8 +266,16 @@ fn reader_thread(
         }
 
         // Block on next bulk IN frame (short timeout so TX can be drained regularly).
+        // nusb requires requested_len to be a nonzero multiple of max_packet_size (64).
+        // KCAN_FRAME_SIZE=80 is not a multiple of 64, so request 128 bytes instead;
+        // the firmware sends 80 bytes (64+16), nusb returns exactly 80 on success.
+        //
+        // IMPORTANT: timeout must exceed the firmware's frame interval (100 ms for
+        // periodic-echo) so both packets of the 80-byte frame (64 + 16) arrive before
+        // the transfer is cancelled.  A short timeout (< one frame interval) would
+        // interrupt mid-transfer and permanently misalign the packet pipeline.
         match ep_in
-            .transfer_blocking(Buffer::new(KCAN_FRAME_SIZE), Duration::from_millis(10))
+            .transfer_blocking(Buffer::new(128), Duration::from_millis(200))
             .into_result()
         {
             Ok(data) if data.len() == KCAN_FRAME_SIZE => {
@@ -215,9 +287,35 @@ fn reader_thread(
                     }
                 }
             }
-            Ok(_) => {} // wrong size — skip
-            Err(_) => {
-                std::thread::sleep(Duration::from_millis(10));
+            Ok(data) => {
+                eprintln!("KCAN DBG: unexpected transfer size {} bytes", data.len());
+            }
+            Err(e) => {
+                use nusb::transfer::TransferError;
+                match e {
+                    TransferError::Disconnected => {
+                        // Device physically removed or firmware reset — exit cleanly
+                        // so AdapterError::Fatal propagates to the session.
+                        let _ = _error_tx.try_send("USB device disconnected".into());
+                        break;
+                    }
+                    TransferError::Stall => {
+                        // Endpoint halted — clear it and retry once.
+                        if ep_in.clear_halt().wait().is_err() {
+                            let _ = _error_tx.try_send("bulk-in stall, clear_halt failed".into());
+                            break;
+                        }
+                    }
+                    TransferError::Cancelled => {
+                        // kIOReturnAborted on macOS: transient (timeout, bus reset).
+                        // Sleep briefly to avoid busy-looping, then retry.
+                        std::thread::sleep(Duration::from_millis(5));
+                    }
+                    _ => {
+                        eprintln!("KCAN DBG: transfer_blocking error: {e:?}");
+                        std::thread::sleep(Duration::from_millis(5));
+                    }
+                }
             }
         }
     }

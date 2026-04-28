@@ -147,5 +147,17 @@ fn format_event(event: &CanEvent) -> Option<String> {
             ))
         }
         CanEvent::SdoPending { .. } => None,
+        CanEvent::RawFrame { cob_id, data, port } => {
+            let hex: String = data
+                .iter()
+                .map(|b| format!("{b:02X}"))
+                .collect::<Vec<_>>()
+                .join(" ");
+            let ch = if *port == 0 { "FDCAN1" } else { "FDCAN2" };
+            Some(format!(
+                "RAW    [{cob_id:#05X}]  {ch}  dlc={dlc}  {hex}",
+                dlc = data.len()
+            ))
+        }
     }
 }

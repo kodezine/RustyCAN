@@ -1,11 +1,12 @@
 //! Status LED task.
 //!
-//! | LED | Pin  | Meaning                        |
-//! |-----|------|--------------------------------|
-//! | LD1 | PB0  | Solid on = bus-on              |
-//! | LD2 | PE1  | Blinks 50 ms on each RX frame  |
-//! | LD3 | PB14 | Blinks 50 ms on TX error       |
+//! | LED | Pin  | Colour | Meaning                                     |
+//! |-----|------|--------|---------------------------------------------|
+//! | LD1 | PB0  | Green  | Heartbeat — 1 Hz blink = firmware alive     |
+//! | LD2 | PE1  | Blue   | USB host connected (solid on = enumerated)  |
+//! | LD3 | PB14 | Red    | Blinks 50 ms on TX error (future)           |
 
+use embassy_futures::join::join;
 use embassy_stm32::gpio::Output;
 use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 use embassy_sync::channel::Channel;
@@ -16,21 +17,32 @@ use kcan_protocol::frame::KCanFrame;
 #[embassy_executor::task]
 pub async fn status_task(
     mut led_bus_on: Output<'static>,
-    _led_rx: Output<'static>,
+    mut led_usb: Output<'static>,
     _led_err: Output<'static>,
     _can_to_usb: &'static Channel<CriticalSectionRawMutex, KCanFrame, 32>,
 ) {
-    // The status task watches the can_to_usb channel passively via try_receive
-    // on a tick so it doesn't compete with the USB IO task.
-    loop {
-        Timer::after(Duration::from_millis(10)).await;
-
-        // We don't own the channel here; just blink LD1 at 1 Hz to show life
-        // until proper bus-on state tracking is wired from the config struct.
-        // TODO: wire to KCanConfig.bus_on once config is shared via a Mutex.
-        led_bus_on.toggle();
-        Timer::after(Duration::from_millis(490)).await;
-        led_bus_on.toggle();
-        Timer::after(Duration::from_millis(490)).await;
-    }
+    join(
+        // LD1 — 1 Hz heartbeat blink to confirm firmware is running.
+        async {
+            loop {
+                led_bus_on.set_high();
+                Timer::after(Duration::from_millis(500)).await;
+                led_bus_on.set_low();
+                Timer::after(Duration::from_millis(500)).await;
+            }
+        },
+        // LD2 — mirrors USB_CONFIGURED: solid on when a host has enumerated
+        //        the device, off on disconnect/reset.
+        async {
+            loop {
+                let configured = crate::usb_task::USB_CONFIGURED_LED.wait().await;
+                if configured {
+                    led_usb.set_high();
+                } else {
+                    led_usb.set_low();
+                }
+            }
+        },
+    )
+    .await;
 }

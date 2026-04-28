@@ -3,3 +3,10 @@ members = [
     "dongle-h753",
 ]
 resolver = "2"
+
+# Profile must live at workspace root; per-package profiles are ignored.
+[profile.release]
+opt-level     = "s"
+lto           = true
+codegen-units = 1
+debug         = 2   # Needed for defmt to resolve source locations via RTT
