@@ -15,4 +15,4 @@ target = "thumbv7em-none-eabihf"
 
 [env]
 # Tell embassy-stm32 which chip we are targeting.
-DEFMT_LOG = "debug"
+DEFMT_LOG = "embassy_stm32=trace,embassy_usb_synopsys_otg=trace,debug"

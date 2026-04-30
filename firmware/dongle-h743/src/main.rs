@@ -96,8 +96,19 @@ bind_interrupts!(struct Irqs {
 
 #[embassy_executor::main]
 async fn main(spawner: Spawner) {
+    // ── D-Cache disable (USB DMA coherency) ──────────────────────────────────
+    // The STM32H7 L1 D-cache causes USB DMA vs CPU coherency issues: the USB
+    // OTG DMA writes SETUP/OUT packets into SRAM but the CPU reads stale cache
+    // lines and never sees the data, leaving the stack stuck at "SETUP waiting".
+    // Disabling the D-cache is the simplest fix; a non-cacheable MPU region is
+    // the production alternative once USB is verified working.
+    unsafe {
+        let mut cp = cortex_m::peripheral::Peripherals::steal();
+        cp.SCB.disable_dcache(&mut cp.CPUID);
+    }
+
     // ── Clock configuration ───────────────────────────────────────────────────
-    // System:  HSE 25 MHz → PLL1 → 480 MHz sysclk  (VoltageScale0)
+    // System:  HSE 25 MHz → PLL1 → 400 MHz sysclk  (VoltageScale1)
     // FDCAN:   HSE 25 MHz → PLL2Q → 32 MHz
     // USB:     HSI48 with CRS (simplest, no PLL3 needed)
     let mut config = Config::default();
@@ -107,12 +118,14 @@ async fn main(spawner: Spawner) {
             freq: embassy_stm32::time::Hertz(25_000_000),
             mode: HseMode::Oscillator,
         });
-        // PLL1: 25 MHz / 5 = 5 MHz → 5 × 192 = 960 MHz VCO → / 2 = 480 MHz sysclk.
+        // PLL1: 25 MHz / 5 = 5 MHz → 5 × 160 = 800 MHz VCO → / 2 = 400 MHz sysclk.
+        // Using 400 MHz (VoltageScale1) instead of 480 MHz (Scale0) to avoid
+        // STM32H7 power-supply instability known to break USB enumeration.
         config.rcc.pll1 = Some(Pll {
             source: PllSource::HSE,
             prediv: PllPreDiv::DIV5,  // → 5 MHz
-            mul: PllMul::MUL192,      // → 960 MHz VCO
-            divp: Some(PllDiv::DIV2), // → 480 MHz sysclk
+            mul: PllMul::MUL160,      // → 800 MHz VCO
+            divp: Some(PllDiv::DIV2), // → 400 MHz sysclk
             divq: None,
             divr: None,
             fracn: None,
@@ -128,12 +141,12 @@ async fn main(spawner: Spawner) {
             fracn: None,
         });
         config.rcc.sys = Sysclk::PLL1_P;
-        config.rcc.ahb_pre = AHBPrescaler::DIV2; // 240 MHz HCLK
-        config.rcc.apb1_pre = APBPrescaler::DIV2; // 120 MHz
-        config.rcc.apb2_pre = APBPrescaler::DIV2; // 120 MHz
-        config.rcc.apb3_pre = APBPrescaler::DIV2; // 120 MHz
-        config.rcc.apb4_pre = APBPrescaler::DIV2; // 120 MHz
-        config.rcc.voltage_scale = VoltageScale::Scale0;
+        config.rcc.ahb_pre = AHBPrescaler::DIV2; // 200 MHz HCLK
+        config.rcc.apb1_pre = APBPrescaler::DIV2; // 100 MHz
+        config.rcc.apb2_pre = APBPrescaler::DIV2; // 100 MHz
+        config.rcc.apb3_pre = APBPrescaler::DIV2; // 100 MHz
+        config.rcc.apb4_pre = APBPrescaler::DIV2; // 100 MHz
+        config.rcc.voltage_scale = VoltageScale::Scale1;
         // CSI required by STM32H7 USB analog circuits (see embassy USB examples).
         config.rcc.csi = true;
         // FDCAN kernel clock from PLL2Q.
@@ -167,7 +180,7 @@ async fn main(spawner: Spawner) {
     };
 
     info!("KCAN Dongle v1 (H743I) — booting  uid={:08X}", uid_lo);
-    info!("USB: VID=0x1209 PID=0xBEEF  serial={}", serial_str);
+    info!("USB: VID=0x1209 PID=0xCA01  serial={}", serial_str);
 
     // ── Status LEDs ───────────────────────────────────────────────────────────
     // MB1246 Rev E direct-GPIO LEDs:
@@ -193,10 +206,66 @@ async fn main(spawner: Spawner) {
     };
 
     // ── USB OTG FS — CN18 Micro-AB ───────────────────────────────────────────
+    // Embassy enables the AHB1 clock and resets the peripheral inside
+    // Bus::init() (called on first Bus::poll()).  We also enable it here, before
+    // Driver::new_fs(), so that GUSBCFG is accessible for the PHYSEL pre-set
+    // below.  The redundant enable is harmless (idempotent).
+    {
+        use embassy_stm32::pac;
+
+        // Enable USB_OTG_FS AHB1 bus clock.
+        pac::RCC.ahb1enr().modify(|w| w.set_usb_otg_fsen(true));
+        let _ = pac::RCC.ahb1enr().read().usb_otg_fsen(); // barrier
+
+        // Clear both ULPI clock gates.
+        //
+        // OTG_HS ULPI (AHB1ENR bit 26): the HS peripheral (CN14) uses an
+        // external 60 MHz ULPI PHY.  If this clock gate is asserted while no
+        // ULPI PHY is present the HS core stalls, which can drag the 3.3 V USB
+        // supply low and prevent the FS peripheral from enumerating.
+        //
+        // OTG_FS ULPI (AHB1ENR bit 28): the dedicated FS peripheral has no ULPI
+        // PHY; this bit should always be 0.  Embassy's Bus::init() clears it for
+        // InternalFullSpeed anyway, but clearing it here eliminates any race.
+        pac::RCC.ahb1enr().modify(|w| {
+            w.set_usb_otg_hs_ulpien(false);
+            w.set_usb_otg_fs_ulpien(false);
+        });
+        let _ = pac::RCC.ahb1enr().read(); // barrier
+
+        // Pre-set PHYSEL = 1 (internal FS transceiver) in GUSBCFG.
+        // Embassy's configure_as_device() (first Bus::poll()) will write the
+        // whole GUSBCFG register with PHYSEL=1 for PhyType::InternalFullSpeed,
+        // but setting it here ensures PHYSEL is never 0 after the clock gate
+        // opens and before the Embassy init runs.
+        pac::USB_OTG_FS.gusbcfg().modify(|w| w.set_physel(true));
+
+        // Enable USB 3.3 V supply detector FIRST — the internal D+ pull-up is
+        // powered by VDD33USB, so DCTL.SDIS only controls D+ while VDD33USB is on.
+        pac::PWR.cr3().modify(|w| {
+            w.set_usb33den(true);
+            w.set_usbregen(false);
+        });
+        while !pac::PWR.cr3().read().usb33rdy() {}
+        info!("USB: VDD33USB ready (usb33rdy=1)");
+
+        // The 3 s soft-disconnect that clears the macOS IOKit error state is
+        // performed inside usb_diag_task, AFTER Embassy's Bus::init() fully
+        // powers up the FS PHY (PWRDWN=1) and configures the OTG core.
+        // Setting SDIS=1 before Bus::init() on a partially-initialised core
+        // causes DSTS.EERR=1 (erratic error), which permanently locks
+        // GRXFSIZ=1024 and prevents the device from receiving any USB traffic.
+        // No pre-Embassy SDIS manipulation here.
+    }
+
     // ep_out_buffer must be 'static for the driver lifetime.
     static mut USB_EP_OUT_BUF: [u8; 256] = [0u8; 256];
     let mut usb_cfg = embassy_stm32::usb::Config::default();
     usb_cfg.vbus_detection = false;
+    // STM32H743 OTG_FS with internal FS PHY requires the extended transceiver
+    // switch delay (DCFG.XCVRDLY).  Without it the RX/TX path switches too fast,
+    // causing erratic errors (DSTS.EERR=1) and SETUP packet decode failures.
+    usb_cfg.xcvrdly = true;
     // SAFETY: main is only ever called once by the embassy runtime.
     let usb_driver = Driver::new_fs(
         p.USB_OTG_FS,
@@ -212,7 +281,10 @@ async fn main(spawner: Spawner) {
     static mut BOS_DESCRIPTOR: [u8; 256] = [0u8; 256];
     static mut CONTROL_BUF: [u8; 64] = [0u8; 64];
 
-    let mut usb_config = embassy_usb::Config::new(0x1209, 0xBEEF);
+    // PID note: 0xCA01 used during bringup to bypass macOS IOKit "problematic
+    // device" cache accumulated from earlier failed enumerations with 0xBEEF.
+    // Change back to 0xBEEF once enumeration is stable.
+    let mut usb_config = embassy_usb::Config::new(0x1209, 0xCA01);
     usb_config.manufacturer = Some("Kodezine");
     usb_config.product = Some("KCAN Dongle v1 (H743I)");
     usb_config.serial_number = Some(serial_str);
@@ -250,6 +322,7 @@ async fn main(spawner: Spawner) {
 
     // ── Spawn tasks ───────────────────────────────────────────────────────────
     spawner.spawn(usb_task::usb_device_task(usb).ok().unwrap());
+    spawner.spawn(usb_task::usb_diag_task().ok().unwrap());
     spawner.spawn(
         usb_task::kcan_io_task(kcan_class, &CAN_TO_USB, &USB_TO_CAN, &USB_TO_CAN2)
             .ok()
