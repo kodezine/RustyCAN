@@ -1,0 +1,13 @@
+{
+  "adapter_kind": {"KCan": {"serial": null}},
+  "port": "1",
+  "baud": "250000",
+  "http_port": 7878,
+  "log_path": "kcan-h743-test.jsonl",
+  "sdo_timeout_str": "500",
+  "listen_only": false,
+  "text_log": true,
+  "kcan_serial": "",
+  "nodes": [],
+  "dbc_files": []
+}

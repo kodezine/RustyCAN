@@ -262,6 +262,27 @@ dependencies = [
 ]
 
 [[package]]
+name = "dongle-h743"
+version = "0.1.0"
+dependencies = [
+ "cortex-m",
+ "cortex-m-rt",
+ "critical-section",
+ "defmt 1.0.1",
+ "defmt-rtt",
+ "embassy-executor",
+ "embassy-futures",
+ "embassy-stm32",
+ "embassy-sync",
+ "embassy-time",
+ "embassy-usb",
+ "embedded-can",
+ "kcan-protocol",
+ "log",
+ "panic-probe",
+]
+
+[[package]]
 name = "dongle-h753"
 version = "0.1.0"
 dependencies = [
