@@ -51,6 +51,9 @@ pub enum AdapterError {
     Protocol(String),
     /// Unrecoverable error — the session must be terminated.
     Fatal(String),
+    /// The USB device was physically disconnected.  The session may attempt
+    /// to reconnect rather than terminating.
+    Disconnected,
 }
 
 impl fmt::Display for AdapterError {
@@ -61,6 +64,7 @@ impl fmt::Display for AdapterError {
             Self::Io(s) => write!(f, "I/O error: {s}"),
             Self::Protocol(s) => write!(f, "protocol error: {s}"),
             Self::Fatal(s) => write!(f, "fatal error: {s}"),
+            Self::Disconnected => write!(f, "USB device disconnected"),
         }
     }
 }

@@ -466,6 +466,10 @@ fn event_to_log_line(event: &CanEvent) -> Option<String> {
                 data.len()
             ))
         }
+        CanEvent::AdapterDisconnected => {
+            Some("ADAPTER DISCONNECTED — waiting to reconnect…".into())
+        }
+        CanEvent::AdapterReconnected => Some("ADAPTER RECONNECTED — session resumed".into()),
     }
 }
 

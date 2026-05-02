@@ -34,6 +34,8 @@
 | Native egui GUI | ✅ |
 | PEAK PCAN-USB adapter | ✅ |
 | KCAN Dongle adapter (STM32H753ZI) | ✅ |
+| KCAN Dongle adapter (STM32H743XI — H743I-EVAL MB1246 Rev E) | 🔄 bring-up |
+| KCAN USB MPS feature-gating (`usb-hs` Cargo feature: 64-byte FS / 512-byte HS; host adapter must match) | planned |
 | KCAN EP0 control handler (GET_INFO, GET_BT_CONST, SET_BITTIMING, SET_MODE) | ✅ |
 | KCAN UID-derived USB serial number | ✅ |
 | KCAN dual-channel frame labeling (FDCAN1 / FDCAN2 per frame) | ✅ |

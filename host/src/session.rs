@@ -267,14 +267,14 @@ pub fn start(config: SessionConfig) -> SessionResult {
         for name in dbc_filenames {
             let _ = tx.send(CanEvent::DbcLoaded(name));
         }
-        recv_loop(
+        let disconnected = recv_loop(
             adapter,
             &node_ods,
             &pdo_decoders,
-            dbc_database,
+            dbc_database.as_ref(),
             tx.clone(),
-            cmd_rx,
-            logger,
+            &cmd_rx,
+            &mut logger,
             listen_only,
             sdo_timeout_ms,
             block_initiate_timeout_ms,
@@ -284,6 +284,64 @@ pub fn start(config: SessionConfig) -> SessionResult {
             &port,
             baud,
         );
+        if !disconnected {
+            return; // Fatal error or GUI disconnect — do not attempt reconnect.
+        }
+
+        // ── Reconnect loop ────────────────────────────────────────────────────
+        // The dongle was physically unplugged.  Poll until it reappears, then
+        // re-open and resume the session without restarting rustycan.
+        let _ = tx.send(CanEvent::AdapterDisconnected);
+        eprintln!("KCAN: dongle disconnected — waiting for reconnect");
+
+        let mut backoff_ms = 500u64;
+        loop {
+            std::thread::sleep(Duration::from_millis(backoff_ms));
+            backoff_ms = (backoff_ms * 2).min(5000);
+
+            // Check if the GUI has gone away before we bother reconnecting.
+            if matches!(cmd_rx.try_recv(), Err(mpsc::TryRecvError::Disconnected)) {
+                return;
+            }
+
+            match open_adapter(&adapter_kind, &port, baud, listen_only) {
+                Ok(new_adapter) => {
+                    eprintln!("KCAN: dongle reconnected — resuming session");
+                    let _ = tx.send(CanEvent::AdapterReconnected);
+                    backoff_ms = 500; // reset for next potential disconnect
+                    let disconnected_again = recv_loop(
+                        new_adapter,
+                        &node_ods,
+                        &pdo_decoders,
+                        dbc_database.as_ref(),
+                        tx.clone(),
+                        &cmd_rx,
+                        &mut logger,
+                        listen_only,
+                        sdo_timeout_ms,
+                        block_initiate_timeout_ms,
+                        block_subblock_timeout_ms,
+                        block_end_timeout_ms,
+                        block_size,
+                        &port,
+                        baud,
+                    );
+                    if !disconnected_again {
+                        return; // Fatal or GUI disconnect.
+                    }
+                    let _ = tx.send(CanEvent::AdapterDisconnected);
+                    eprintln!("KCAN: dongle disconnected again — waiting for reconnect");
+                }
+                Err(crate::adapters::AdapterError::NotFound(_)) => {
+                    // Still not visible — keep polling.
+                }
+                Err(e) => {
+                    // Open failed for a non-trivial reason — report and give up.
+                    let _ = tx.send(CanEvent::AdapterError(format!("Reconnect failed: {e}")));
+                    return;
+                }
+            }
+        }
     });
 
     Ok((rx, cmd_tx, node_labels, actual_log_path))
@@ -297,10 +355,10 @@ fn recv_loop(
     mut adapter: Box<dyn crate::adapters::CanAdapter>,
     ods: &[(u8, Option<ObjectDictionary>)],
     pdo_decoders: &[(u8, PdoDecoder)],
-    dbc_database: Option<DbcDatabase>,
+    dbc_database: Option<&DbcDatabase>,
     tx: mpsc::Sender<CanEvent>,
-    cmd_rx: mpsc::Receiver<CanCommand>,
-    mut logger: EventLogger,
+    cmd_rx: &mpsc::Receiver<CanCommand>,
+    logger: &mut EventLogger,
     listen_only: bool,
     sdo_timeout_ms: u64,
     _block_initiate_timeout_ms: u64,
@@ -309,7 +367,7 @@ fn recv_loop(
     block_size: u8,
     _port: &str,
     baud: u32,
-) {
+) -> bool {
     // Write session header — adapter identity and workstation metadata.
     logger.log_session_start(chrono::Utc::now(), adapter.name(), baud);
 
@@ -380,7 +438,7 @@ fn recv_loop(
                 match cmd_rx.try_recv() {
                     Ok(_) => {} // Discard command
                     Err(mpsc::TryRecvError::Empty) => break,
-                    Err(mpsc::TryRecvError::Disconnected) => return,
+                    Err(mpsc::TryRecvError::Disconnected) => return false,
                 }
             }
         } else {
@@ -719,7 +777,7 @@ fn recv_loop(
             }
             // Check if we exited because the channel was disconnected
             if matches!(cmd_rx.try_recv(), Err(mpsc::TryRecvError::Disconnected)) {
-                return;
+                return false;
             }
         }
 
@@ -730,10 +788,14 @@ fn recv_loop(
                 continue;
             }
             Err(e) => {
+                // Clean disconnect — signal the caller to attempt reconnect.
+                if matches!(e, crate::adapters::AdapterError::Disconnected) {
+                    return true;
+                }
                 // Fatal errors mean the adapter is unrecoverable — terminate the session.
                 if matches!(e, crate::adapters::AdapterError::Fatal(_)) {
                     let _ = tx.send(CanEvent::AdapterError(e.to_string()));
-                    return;
+                    return false;
                 }
 
                 // Log non-fatal errors and keep trying — the bus might not be powered
@@ -742,7 +804,7 @@ fn recv_loop(
 
                 // Check if GUI has disconnected before continuing
                 if matches!(cmd_rx.try_recv(), Err(mpsc::TryRecvError::Disconnected)) {
-                    return;
+                    return false;
                 }
                 continue;
             }
@@ -770,7 +832,7 @@ fn recv_loop(
             if let Some(signals) = db.decode_frame(can_id, data) {
                 logger.log_dbc_signal(ts, &signals, data, cob_id);
                 if tx.send(CanEvent::DbcSignal(signals)).is_err() {
-                    return; // GUI disconnected
+                    return false; // GUI disconnected
                 }
                 logged = true;
             }
@@ -805,7 +867,7 @@ fn recv_loop(
                             })
                             .is_err()
                         {
-                            return; // GUI disconnected — stop the thread
+                            return false; // GUI disconnected — stop the thread
                         }
                     }
                 }
@@ -930,7 +992,7 @@ fn recv_loop(
                             cob_id,
                         );
                         if tx.send(CanEvent::Sdo(entry)).is_err() {
-                            return;
+                            return false;
                         }
                         // pending already removed above
                     } else {
@@ -954,7 +1016,7 @@ fn recv_loop(
                                             }))
                                             .is_err()
                                         {
-                                            return;
+                                            return false;
                                         }
                                     }
                                     // pending removed — transfer complete
@@ -995,7 +1057,7 @@ fn recv_loop(
                                         cob_id,
                                     );
                                     if tx.send(CanEvent::Sdo(entry)).is_err() {
-                                        return;
+                                        return false;
                                     }
                                     // pending removed — transfer complete
                                 }
@@ -1074,7 +1136,7 @@ fn recv_loop(
                                             cob_id,
                                         );
                                         if tx.send(CanEvent::Sdo(entry)).is_err() {
-                                            return;
+                                            return false;
                                         }
                                         // pending removed — transfer complete
                                     } else {
@@ -1188,7 +1250,7 @@ fn recv_loop(
                                         cob_id,
                                     );
                                     if tx.send(CanEvent::Sdo(entry)).is_err() {
-                                        return;
+                                        return false;
                                     }
                                     // pending removed — transfer complete
                                 } else {
@@ -1245,7 +1307,7 @@ fn recv_loop(
                                                 abort_code: Some(0x08000000), // General error
                                             };
                                             if tx.send(CanEvent::Sdo(entry)).is_err() {
-                                                return;
+                                                return false;
                                             }
                                             continue;
                                         }
@@ -1388,7 +1450,7 @@ fn recv_loop(
                                         cob_id,
                                     );
                                     if tx.send(CanEvent::Sdo(entry)).is_err() {
-                                        return;
+                                        return false;
                                     }
                                     // pending removed
                                 } else {
@@ -1472,7 +1534,7 @@ fn recv_loop(
                                                 abort_code: Some(0x05040005), // Out of memory
                                             };
                                             if tx.send(CanEvent::Sdo(entry)).is_err() {
-                                                return;
+                                                return false;
                                             }
                                             continue;
                                         }
@@ -1509,7 +1571,7 @@ fn recv_loop(
                                                         abort_code: Some(0x08000000), // General error
                                                     };
                                                     if tx.send(CanEvent::Sdo(entry)).is_err() {
-                                                        return;
+                                                        return false;
                                                     }
                                                     continue;
                                                 }
@@ -1577,7 +1639,7 @@ fn recv_loop(
                                             abort_code: Some(0x05040003), // Invalid sequence number
                                         };
                                         if tx.send(CanEvent::Sdo(entry)).is_err() {
-                                            return;
+                                            return false;
                                         }
                                         // pending removed - transfer aborted
                                     }
@@ -1663,7 +1725,7 @@ fn recv_loop(
                                             cob_id,
                                         );
                                         if tx.send(CanEvent::Sdo(entry)).is_err() {
-                                            return;
+                                            return false;
                                         }
                                         // pending removed
                                     } else {
@@ -1689,7 +1751,7 @@ fn recv_loop(
                                             abort_code: Some(abort_code),
                                         };
                                         if tx.send(CanEvent::Sdo(entry)).is_err() {
-                                            return;
+                                            return false;
                                         }
                                         // pending removed
                                     }
@@ -1722,7 +1784,7 @@ fn recv_loop(
                             }))
                             .is_err()
                         {
-                            return;
+                            return false;
                         }
                     }
                 }
@@ -1748,7 +1810,7 @@ fn recv_loop(
                         }))
                         .is_err()
                     {
-                        return;
+                        return false;
                     }
                 }
             }
@@ -1779,7 +1841,7 @@ fn recv_loop(
                     })
                     .is_err()
                 {
-                    return;
+                    return false;
                 }
             }
 
@@ -1809,7 +1871,7 @@ fn recv_loop(
                     })
                     .is_err()
                 {
-                    return;
+                    return false;
                 }
             }
 
@@ -1869,7 +1931,7 @@ fn recv_loop(
                     abort_code: Some(0x0504_0000),
                 };
                 if tx.send(CanEvent::Sdo(entry)).is_err() {
-                    return;
+                    return false;
                 }
             }
         }

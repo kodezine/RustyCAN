@@ -1,0 +1,53 @@
+[package]
+name = "dongle-h743"
+version = "0.1.0"
+edition = "2021"
+description = "KCAN dongle firmware for STM32H743XI (Embassy) — STM32H743I-EVAL (MB1246 Rev E)"
+
+[[bin]]
+name = "dongle-h743"
+path = "src/main.rs"
+
+[dependencies]
+kcan-protocol = { path = "../../kcan-protocol", default-features = false }
+
+embassy-stm32 = { version = "0.6", features = [
+    "defmt",
+    "stm32h743xi",
+    "time-driver-tim2",
+    "exti",
+    "unstable-pac",
+    "memory-x",
+] }
+embassy-executor  = { version = "0.10", features = ["platform-cortex-m", "executor-thread"] }
+embassy-usb       = { version = "0.6", features = ["defmt"] }
+embassy-sync      = { version = "0.8", features = ["defmt"] }
+embassy-time      = { version = "0.5", features = ["defmt", "tick-hz-1_000_000"] }
+embassy-futures   = { version = "0.1" }
+embedded-can      = "0.4"
+# Force log to no_std: usbd-hid (transitive via embassy-usb) would otherwise pull it in with std.
+log               = { version = "0.4", default-features = false }
+
+cortex-m          = { version = "0.7", features = ["inline-asm", "critical-section-single-core"] }
+cortex-m-rt       = "0.7"
+critical-section  = "1.1"
+
+defmt             = "1.0"
+defmt-rtt         = "1.0"
+panic-probe       = { version = "1.0", features = ["print-defmt"] }
+
+[features]
+# Phase 2: enable FDCAN internal loopback for clock/timing self-test.
+# Build with: cargo build --release --features loopback
+# Remove for normal operation (Phase 3+).
+loopback = []
+# Phase 3b: continuous single-channel echo at 100 ms for PEAK sniffer /
+# RustyCAN verification. Injects 0x7E1 on FDCAN1 every 100 ms.
+# Build with: cargo run --features periodic-echo
+periodic-echo = []
+
+[profile.release]
+opt-level    = "s"
+lto          = true
+codegen-units = 1
+debug        = 2

@@ -159,5 +159,9 @@ fn format_event(event: &CanEvent) -> Option<String> {
                 dlc = data.len()
             ))
         }
+        CanEvent::AdapterDisconnected => {
+            Some("ADAPTER DISCONNECTED — waiting to reconnect…".into())
+        }
+        CanEvent::AdapterReconnected => Some("ADAPTER RECONNECTED — session resumed".into()),
     }
 }

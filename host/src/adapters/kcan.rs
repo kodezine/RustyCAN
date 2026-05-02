@@ -139,8 +139,7 @@ impl KCanAdapter {
             .wait()
             .map_err(|e| AdapterError::Protocol(format!("SET_MODE: {e:?}")))?;
 
-        // Open bulk endpoints synchronously so failures surface as AdapterError
-        // rather than dying silently inside the reader thread.
+        // Open bulk endpoints synchronously
         let mut ep_out = iface
             .endpoint::<Bulk, Out>(BULK_OUT_EP)
             .map_err(|e| AdapterError::Io(format!("open bulk-out ep 0x{BULK_OUT_EP:02X}: {e}")))?;
@@ -229,6 +228,9 @@ impl CanAdapter for KCanAdapter {
                         .error_rx
                         .try_recv()
                         .unwrap_or_else(|_| "unknown — check stderr".to_string());
+                    if reason == "__disconnected__" {
+                        return Err(AdapterError::Disconnected);
+                    }
                     return Err(AdapterError::Fatal(format!(
                         "KCAN reader thread died: {reason}"
                     )));
@@ -259,61 +261,75 @@ fn reader_thread(
     tx_cmd_rx: mpsc::Receiver<TxCmd>,
     _error_tx: mpsc::SyncSender<String>,
 ) {
+    // Accumulation buffer: holds bytes received across multiple USB packets.
+    //
+    // KCAN_FRAME_SIZE=80 is not a multiple of max-packet-size (MPS=64), so the
+    // firmware splits every frame into two USB packets: 64 bytes + 16 bytes.
+    // On macOS, nusb/IOKit may complete a transfer_blocking() call after the
+    // first full-MPS packet (64 bytes) rather than waiting for the short
+    // terminating packet (16 bytes).  Accumulating here handles any split
+    // pattern (64+16, 80+0, 48+32, …) without losing data.
+    let mut frame_buf: Vec<u8> = Vec::with_capacity(KCAN_FRAME_SIZE * 2);
+
     loop {
         // Drain pending TX commands (non-blocking), do bulk-out for each.
         while let Ok(TxCmd::Send(bytes)) = tx_cmd_rx.try_recv() {
             let _ = ep_out.transfer_blocking(bytes.into(), Duration::from_millis(100));
         }
 
-        // Block on next bulk IN frame (short timeout so TX can be drained regularly).
-        // nusb requires requested_len to be a nonzero multiple of max_packet_size (64).
-        // KCAN_FRAME_SIZE=80 is not a multiple of 64, so request 128 bytes instead;
-        // the firmware sends 80 bytes (64+16), nusb returns exactly 80 on success.
-        //
-        // IMPORTANT: timeout must exceed the firmware's frame interval (100 ms for
-        // periodic-echo) so both packets of the 80-byte frame (64 + 16) arrive before
-        // the transfer is cancelled.  A short timeout (< one frame interval) would
-        // interrupt mid-transfer and permanently misalign the packet pipeline.
+        // Block on next USB packet.  Request 128 bytes (smallest multiple of
+        // MPS=64 that fits one complete 80-byte frame).
         match ep_in
             .transfer_blocking(Buffer::new(128), Duration::from_millis(200))
             .into_result()
         {
-            Ok(data) if data.len() == KCAN_FRAME_SIZE => {
-                if let Ok(arr) = <[u8; KCAN_FRAME_SIZE]>::try_from(&data[..]) {
-                    if let Some(kf) = KCanFrame::from_bytes(&arr) {
-                        if frame_tx.send(kf).is_err() {
-                            break; // KCanAdapter dropped — exit.
+            Ok(data) if !data.is_empty() => {
+                frame_buf.extend_from_slice(&data);
+
+                // Consume all complete frames sitting in the accumulation buffer.
+                while frame_buf.len() >= KCAN_FRAME_SIZE {
+                    if let Ok(arr) =
+                        <[u8; KCAN_FRAME_SIZE]>::try_from(&frame_buf[..KCAN_FRAME_SIZE])
+                    {
+                        if let Some(kf) = KCanFrame::from_bytes(&arr) {
+                            if frame_tx.send(kf).is_err() {
+                                return; // KCanAdapter dropped — exit.
+                            }
                         }
                     }
+                    frame_buf.drain(..KCAN_FRAME_SIZE);
                 }
             }
-            Ok(data) => {
-                eprintln!("KCAN DBG: unexpected transfer size {} bytes", data.len());
-            }
+            Ok(_) => {} // zero-length packet — ignore
             Err(e) => {
                 use nusb::transfer::TransferError;
                 match e {
                     TransferError::Disconnected => {
-                        // Device physically removed or firmware reset — exit cleanly
-                        // so AdapterError::Fatal propagates to the session.
-                        let _ = _error_tx.try_send("USB device disconnected".into());
-                        break;
+                        // Device physically removed — signal Disconnected so the
+                        // session layer can attempt a reconnect rather than fatal exit.
+                        let _ = _error_tx.try_send("__disconnected__".into());
+                        return;
                     }
                     TransferError::Stall => {
                         // Endpoint halted — clear it and retry once.
                         if ep_in.clear_halt().wait().is_err() {
                             let _ = _error_tx.try_send("bulk-in stall, clear_halt failed".into());
-                            break;
+                            return;
                         }
+                        frame_buf.clear(); // discard any partial frame after a stall
                     }
-                    TransferError::Cancelled => {
-                        // kIOReturnAborted on macOS: transient (timeout, bus reset).
-                        // Sleep briefly to avoid busy-looping, then retry.
+                    TransferError::Cancelled | TransferError::InvalidArgument => {
+                        // Cancelled  = kIOReturnAborted: transient (timeout, bus reset).
+                        // InvalidArgument = kIOReturnBadArgument: EP1 is mid-flush during
+                        //   the firmware's BULK_RESTART PAC sequence (SNAK→EPDIS→TXFFLSH
+                        //   →CNAK).  Clears once the endpoint settles.  Retry indefinitely;
+                        //   a true device loss surfaces as Disconnected instead.
                         std::thread::sleep(Duration::from_millis(5));
                     }
                     _ => {
-                        eprintln!("KCAN DBG: transfer_blocking error: {e:?}");
-                        std::thread::sleep(Duration::from_millis(5));
+                        // Fault or Unknown — not recoverable.
+                        let _ = _error_tx.try_send(format!("bulk-in fatal: {e:?}"));
+                        return;
                     }
                 }
             }

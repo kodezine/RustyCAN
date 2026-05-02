@@ -80,6 +80,10 @@ pub enum CanEvent {
     },
     /// Sent by the recv thread when the CAN adapter fails to open.
     AdapterError(String),
+    /// Dongle was physically disconnected; session is polling for reconnect.
+    AdapterDisconnected,
+    /// Dongle has been reconnected and the session has resumed.
+    AdapterReconnected,
     /// Signals decoded from a CAN frame against the loaded DBC database.
     DbcSignal(DbcFrameSignals),
     /// Emitted once when the DBC database is loaded successfully.
@@ -239,7 +243,9 @@ pub fn apply_event(state: &mut AppState, ev: CanEvent) {
                 .insert(node_id, (index, subindex, direction));
         }
         // Handled directly by the UI layer; nothing to record in AppState.
-        CanEvent::AdapterError(_) => {}
+        CanEvent::AdapterError(_)
+        | CanEvent::AdapterDisconnected
+        | CanEvent::AdapterReconnected => {}
         CanEvent::DbcLoaded(name) => {
             state.dbc_loaded = Some(name);
         }

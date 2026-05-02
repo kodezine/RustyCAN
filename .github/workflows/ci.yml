@@ -90,11 +90,19 @@ jobs:
         working-directory: firmware
         run: cargo fmt --check
 
-      - name: Clippy
+      - name: Clippy dongle-h743
         working-directory: firmware
-        run: cargo clippy --target thumbv7em-none-eabihf -- -D warnings
+        run: cargo clippy -p dongle-h743 --target thumbv7em-none-eabihf -- -D warnings
 
-      - name: Firmware check
+      - name: Clippy dongle-h753
         working-directory: firmware
-        run: cargo check --target thumbv7em-none-eabihf
+        run: cargo clippy -p dongle-h753 --target thumbv7em-none-eabihf -- -D warnings
+
+      - name: Firmware check dongle-h743
+        working-directory: firmware
+        run: cargo check -p dongle-h743 --target thumbv7em-none-eabihf
+
+      - name: Firmware check dongle-h753
+        working-directory: firmware
+        run: cargo check -p dongle-h753 --target thumbv7em-none-eabihf
 
