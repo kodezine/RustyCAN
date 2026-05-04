@@ -45,8 +45,30 @@ impl<'d, D: UsbDriver<'d>> KCanSender<'d, D> {
 }
 
 impl<'d, D: UsbDriver<'d>> KCanReceiver<'d, D> {
+    /// Read one KCAN frame from the Bulk OUT endpoint into `buf`.
+    ///
+    /// Because MPS=64 and a KCAN frame is 80 bytes, the host splits every
+    /// frame into two USB packets: 64 bytes then 16 bytes.  A single
+    /// `ep.read()` call returns at most one USB packet (one FIFO entry), so we
+    /// must loop until we have received a short packet (< MPS) or the buffer
+    /// is full.
+    ///
+    /// Without this loop, `kcan_io_task` would receive 64 bytes on the first
+    /// call (rejected as "unexpected size"), then 16 bytes on the second call
+    /// (also rejected), silently dropping every TX frame from the host.
     pub async fn read_packet(&mut self, buf: &mut [u8]) -> Result<usize, EndpointError> {
-        self.ep.read(buf).await
+        const MPS: usize = 64;
+        let mut total = 0;
+        loop {
+            let n = self.ep.read(&mut buf[total..]).await?;
+            total += n;
+            // A short packet (n < MPS) signals the end of the USB transfer.
+            // Stop early also if the buffer is full.
+            if n < MPS || total >= buf.len() {
+                break;
+            }
+        }
+        Ok(total)
     }
 }
 
