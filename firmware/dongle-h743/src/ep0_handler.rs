@@ -80,13 +80,13 @@ impl Handler for KCanEp0Handler {
         match req.request {
             r if r == RequestCode::GetInfo as u8 => {
                 let mut info = KCanDeviceInfo::new(1, 0, 0, self.uid_lo);
-                // H753 exposes two FDCAN channels; frames carry a channel field.
-                info.channels = 2;
+                // H743 has one physical CAN channel: FDCAN1 → TJA1044 → CN3 DB9.
+                info.channels = 1;
                 let bytes = info.to_bytes();
                 let len = bytes.len().min(buf.len());
                 buf[..len].copy_from_slice(&bytes[..len]);
                 info!(
-                    "EP0 GET_INFO → protocol_v1, channels=2, uid={:08X}",
+                    "EP0 GET_INFO → protocol_v1, channels=1, uid={:08X}",
                     self.uid_lo
                 );
                 Some(InResponse::Accepted(&buf[..len]))

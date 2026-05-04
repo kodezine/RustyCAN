@@ -2,6 +2,20 @@
 //!
 //! Single-channel variant for STM32H743I-EVAL (MB1246 Rev E).
 //! FDCAN1 is connected to the on-board TJA1044 transceiver via CN3 DB9.
+//!
+//! # CANTx fix
+//!
+//! The previous implementation used `select(rx.read(), usb_to_can.receive())`
+//! which serialised RX and TX: whichever future resolved first consumed the
+//! entire iteration.  On a busy CAN bus `rx.read()` was always ready first,
+//! starving USB-initiated TX frames until the 32-entry `USB_TO_CAN` channel
+//! filled and new TX requests were silently dropped.
+//!
+//! The fix splits the FDCAN peripheral into its independent `CanTx` / `CanRx`
+//! halves (already separate types from `Can::split()`) and drives them with
+//! `embassy_futures::join::join`.  Both loops run concurrently in the same
+//! embassy task: while the TX loop blocks on `usb_to_can.receive()`, the RX
+//! loop can freely drain the FDCAN FIFO, and vice-versa.
 
 use embassy_stm32::can::frame::Frame;
 use embassy_stm32::can::Can;
@@ -60,65 +74,88 @@ pub async fn can_task(
     let mut rx_seq: u16 = 0;
     let mut echo_seq: u16 = 0;
 
-    loop {
-        use embassy_futures::select::{select, Either};
-
-        match select(rx.read(), usb_to_can.receive()).await {
-            Either::First(rx_result) => match rx_result {
-                Ok(envelope) => {
-                    // Use the ISR-captured timestamp (TIM2 at 1 MHz, time-driver-tim2).
-                    // This is more accurate than Instant::now() read in the async task.
-                    let (frame, rx_ts) = envelope.parts();
-                    let ts_us = rx_ts.as_micros() as u32;
-                    let header = frame.header();
-                    let id_val = match header.id() {
-                        Id::Standard(id) => id.as_raw() as u32,
-                        Id::Extended(id) => id.as_raw(),
-                    };
-                    info!("FDCAN RX [ID={:#010x}, DLC={}]", id_val, header.len());
-                    let mut kf = classic_to_kcan(&frame, ts_us, rx_seq);
-                    kf.channel = 0;
-                    rx_seq = rx_seq.wrapping_add(1);
-                    // Under periodic-echo there is no USB host draining the
-                    // channel; silently drop to avoid log spam.
-                    #[cfg(not(feature = "periodic-echo"))]
-                    if can_to_usb.try_send(kf).is_err() {
-                        warn!("can_to_usb channel full — RX frame dropped");
+    // Run CAN RX and TX paths as independent concurrent loops.
+    // CanRx and CanTx are separate types returned by Can::split() — using them
+    // in separate join branches has no shared mutable state.
+    //
+    // With the old select() approach, rx.read() could continuously "win" on a
+    // busy bus and starve USB-initiated TX frames.  join() lets both make
+    // progress independently: when the TX loop blocks on usb_to_can.receive(),
+    // the RX loop can drain the FDCAN FIFO, and vice-versa.
+    use embassy_futures::join::join;
+    join(
+        // ── RX: FDCAN1 → USB Bulk IN ─────────────────────────────────────────
+        async {
+            loop {
+                match rx.read().await {
+                    Ok(envelope) => {
+                        // Use the ISR-captured timestamp (TIM2 at 1 MHz, time-driver-tim2).
+                        // This is more accurate than Instant::now() read in the async task.
+                        let (frame, rx_ts) = envelope.parts();
+                        let ts_us = rx_ts.as_micros() as u32;
+                        let header = frame.header();
+                        let id_val = match header.id() {
+                            Id::Standard(id) => id.as_raw() as u32,
+                            Id::Extended(id) => id.as_raw(),
+                        };
+                        info!("FDCAN RX [ID={:#010x}, DLC={}]", id_val, header.len());
+                        let mut kf = classic_to_kcan(&frame, ts_us, rx_seq);
+                        kf.channel = 0;
+                        rx_seq = rx_seq.wrapping_add(1);
+                        // Under periodic-echo there is no USB host draining the
+                        // channel; silently drop to avoid log spam.
+                        #[cfg(not(feature = "periodic-echo"))]
+                        if can_to_usb.try_send(kf).is_err() {
+                            warn!("can_to_usb channel full — RX frame dropped");
+                        }
+                        #[cfg(feature = "periodic-echo")]
+                        let _ = can_to_usb.try_send(kf);
                     }
-                    #[cfg(feature = "periodic-echo")]
-                    let _ = can_to_usb.try_send(kf);
-                }
-                Err(e) => {
-                    warn!("FDCAN RX error: {:?}", e);
-                }
-            },
-            Either::Second(kf) => {
-                if let Some(frame) = kcan_to_frame(&kf) {
-                    info!("FDCAN TX [ID={:#010x}, DLC={}]", kf.can_id, kf.dlc);
-                    // write() blocks until TX FIFO has space; guard with a timeout
-                    // so a Bus-Off state doesn't permanently stall this task.
-                    if with_timeout(Duration::from_millis(200), tx.write(&frame))
-                        .await
-                        .is_err()
-                    {
-                        warn!("FDCAN1 TX timeout — possible Bus-Off, skipping frame");
-                        continue;
+                    Err(e) => {
+                        warn!("FDCAN RX error: {:?}", e);
                     }
-                    let ts_us = Instant::now().as_micros() as u32;
-                    let echo = KCanFrame::new_tx_echo(
-                        kf.can_id,
-                        kf.flags,
-                        kf.dlc,
-                        &kf.data[..kf.dlc as usize],
-                        ts_us,
-                        echo_seq,
-                    );
-                    echo_seq = echo_seq.wrapping_add(1);
-                    let _ = can_to_usb.try_send(echo);
                 }
             }
-        }
-    }
+        },
+        // ── TX: USB Bulk OUT → FDCAN1 ────────────────────────────────────────
+        async {
+            loop {
+                let kf = usb_to_can.receive().await;
+                match kcan_to_frame(&kf) {
+                    Some(frame) => {
+                        info!("FDCAN TX [ID={:#010x}, DLC={}]", kf.can_id, kf.dlc);
+                        // write() blocks until TX FIFO has space; guard with a timeout
+                        // so a Bus-Off state doesn't permanently stall this task.
+                        if with_timeout(Duration::from_millis(200), tx.write(&frame))
+                            .await
+                            .is_err()
+                        {
+                            warn!("FDCAN1 TX timeout — possible Bus-Off, skipping frame");
+                            continue;
+                        }
+                        let ts_us = Instant::now().as_micros() as u32;
+                        let echo = KCanFrame::new_tx_echo(
+                            kf.can_id,
+                            kf.flags,
+                            kf.dlc,
+                            &kf.data[..kf.dlc as usize],
+                            ts_us,
+                            echo_seq,
+                        );
+                        echo_seq = echo_seq.wrapping_add(1);
+                        let _ = can_to_usb.try_send(echo);
+                    }
+                    None => {
+                        warn!(
+                            "FDCAN1 TX: bad frame — can_id={:#010x} flags={:#04x} dlc={}",
+                            kf.can_id, kf.flags, kf.dlc
+                        );
+                    }
+                }
+            }
+        },
+    )
+    .await;
 }
 
 // ─── Frame conversion helpers ─────────────────────────────────────────────────
