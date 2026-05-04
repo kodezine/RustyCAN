@@ -23,6 +23,11 @@ pub async fn can_task(
     let (mut tx, mut rx, _) = can.split();
 
     info!("FDCAN1 started at 250 kbps");
+    lcd_terminal::boot_log!(
+        crate::display_task::LOG_CHANNEL,
+        "FDCAN1 ready (TJA1044 CN3 DB9, 250 kbps)",
+        lcd_terminal::BootStatus::Ok
+    );
 
     // ── Phase 2 loopback self-test ────────────────────────────────────────────
     // Sends a known test frame and expects it back immediately via internal

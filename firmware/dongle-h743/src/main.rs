@@ -72,12 +72,15 @@ use defmt_rtt as _;
 use panic_probe as _;
 
 mod can_task;
+mod display_task;
 #[cfg(feature = "periodic-echo")]
 mod echo_task;
 mod ep0_handler;
 mod kcan_usb;
 mod status_task;
 mod usb_task;
+
+extern crate lcd_terminal;
 
 use kcan_protocol::frame::KCanFrame;
 use kcan_usb::KCanUsbClass;
@@ -100,6 +103,7 @@ bind_interrupts!(struct Irqs {
     OTG_HS     => usb::InterruptHandler<peripherals::USB_OTG_HS>;
     FDCAN1_IT0 => can::IT0InterruptHandler<peripherals::FDCAN1>;
     FDCAN1_IT1 => can::IT1InterruptHandler<peripherals::FDCAN1>;
+    LTDC       => embassy_stm32::ltdc::InterruptHandler<peripherals::LTDC>;
 });
 
 // ─── Entry point ─────────────────────────────────────────────────────────────
@@ -166,6 +170,21 @@ async fn main(spawner: Spawner) {
             sync_from_usb: false, // ULPI PHY (USB3320C-EZK) provides its own 60 MHz clock
         });
         config.rcc.mux.usbsel = mux::Usbsel::HSI48;
+
+        // PLL3: pixel clock for LTDC → 25 MHz
+        //   HSE 25 MHz / M=5 = 5 MHz ref
+        //   5 MHz × N=160 = 800 MHz VCO
+        //   800 MHz / R=32 = 25 MHz → LTDCCLK
+        config.rcc.pll3 = Some(Pll {
+            source: PllSource::HSE,
+            prediv: PllPreDiv::DIV5, // → 5 MHz
+            mul: PllMul::MUL160,     // → 800 MHz VCO
+            divp: None,
+            divq: None,
+            divr: Some(PllDiv::DIV32), // → 25 MHz LTDCCLK
+            fracn: None,
+        });
+        // PLL3R is the only LTDC clock source on STM32H743 — no mux to set.
     }
 
     let p = embassy_stm32::init(config);
@@ -325,6 +344,107 @@ async fn main(spawner: Spawner) {
     );
     #[cfg(feature = "periodic-echo")]
     spawner.spawn(echo_task::echo_task(&USB_TO_CAN).ok().unwrap());
+
+    // ── LCD terminal (CN20 Ampire AM640480GTNQW on STM32H743I-EVAL) ───────────
+    // Provide a simple blocking delay for the SDRAM 100 µs power-up sequence.
+    struct BlockingDelay;
+    impl embedded_hal::delay::DelayNs for BlockingDelay {
+        fn delay_ns(&mut self, ns: u32) {
+            // At 400 MHz sysclk, 1 ns ≈ 0.4 cycles; conservative NOP spin.
+            let cycles = (ns as u64 * 400).div_ceil(1000);
+            for _ in 0..cycles {
+                cortex_m::asm::nop();
+            }
+        }
+    }
+
+    // ── SDRAM init ────────────────────────────────────────────────────────────
+    // Returns *mut u16 base at 0xD000_0000 (SDCLK = HCLK/3 = 133 MHz enforced
+    // by Is42s32800j::TIMING.max_sd_clock_hz in lcd_terminal::sdram).
+    let fb: *mut u16 = lcd_terminal::sdram::init_sdram(
+        p.FMC,
+        // Address A0–A12: PF0–PF5, PF12–PF15, PG0–PG2
+        p.PF0,
+        p.PF1,
+        p.PF2,
+        p.PF3,
+        p.PF4,
+        p.PF5,
+        p.PF12,
+        p.PF13,
+        p.PF14,
+        p.PF15,
+        p.PG0,
+        p.PG1,
+        p.PG2,
+        // Bank address BA0, BA1: PG4, PG5
+        p.PG4,
+        p.PG5,
+        // Data D0–D31
+        p.PD14,
+        p.PD15,
+        p.PD0,
+        p.PD1,
+        p.PE7,
+        p.PE8,
+        p.PE9,
+        p.PE10,
+        p.PE11,
+        p.PE12,
+        p.PE13,
+        p.PE14,
+        p.PE15,
+        p.PD8,
+        p.PD9,
+        p.PD10,
+        p.PH8,
+        p.PH9,
+        p.PH10,
+        p.PH11,
+        p.PH12,
+        p.PH13,
+        p.PH14,
+        p.PH15,
+        p.PI0,
+        p.PI1,
+        p.PI2,
+        p.PI3,
+        p.PI6,
+        p.PI7,
+        p.PI9,
+        p.PI10,
+        // Byte enables NBL0–NBL3: PE0, PE1, PI4, PI5
+        p.PE0,
+        p.PE1,
+        p.PI4,
+        p.PI5,
+        // SDRAM control (Bank2): SDCKE1=PH7, SDCLK=PG8, SDNCAS=PG15,
+        //                        SDNE1=PH6, SDNRAS=PF11, SDNWE=PH5
+        p.PH7,
+        p.PG8,
+        p.PG15,
+        p.PH6,
+        p.PF11,
+        p.PH5,
+        &mut BlockingDelay,
+    );
+
+    // ── LTDC + console ────────────────────────────────────────────────────────
+    // SAFETY: `fb` points to the SDRAM framebuffer (614 400 bytes, non-cached,
+    // static lifetime) initialised above by `sdram::init_sdram`.
+    let lcd = unsafe {
+        lcd_terminal::init_or_attach(
+            fb, p.LTDC, Irqs, p.PA6, // BL_CTRL (backlight enable, active high)
+            p.PK7, // DE/ENB (AF14 — driven by LTDC hardware)
+            // CLK, HSYNC, VSYNC
+            p.PI14, p.PI12, p.PI13, // Red R0–R7
+            p.PI15, p.PJ0, p.PJ1, p.PJ2, p.PJ3, p.PJ4, p.PJ5, p.PJ6, // Green G0–G7
+            p.PJ7, p.PJ8, p.PJ9, p.PJ10, p.PJ11, p.PK0, p.PK1, p.PK2, // Blue B0–B7
+            p.PJ12, p.PJ13, p.PJ14, p.PJ15, p.PK3, p.PK4, p.PK5, p.PK6,
+        )
+    };
+
+    spawner.spawn(display_task::display_task(lcd).ok().unwrap());
 
     info!("All tasks spawned — ready for USB enumeration");
 }

@@ -49,6 +49,7 @@ The GUI window opens immediately. See [Building from Source](.readme/building.md
 - 🚗 **DBC signal decoding** — Full DBC support alongside CANopen
 - 📝 **JSONL logging** — Every frame logged with structured JSON
 - 🌐 **Live browser dashboard** — `http://localhost:7878/` streams events via SSE; NMT node grid + colour-coded event log; works in any browser
+- 🖵 **LCD Boot Terminal** — dmesg-style 640×480 TFT boot console on STM32H743I-EVAL (CN20, Ampire, LTDC + DMA2D + SDRAM)
 
 [→ View complete feature list](.readme/features.md)
 
@@ -77,6 +78,9 @@ Comprehensive documentation is organized in the [`.readme/`](.readme/) directory
 
 ### Tools
 - [bbd — BinaryBlockDownload](.readme/bbd.md) — CANopen firmware update CLI tool (PEAK & KCAN, developer build only)
+
+### Firmware
+- [LCD Boot Terminal](.readme/lcd-terminal.md) — LTDC + DMA2D + SDRAM boot console, warm-boot handoff, shared `lcd-terminal` crate
 
 ## 💡 30-Second Demo
 

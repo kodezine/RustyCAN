@@ -10,6 +10,8 @@ path = "src/main.rs"
 
 [dependencies]
 kcan-protocol = { path = "../../kcan-protocol", default-features = false }
+lcd-terminal  = { path = "../lcd-terminal" }
+embedded-hal  = { version = "1.0" }
 
 embassy-stm32 = { version = "0.6", features = [
     "defmt",

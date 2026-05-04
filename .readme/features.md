@@ -58,6 +58,9 @@
 | SDO block transfers | ✅ |
 | KCAN TSCC latch (sub-µs timestamp latched at frame SOF in hardware) | planned |
 | KCAN dynamic listen-only mode via SET_MODE | planned |
+| **LCD Boot Terminal** (H743XI, CN20 Ampire 640×480, LTDC + DMA2D) | 🔄 in-progress |
+| LTDC layer init (Ampire AM640480GTNQW, PLL3R = 25 MHz pixel clock) | 🔄 in-progress |
+| FMC SDRAM init (IS42S32800J-6BLI, SDCLK = HCLK/3 = 133 MHz) | 🔄 in-progress |
 | KCAN Phase 3: STM32H563 HW encryption | planned |
 | CAN FD (KCAN firmware + host) | planned |
 | EMCY message decode | planned |

@@ -19,6 +19,11 @@ pub async fn status_task(
     mut led_usb: Output<'static>,
     _can_to_usb: &'static Channel<CriticalSectionRawMutex, KCanFrame, 32>,
 ) {
+    lcd_terminal::boot_log!(
+        crate::display_task::LOG_CHANNEL,
+        "Status task running (LD1 heartbeat 1 Hz)",
+        lcd_terminal::BootStatus::Ok
+    );
     join(
         // LD1 — 1 Hz heartbeat blink to confirm firmware is running.
         async {
