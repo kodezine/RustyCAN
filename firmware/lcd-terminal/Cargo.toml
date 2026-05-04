@@ -1,0 +1,30 @@
+[package]
+name    = "lcd-terminal"
+version = "0.1.0"
+edition = "2021"
+description = "Shared no_std LCD terminal for STM32H7 — LTDC + DMA2D + FMC SDRAM boot console"
+
+[dependencies]
+embassy-stm32 = { version = "0.6", features = [
+    "defmt",
+    "stm32h743xi",
+    "unstable-pac",
+    "exti",
+    "memory-x",
+] }
+embassy-time = { version = "0.5", features = ["defmt"] }
+embassy-sync = { version = "0.8", features = ["defmt"] }
+
+stm32-fmc     = { version = "0.4.0" }
+embedded-hal  = { version = "1.0" }
+
+cortex-m    = { version = "0.7", features = ["inline-asm", "critical-section-single-core"] }
+cortex-m-rt = "0.7"
+
+defmt       = "1.0"
+
+# No std — this is a bare-metal no_std crate.
+
+[build-dependencies]
+# PNG → RGB565 conversion at build time (runs on the host, not on the MCU).
+image = { version = "0.25", default-features = false, features = ["png"] }

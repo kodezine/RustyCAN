@@ -34,8 +34,20 @@ host/               rustycan host application
     fixtures/
       sample_drive.eds    CiA 402 servo drive test fixture
 firmware/           separate Cargo workspace (embedded target)
-  Cargo.toml        firmware workspace (dongle-h753)
-  memory.x          STM32H753ZI memory map (FLASH 2 MB, DTCM 128 KB, AXI 512 KB)
+  Cargo.toml        firmware workspace (dongle-h753, dongle-h743, lcd-terminal)
+  memory.x          STM32H743XI/H753ZI memory map — FLASH 2 MB, DTCM 128 KB,
+                    AXI 512 KB, SRAM4 64 KB (.lcd_handoff), SDRAM 32 MB (framebuffer)
+  lcd-terminal/     shared no_std crate — LTDC + DMA2D + FMC SDRAM boot console
+    build.rs        generates ibm_cp437_1bpp.rs + lcd_handoff.x (NOLOAD linker snippet)
+    ibm_cp437_8x16.bin  public-domain IBM CP437 VGA 8×16 font bitmap (4096 bytes)
+    src/
+      lib.rs        init_or_attach(), LcdTerminal, SdramPins, boot_log! macro
+      handoff.rs    LcdHandoff (SRAM4 NOLOAD) — warm-boot cursor / magic 0xCAFE_FEED
+      font.rs       FONT_ATLAS — 256-glyph CP437 A8 atlas (32 KB, const)
+      sdram.rs      FMC SDRAM init for IS42S32800J-6BLI (Bank2, 32-bit, 133 MHz)
+      ltdc.rs       LTDC init for Ampire AM640480GTNQW via CN20 (PLL3R 25 MHz)
+      renderer.rs   DMA2D fill_rect / scroll_up / draw_glyph (software pixel writes)
+      console.rs    80×30 char-cell Console + BootLogEntry / BootStatus
   dongle-h753/
     src/
       main.rs       Embassy entry point, clock config (PLL1/2/3), task spawning
@@ -43,4 +55,12 @@ firmware/           separate Cargo workspace (embedded target)
       can_task.rs   FDCAN1 RX/TX task (Frame ↔ KCanFrame conversion)
       usb_task.rs   USB device task + bulk IN/OUT bridge
       status_task.rs LED heartbeat + periodic STATUS frame every 100 ms
+  dongle-h743/
+    src/
+      main.rs       Embassy entry point — PLL1/2/3, LTDC, SDRAM, task spawning
+      kcan_usb.rs   KCanUsbClass — bulk IN/OUT endpoint pair (vendor class)
+      can_task.rs   FDCAN1 RX/TX bridge + boot_log! hook
+      usb_task.rs   USB device task + bulk IN/OUT bridge + boot_log! hook
+      status_task.rs LED heartbeat + boot_log! hook
+      display_task.rs Embassy task owning LcdTerminal + LOG_CHANNEL receiver
 ```

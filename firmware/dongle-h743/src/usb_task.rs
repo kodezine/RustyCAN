@@ -68,8 +68,23 @@ pub async fn kcan_io_task(
             if USB_CONFIGURED.wait().await {
                 break;
             }
+            // configured(false) fired while idle — cable pulled without an active
+            // bulk session.  Signal the display; then keep waiting.
+            info!("USB: disconnected while idle");
+            lcd_terminal::boot_log!(
+                crate::display_task::LOG_CHANNEL,
+                "USB cable disconnected",
+                lcd_terminal::BootStatus::Warn
+            );
+            crate::display_task::USB_STATUS
+                .signal(crate::display_task::UsbDisplayStatus::Disconnected);
         }
         info!("USB: host configured — starting Bulk IN/OUT");
+        lcd_terminal::boot_log!(
+            crate::display_task::LOG_CHANNEL,
+            "USB OTG-HS enumerated by host (KCAN v1)",
+            lcd_terminal::BootStatus::Ok
+        );
 
         // Inner restart loop: handles successive BULK_RESTART events (one per
         // host open() call) without going back through USB_CONFIGURED.wait().
@@ -130,7 +145,18 @@ pub async fn kcan_io_task(
 
             match select(run, BULK_RESTART.wait()).await {
                 Either::First(_) => {
-                    info!("USB: disconnected — waiting for reconnect");
+                    // Bulk endpoints disabled — either app closed port OR cable pulled.
+                    // Always revert to amber (HostConnected); if the cable was actually
+                    // pulled, suspended() in ep0_handler fires immediately after and
+                    // overrides this to Disconnected.
+                    info!("USB: bulk session ended");
+                    lcd_terminal::boot_log!(
+                        crate::display_task::LOG_CHANNEL,
+                        "RustyCAN closed CAN port",
+                        lcd_terminal::BootStatus::Warn
+                    );
+                    crate::display_task::USB_STATUS
+                        .signal(crate::display_task::UsbDisplayStatus::HostConnected);
                     break 'restart; // Re-enter outer USB_CONFIGURED.wait() loop.
                 }
                 Either::Second(_) => {

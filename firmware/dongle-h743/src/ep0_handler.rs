@@ -20,7 +20,7 @@
 use embassy_usb::control::{InResponse, OutResponse, Recipient, Request, RequestType};
 use embassy_usb::Handler;
 
-use kcan_protocol::control::{KCanBtConst, KCanDeviceInfo, RequestCode};
+use kcan_protocol::control::{KCanBtConst, KCanDeviceInfo, KCanMode, KCanModeFlags, RequestCode};
 
 use defmt::*;
 
@@ -31,11 +31,41 @@ pub struct KCanEp0Handler {
 }
 
 impl Handler for KCanEp0Handler {
+    fn suspended(&mut self, suspended: bool) {
+        if suspended {
+            // VBUS loss (cable pull) triggers a USB suspend with ULPI PHY.
+            // configured(false) does NOT fire on VBUS loss — suspend is the
+            // only reliable signal.
+            info!("USB: suspended (cable disconnected)");
+            lcd_terminal::boot_log!(
+                crate::display_task::LOG_CHANNEL,
+                "USB cable disconnected",
+                lcd_terminal::BootStatus::Warn
+            );
+            crate::display_task::USB_STATUS
+                .signal(crate::display_task::UsbDisplayStatus::Disconnected);
+            crate::usb_task::USB_CONFIGURED.signal(false);
+            crate::usb_task::USB_CONFIGURED_LED.signal(false);
+        }
+        // On resume, configured() fires again if still connected — no action needed.
+    }
+
     fn configured(&mut self, configured: bool) {
         if configured {
             info!("USB: configured by host");
+            lcd_terminal::boot_log!(
+                crate::display_task::LOG_CHANNEL,
+                "USB host connected (enumerated)",
+                lcd_terminal::BootStatus::Ok
+            );
+            crate::display_task::USB_STATUS
+                .signal(crate::display_task::UsbDisplayStatus::HostConnected);
         } else {
             info!("USB: disconnected / reset");
+            // Note: this may not fire on physical VBUS loss with ULPI PHY.
+            // Cable disconnect is also handled by kcan_io_task (EndpointError::Disabled).
+            crate::display_task::USB_STATUS
+                .signal(crate::display_task::UsbDisplayStatus::Disconnected);
         }
         crate::usb_task::USB_CONFIGURED.signal(configured);
         crate::usb_task::USB_CONFIGURED_LED.signal(configured);
@@ -87,19 +117,39 @@ impl Handler for KCanEp0Handler {
                 Some(OutResponse::Accepted)
             }
             r if r == RequestCode::SetMode as u8 => {
-                // ACK the bus-on / listen-only request.  For now the firmware
-                // is always in normal mode; listen-only support is deferred.
-                info!("EP0 SET_MODE accepted (normal mode)");
-                // Signal the IO task that a new host session is starting.
-                // SET_MODE is sent by the host on every open() call.  We only
-                // fire BULK_RESTART here — USB_CONFIGURED is gated exclusively
-                // by the physical configured() callback (SET_CONFIGURATION).
-                // Signalling USB_CONFIGURED from SET_MODE caused a deadlock:
-                // the outer USB_CONFIGURED.wait() consumed the signal, then
-                // BULK_RESTART immediately re-fired it within the same select
-                // iteration, leaving USB_CONFIGURED empty after BULK_RESTART
-                // handling so the outer loop would block forever.
-                crate::usb_task::BULK_RESTART.signal(());
+                // Parse the mode payload to distinguish bus-on vs bus-off.
+                let flags = if _data.len() >= 4 {
+                    let arr: [u8; 4] = _data[..4].try_into().unwrap();
+                    KCanMode::from_bytes(&arr).flags
+                } else if !_data.is_empty() {
+                    _data[0]
+                } else {
+                    0
+                };
+
+                if flags & KCanModeFlags::BUS_OFF != 0 {
+                    // Host app closed — revert circle to amber.
+                    info!("EP0 SET_MODE bus-off (app closed)");
+                    lcd_terminal::boot_log!(
+                        crate::display_task::LOG_CHANNEL,
+                        "RustyCAN closed CAN port",
+                        lcd_terminal::BootStatus::Warn
+                    );
+                    crate::display_task::USB_STATUS
+                        .signal(crate::display_task::UsbDisplayStatus::HostConnected);
+                } else {
+                    // BUS_ON — app just opened.
+                    info!("EP0 SET_MODE bus-on");
+                    lcd_terminal::boot_log!(
+                        crate::display_task::LOG_CHANNEL,
+                        "RustyCAN app opened CAN port",
+                        lcd_terminal::BootStatus::Ok
+                    );
+                    crate::display_task::USB_STATUS
+                        .signal(crate::display_task::UsbDisplayStatus::AppConnected);
+                    // Signal the IO task that a new host session is starting.
+                    crate::usb_task::BULK_RESTART.signal(());
+                }
                 Some(OutResponse::Accepted)
             }
             _ => None,

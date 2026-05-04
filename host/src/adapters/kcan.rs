@@ -25,13 +25,19 @@ const CTRL_TIMEOUT: Duration = Duration::from_millis(500);
 
 enum TxCmd {
     Send(Vec<u8>),
+    Shutdown,
 }
 
 pub struct KCanAdapter {
+    /// Kept alive so `Drop` can send SET_MODE(bus_off) without re-opening.
+    iface: nusb::Interface,
     frame_rx: mpsc::Receiver<KCanFrame>,
     /// One-shot channel: the reader_thread sends the reason it died before exiting.
     error_rx: mpsc::Receiver<String>,
     tx_cmd_tx: mpsc::SyncSender<TxCmd>,
+    /// Joined in `Drop` to ensure ep_in/ep_out are released before the OS
+    /// interface claim is freed, preventing claim_interface() failures on reconnect.
+    reader_thread: Option<std::thread::JoinHandle<()>>,
     name: String,
     tx_seq: u16,
 }
@@ -165,15 +171,17 @@ impl KCanAdapter {
         let (tx_cmd_tx, tx_cmd_rx) = mpsc::sync_channel::<TxCmd>(8);
         let (error_tx, error_rx) = mpsc::sync_channel::<String>(1);
 
-        std::thread::Builder::new()
+        let reader_thread = std::thread::Builder::new()
             .name("kcan-reader".into())
             .spawn(move || reader_thread(ep_in, ep_out, frame_tx, tx_cmd_rx, error_tx))
             .map_err(|e| AdapterError::Io(format!("spawn reader: {e}")))?;
 
         Ok(Self {
+            iface,
             frame_rx,
             error_rx,
             tx_cmd_tx,
+            reader_thread: Some(reader_thread),
             name,
             tx_seq: 0,
         })
@@ -200,6 +208,31 @@ impl KCanAdapter {
         let s = self.tx_seq;
         self.tx_seq = self.tx_seq.wrapping_add(1);
         s
+    }
+}
+
+impl Drop for KCanAdapter {
+    fn drop(&mut self) {
+        // 1. Tell the firmware we are closing (green → amber).
+        let mode = kcan_protocol::control::KCanMode::bus_off();
+        let _ = self
+            .iface
+            .control_out(
+                ctrl_out(RequestCode::SetMode as u8, &mode.to_bytes()),
+                CTRL_TIMEOUT,
+            )
+            .wait();
+
+        // 2. Signal the reader thread to exit immediately.
+        let _ = self.tx_cmd_tx.try_send(TxCmd::Shutdown);
+
+        // 3. Wait for the reader thread to exit so it drops ep_in/ep_out and
+        //    releases the OS exclusive interface claim before we return.  Without
+        //    this, a rapid reconnect races claim_interface() and gets
+        //    kIOReturnExclusiveAccess (0xe00002c5).
+        if let Some(handle) = self.reader_thread.take() {
+            let _ = handle.join();
+        }
     }
 }
 
@@ -273,8 +306,14 @@ fn reader_thread(
 
     loop {
         // Drain pending TX commands (non-blocking), do bulk-out for each.
-        while let Ok(TxCmd::Send(bytes)) = tx_cmd_rx.try_recv() {
-            let _ = ep_out.transfer_blocking(bytes.into(), Duration::from_millis(100));
+        loop {
+            match tx_cmd_rx.try_recv() {
+                Ok(TxCmd::Send(bytes)) => {
+                    let _ = ep_out.transfer_blocking(bytes.into(), Duration::from_millis(100));
+                }
+                Ok(TxCmd::Shutdown) => return,
+                Err(_) => break,
+            }
         }
 
         // Block on next USB packet.  Request 128 bytes (smallest multiple of

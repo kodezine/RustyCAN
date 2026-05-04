@@ -2,6 +2,7 @@
 members = [
     "dongle-h753",
     "dongle-h743",
+    "lcd-terminal",
 ]
 resolver = "2"
 
