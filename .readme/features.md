@@ -6,7 +6,7 @@
 |---|---|
 | 🖥️ **Native GUI** | egui/eframe window — no terminal required |
 | 🔌 **Adapter selection** | Choose PEAK PCAN-USB or KCAN Dongle from the Connect screen |
-| 🔧 **KCAN Dongle** | STM32H753ZI Nucleo firmware (Embassy); custom 80-byte USB protocol with hardware timestamps |
+| 🔧 **KCAN Dongle** | Two targets: STM32H753ZI Nucleo (USB FS, 12 Mb/s) and STM32H743XI H743I-EVAL MB1246 Rev E (USB HS via ULPI, 480 Mb/s); Embassy firmware; custom 80-byte USB protocol with hardware timestamps |
 | ⏱️ **Hardware timestamps** | KCAN frames carry µs-precision timestamps from FDCAN TIM2; logged as `hw_ts_us` in JSONL |
 | 🔍 **Dongle detection** | Connect button enabled only when the selected adapter is found; re-checked every 2 s |
 | 🔄 **Automatic adapter fallback** | If configured adapter unavailable, automatically tries other types (PEAK ↔ KCAN) with notice |
@@ -34,12 +34,14 @@
 | Native egui GUI | ✅ |
 | PEAK PCAN-USB adapter | ✅ |
 | KCAN Dongle adapter (STM32H753ZI) | ✅ |
-| KCAN Dongle adapter (STM32H743XI — H743I-EVAL MB1246 Rev E) | 🔄 bring-up |
+| KCAN Dongle adapter (STM32H743XI — H743I-EVAL MB1246 Rev E) | ✅ |
 | KCAN USB MPS feature-gating (`usb-hs` Cargo feature: 64-byte FS / 512-byte HS; host adapter must match) | planned |
 | KCAN EP0 control handler (GET_INFO, GET_BT_CONST, SET_BITTIMING, SET_MODE) | ✅ |
 | KCAN UID-derived USB serial number | ✅ |
+| KCAN multi-dongle serial selection (target specific dongle via `serial` field in config) | ✅ |
+| KCAN Microsoft OS 2.0 descriptor / WCID (auto WinUSB binding on Windows — no Zadig needed) | ✅ |
 | KCAN dual-channel frame labeling (FDCAN1 / FDCAN2 per frame) | ✅ |
-| KCAN hardware timestamps via TIM2 ISR (replace software Instant) | 🔄 |
+| KCAN hardware timestamps via TIM2 ISR (replace software Instant) | ✅ |
 | Adapter selection in GUI | ✅ |
 | Dongle detection polling | ✅ |
 | EDS optional per node | ✅ |
@@ -58,9 +60,9 @@
 | SDO block transfers | ✅ |
 | KCAN TSCC latch (sub-µs timestamp latched at frame SOF in hardware) | planned |
 | KCAN dynamic listen-only mode via SET_MODE | planned |
-| **LCD Boot Terminal** (H743XI, CN20 Ampire 640×480, LTDC + DMA2D) | 🔄 in-progress |
-| LTDC layer init (Ampire AM640480GTNQW, PLL3R = 25 MHz pixel clock) | 🔄 in-progress |
-| FMC SDRAM init (IS42S32800J-6BLI, SDCLK = HCLK/3 = 133 MHz) | 🔄 in-progress |
+| **LCD Boot Terminal** (H743XI, CN20 Ampire 640×480, LTDC + DMA2D) | ✅ |
+| LTDC layer init (Ampire AM640480GTNQW, PLL3R = 25 MHz pixel clock) | ✅ |
+| FMC SDRAM init (IS42S32800J-6BLI, SDCLK = HCLK/3 = 133 MHz) | ✅ |
 | KCAN Phase 3: STM32H563 HW encryption | planned |
 | CAN FD (KCAN firmware + host) | planned |
 | EMCY message decode | planned |

@@ -22,13 +22,10 @@ pub struct KCanReceiver<'d, D: UsbDriver<'d>> {
 
 impl<'d, D: UsbDriver<'d>> KCanSender<'d, D> {
     /// Write `data` to the Bulk IN endpoint, splitting into max-packet-size
-    /// chunks so the STM32 OTG FS 64-byte FIFO never overflows.
-    ///
-    /// For an 80-byte KCAN frame this produces:
-    ///   packet 1: bytes 0..64  (full-size → host waits for more)
-    ///   packet 2: bytes 64..80 (short → host knows transfer is complete)
+    /// chunks.  At High-Speed MPS=512; an 80-byte KCAN frame fits in a single
+    /// packet (short packet), so the host knows the transfer is complete.
     pub async fn write_packet(&mut self, data: &[u8]) -> Result<(), EndpointError> {
-        const MPS: usize = 64;
+        const MPS: usize = 512;
         let mut offset = 0;
         while offset < data.len() {
             let end = (offset + MPS).min(data.len());
@@ -47,17 +44,10 @@ impl<'d, D: UsbDriver<'d>> KCanSender<'d, D> {
 impl<'d, D: UsbDriver<'d>> KCanReceiver<'d, D> {
     /// Read one KCAN frame from the Bulk OUT endpoint into `buf`.
     ///
-    /// Because MPS=64 and a KCAN frame is 80 bytes, the host splits every
-    /// frame into two USB packets: 64 bytes then 16 bytes.  A single
-    /// `ep.read()` call returns at most one USB packet (one FIFO entry), so we
-    /// must loop until we have received a short packet (< MPS) or the buffer
-    /// is full.
-    ///
-    /// Without this loop, `kcan_io_task` would receive 64 bytes on the first
-    /// call (rejected as "unexpected size"), then 16 bytes on the second call
-    /// (also rejected), silently dropping every TX frame from the host.
+    /// At High-Speed MPS=512; an 80-byte KCAN frame arrives in a single
+    /// short packet so the loop exits immediately after one read.
     pub async fn read_packet(&mut self, buf: &mut [u8]) -> Result<usize, EndpointError> {
-        const MPS: usize = 64;
+        const MPS: usize = 512;
         let mut total = 0;
         loop {
             let n = self.ep.read(&mut buf[total..]).await?;
@@ -82,13 +72,16 @@ impl<'d, D: UsbDriver<'d>> KCanUsbClass<'d, D> {
     pub fn new(builder: &mut Builder<'d, D>) -> Self {
         // Vendor-specific class, subclass and protocol (0xFF each).
         let mut func = builder.function(0xFF, 0xFF, 0xFF);
-        // Full-speed bulk endpoints, 64-byte max packet size.
+        // High-speed bulk endpoints, 512-byte max packet size.
+        // The h743 connects via USB OTG HS (ULPI) at 480 Mbps; USB spec requires
+        // bulk endpoints to declare wMaxPacketSize=512 at High-Speed.
+        // Windows rejects HS devices that advertise 64-byte (Full-Speed) MPS.
         // iface and alt are scoped here so their borrows are released before func is dropped.
         let (rx, tx) = {
             let mut iface = func.interface();
             let mut alt = iface.alt_setting(0xFF, 0xFF, 0xFF, None);
-            let rx = alt.endpoint_bulk_out(None, 64);
-            let tx = alt.endpoint_bulk_in(None, 64);
+            let rx = alt.endpoint_bulk_out(None, 512);
+            let tx = alt.endpoint_bulk_in(None, 512);
             (rx, tx)
         };
         drop(func);
