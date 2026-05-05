@@ -162,8 +162,17 @@ fn update_stats_row(lcd: &mut LcdTerminal) {
         .sum();
     let mut buf = [b' '; 60];
     let text = format_stats_buf(&mut buf, baud, src, fps);
+
+    // Save the log cursor so that writing into the header area does not corrupt
+    // the position used by boot_log() to append new entries.
+    let saved_row = lcd.row();
+    let saved_col = lcd.col();
+
     lcd.set_cursor(8, 19);
     lcd.write_colored(text, colors::DIM_GREEN, colors::BG_BLACK);
+
+    // Restore the log cursor unconditionally.
+    lcd.set_cursor(saved_row, saved_col);
 }
 
 /// Format `baud_kbps | src | fps` into a 60-byte space-padded ASCII buffer.
