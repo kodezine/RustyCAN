@@ -296,13 +296,19 @@ fn reader_thread(
 ) {
     // Accumulation buffer: holds bytes received across multiple USB packets.
     //
-    // KCAN_FRAME_SIZE=80 is not a multiple of max-packet-size (MPS=64), so the
-    // firmware splits every frame into two USB packets: 64 bytes + 16 bytes.
-    // On macOS, nusb/IOKit may complete a transfer_blocking() call after the
-    // first full-MPS packet (64 bytes) rather than waiting for the short
-    // terminating packet (16 bytes).  Accumulating here handles any split
-    // pattern (64+16, 80+0, 48+32, …) without losing data.
+    // KCAN_FRAME_SIZE=80 is not a multiple of max-packet-size.  The device
+    // connects at USB high-speed (480 Mbps) with MPS=512 for the Bulk IN
+    // endpoint (wMaxPacketSize=64 in the descriptor, but macOS reports 512 for
+    // HS Bulk).  With MPS=512 the firmware's 64-byte write is a short packet
+    // (< MPS), so the first transfer completes with 64 bytes, and the 16-byte
+    // tail arrives as a second short packet.  Accumulate here to handle both
+    // the HS split (64+16) and the FS split (64+16 at MPS=64) transparently.
     let mut frame_buf: Vec<u8> = Vec::with_capacity(KCAN_FRAME_SIZE * 2);
+
+    // Buffer size must be a multiple of MPS to pass nusb 0.2.x validation.
+    // Use 512 bytes (= HS Bulk MPS) to cover both HS (MPS=512) and FS (MPS=64)
+    // connections.  Both 512 % 512 = 0 and 512 % 64 = 0 pass the check.
+    const BULK_IN_BUF: usize = 512;
 
     loop {
         // Drain pending TX commands (non-blocking), do bulk-out for each.
@@ -316,10 +322,13 @@ fn reader_thread(
             }
         }
 
-        // Block on next USB packet.  Request 128 bytes (smallest multiple of
-        // MPS=64 that fits one complete 80-byte frame).
+        // Block on next USB packet.  Request BULK_IN_BUF bytes — a multiple of
+        // the endpoint MPS (512 for HS Bulk on macOS).  nusb 0.2.x rejects
+        // requests that are not a multiple of MPS with TransferError::InvalidArgument.
+        // The firmware sends 64-byte + 16-byte packets; each is a short packet
+        // at MPS=512, so each transfer_blocking() completes after one packet.
         match ep_in
-            .transfer_blocking(Buffer::new(128), Duration::from_millis(200))
+            .transfer_blocking(Buffer::new(BULK_IN_BUF), Duration::from_millis(200))
             .into_result()
         {
             Ok(data) if !data.is_empty() => {
@@ -359,10 +368,10 @@ fn reader_thread(
                     }
                     TransferError::Cancelled | TransferError::InvalidArgument => {
                         // Cancelled  = kIOReturnAborted: transient (timeout, bus reset).
-                        // InvalidArgument = kIOReturnBadArgument: EP1 is mid-flush during
-                        //   the firmware's BULK_RESTART PAC sequence (SNAK→EPDIS→TXFFLSH
-                        //   →CNAK).  Clears once the endpoint settles.  Retry indefinitely;
-                        //   a true device loss surfaces as Disconnected instead.
+                        // InvalidArgument = nusb MPS validation error or kIOReturnBadArgument.
+                        //   This should not occur with BULK_IN_BUF=512 (a multiple of both
+                        //   FS MPS=64 and HS MPS=512).  Retry; a true device loss surfaces
+                        //   as Disconnected.
                         std::thread::sleep(Duration::from_millis(5));
                     }
                     _ => {
