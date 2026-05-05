@@ -241,8 +241,9 @@ impl CanAdapter for KCanAdapter {
         loop {
             match self.frame_rx.recv_timeout(timeout) {
                 Ok(kf) => {
-                    // Skip Status/TxEcho frames — only surface Data frames to the session.
-                    if kf.frame_type != FrameType::Data as u8 {
+                    let is_tx_echo = kf.frame_type == FrameType::TxEcho as u8;
+                    // Skip Status and BusError frames; surface Data and TxEcho.
+                    if kf.frame_type != FrameType::Data as u8 && !is_tx_echo {
                         continue;
                     }
                     let frame = kcan_to_can_frame(&kf).ok_or_else(|| {
@@ -252,21 +253,22 @@ impl CanAdapter for KCanAdapter {
                         frame,
                         hardware_timestamp_us: Some(kf.timestamp_us),
                         channel: kf.channel,
+                        is_tx_echo,
                     });
                 }
                 Err(mpsc::RecvTimeoutError::Timeout) => return Err(AdapterError::Timeout),
                 Err(mpsc::RecvTimeoutError::Disconnected) => {
-                    // Drain the error channel to get the actual failure reason.
-                    let reason = self
-                        .error_rx
-                        .try_recv()
-                        .unwrap_or_else(|_| "unknown — check stderr".to_string());
-                    if reason == "__disconnected__" {
-                        return Err(AdapterError::Disconnected);
+                    // Reader thread exited — drain the error channel for logging.
+                    // On macOS, USB disconnect can surface as TransferError::Fault
+                    // or TransferError::Cancelled rather than TransferError::Disconnected,
+                    // so the reader may exit without sending "__disconnected__".
+                    // Treat ANY reader-thread exit as a physical disconnect; the
+                    // reconnect loop will detect whether the device reappeared.
+                    let reason = self.error_rx.try_recv().unwrap_or_default();
+                    if !reason.is_empty() && reason != "__disconnected__" {
+                        eprintln!("KCAN reader thread died: {reason} (treating as disconnect)");
                     }
-                    return Err(AdapterError::Fatal(format!(
-                        "KCAN reader thread died: {reason}"
-                    )));
+                    return Err(AdapterError::Disconnected);
                 }
             }
         }

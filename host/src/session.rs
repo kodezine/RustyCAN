@@ -292,6 +292,7 @@ pub fn start(config: SessionConfig) -> SessionResult {
         // The dongle was physically unplugged.  Poll until it reappears, then
         // re-open and resume the session without restarting rustycan.
         let _ = tx.send(CanEvent::AdapterDisconnected);
+        logger.log_adapter_disconnected(Utc::now());
         eprintln!("KCAN: dongle disconnected — waiting for reconnect");
 
         let mut backoff_ms = 500u64;
@@ -308,6 +309,7 @@ pub fn start(config: SessionConfig) -> SessionResult {
                 Ok(new_adapter) => {
                     eprintln!("KCAN: dongle reconnected — resuming session");
                     let _ = tx.send(CanEvent::AdapterReconnected);
+                    logger.log_adapter_reconnected(Utc::now());
                     backoff_ms = 500; // reset for next potential disconnect
                     let disconnected_again = recv_loop(
                         new_adapter,
@@ -330,13 +332,27 @@ pub fn start(config: SessionConfig) -> SessionResult {
                         return; // Fatal or GUI disconnect.
                     }
                     let _ = tx.send(CanEvent::AdapterDisconnected);
+                    logger.log_adapter_disconnected(Utc::now());
                     eprintln!("KCAN: dongle disconnected again — waiting for reconnect");
                 }
                 Err(crate::adapters::AdapterError::NotFound(_)) => {
                     // Still not visible — keep polling.
                 }
+                Err(crate::adapters::AdapterError::Io(_)) => {
+                    // Transient IO error: macOS may briefly report kIOReturnNoDevice or
+                    // kIOReturnExclusiveAccess between physical removal and the device
+                    // disappearing from the USB tree.  Keep polling — the backoff will
+                    // prevent a spin loop.
+                    eprintln!("KCAN: reconnect IO error (transient) — retrying");
+                }
+                Err(crate::adapters::AdapterError::Protocol(ref msg)) => {
+                    // Transient Protocol error: the device was found and claimed but
+                    // GET_INFO / SET_BITTIMING failed — firmware may still be booting
+                    // after a physical replug.  Keep polling.
+                    eprintln!("KCAN: reconnect protocol error (transient: {msg}) — retrying");
+                }
                 Err(e) => {
-                    // Open failed for a non-trivial reason — report and give up.
+                    // Unrecoverable error (e.g. Fatal) — give up.
                     let _ = tx.send(CanEvent::AdapterError(format!("Reconnect failed: {e}")));
                     return;
                 }
@@ -782,20 +798,23 @@ fn recv_loop(
         }
 
         let recv_result = adapter.recv(Duration::from_millis(500));
-        let (frame, hardware_timestamp_us, channel) = match recv_result {
-            Ok(r) => (r.frame, r.hardware_timestamp_us, r.channel),
+        let (frame, hardware_timestamp_us, channel, is_tx_echo) = match recv_result {
+            Ok(r) => (r.frame, r.hardware_timestamp_us, r.channel, r.is_tx_echo),
             Err(crate::adapters::AdapterError::Timeout) => {
                 continue;
             }
             Err(e) => {
-                // Clean disconnect — signal the caller to attempt reconnect.
-                if matches!(e, crate::adapters::AdapterError::Disconnected) {
+                // Clean disconnect (or reader-thread death treated as disconnect)
+                // — signal the caller to attempt reconnect.
+                if matches!(
+                    e,
+                    crate::adapters::AdapterError::Disconnected
+                        | crate::adapters::AdapterError::Fatal(_)
+                ) {
+                    if matches!(e, crate::adapters::AdapterError::Fatal(_)) {
+                        eprintln!("CAN recv fatal (treating as disconnect for reconnect): {e}");
+                    }
                     return true;
-                }
-                // Fatal errors mean the adapter is unrecoverable — terminate the session.
-                if matches!(e, crate::adapters::AdapterError::Fatal(_)) {
-                    let _ = tx.send(CanEvent::AdapterError(e.to_string()));
-                    return false;
                 }
 
                 // Log non-fatal errors and keep trying — the bus might not be powered
@@ -809,6 +828,21 @@ fn recv_loop(
                 continue;
             }
         };
+
+        // TX echo: log it and forward as a RawFrame event, then skip CANopen decode.
+        if is_tx_echo {
+            let data = frame.data();
+            let cob_id = extract_cob_id(&frame);
+            let ts = Utc::now();
+            logger.set_hw_timestamp(hardware_timestamp_us);
+            logger.log_tx_echo(ts, cob_id, data, hardware_timestamp_us);
+            let _ = tx.send(CanEvent::RawFrame {
+                cob_id: cob_id as u32,
+                data: data.to_vec(),
+                port: channel,
+            });
+            continue;
+        }
 
         if !frame.is_data_frame() {
             continue;

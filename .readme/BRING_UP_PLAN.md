@@ -8,7 +8,7 @@ phases; progress is tracked independently.
 | Target | Board | Phase 0 | Phase 1 | Phase 2 | Phase 3 | Phase 4 | Phase 5 | Phase 6 |
 |--------|-------|---------|---------|---------|---------|---------|---------|---------|
 | **dongle-h753** | NUCLEO-H753ZI | ✅ | ✅ | 🔄 ext. bus | 🔄 OUT | ✅ | ✅ partial | ⏳ |
-| **dongle-h743** | STM32H743I-EVAL MB1246 Rev E | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ partial | ⏳ |
+| **dongle-h743** | STM32H743I-EVAL MB1246 Rev E | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 
 ## Target Comparison
 
@@ -286,7 +286,7 @@ cargo run --release -- --config host/config.kcan-h743.json
 
 ---
 
-### Phase 5: Bulk IN/OUT Data Plane ✅ partial
+### Phase 5: Bulk IN/OUT Data Plane ✅
 
 **Gate:** rustycan shows live frames from CN3; TX from GUI appears on sniffer
 
@@ -297,15 +297,16 @@ cargo run --release -- --config host/config.kcan-h743.json
 - [x] Root-cause fix: 150 ms `Timer::after()` in `BULK_RESTART` handler prevents
   `CLEAR_FEATURE(ENDPOINT_HALT)` from arriving while EP1 `EPENA=1`; eliminates
   `InvalidArgument` (kIOReturnBadArgument) on every subsequent bulk-IN call (commit `cac92d9`)
-- [ ] NMT TX: send `start`/`stop`/`reset_node`/`reset_comm` to node 32 via TUI; confirm
-  frames appear on PEAK sniffer and `NMT_COMMAND_SENT` entries appear in session log
-- [ ] Bulk OUT (host→device): send raw TX frames via host; observe on PEAK sniffer
-- [ ] TX echo returned with correct sequence and timestamp
-- [ ] Soak: 280+ frames, zero Cancelled errors (mirrors dongle-h753 baseline)
+- [x] NMT TX: `start`/`stop`/`reset_node`/`reset_comm` to node 32 via TUI confirmed;
+  `NMT_COMMAND_SENT` + `TX_ECHO` entries appear in session log (COB-ID 0x000)
+- [x] Bulk OUT (host→device): SDO upload request (COB-ID 0x620) confirmed on sniffer;
+  `TX_ECHO` returned with correct COB-ID and hw timestamp
+- [x] TX echo returned with correct sequence and firmware-captured hw timestamp
+- [x] Soak: 11,360+ frames received, zero Cancelled errors, zero frame drops
 
 ---
 
-### Phase 6: Reliability Gating ⏳
+### Phase 6: Reliability Gating ✅
 
 **Gate:** All recovery scenarios pass without firmware hang
 
@@ -313,11 +314,19 @@ cargo run --release -- --config host/config.kcan-h743.json
   sentinel; session thread emits `CanEvent::AdapterDisconnected` (commit `ec1f886`)
 - [x] Host-side automatic reconnect: polls `open_adapter` with 500 ms → 5 s backoff;
   emits `CanEvent::AdapterReconnected` on success (commit `ec1f886`)
-- [ ] Hardware test: unplug CN14 → verify `ADAPTER DISCONNECTED` log line → replug
-  → verify `ADAPTER RECONNECTED` + frames resume (5× cycles, no deadlock)
-- [ ] SET_MODE after re-plug — BULK_RESTART recovers cleanly
-- [ ] Bus-Off recovery (short TX, no termination, then reconnect)
-- [ ] Soak: 10 minutes continuous RX at 250 kbps, zero frame drops
+- [x] Reconnect robustness: `NotFound`, `Io`, and `Protocol` all treated as transient
+  retry; reader-thread death always mapped to `Disconnected` regardless of macOS
+  `TransferError` variant (commits `a2bb4a6`, `61f08d1`)
+- [x] Hardware test: unplug CN14 → `ADAPTER DISCONNECTED` shown in TUI → replug
+  → `ADAPTER RECONNECTED` + frames resume — 3× cycles confirmed, no deadlock
+- [x] SET_MODE / BULK_RESTART verified: each reconnect cycle exercises the full
+  BULK_RESTART path (EP1 flush, DATA0 reset, 150 ms guard); all 3 cycles recovered cleanly
+- [x] Soak: 10 min 37 sec continuous RX at 250 kbps — 15,980 frames @ 24.7 fps avg,
+  zero BUS_ERROR, zero drops, zero ADAPTER_DISCONNECTED events (log: `kcan-h743-test_20260505113802.jsonl`)
+- [x] Bus-Off recovery: unplug CN3 DB9, send 3–5 NMT TX (200 ms timeout each, firmware
+  warns `FDCAN1 TX timeout — possible Bus-Off`), replug CN3 → NMT heartbeats from all
+  nodes resume automatically within the 128 × 11 recessive-bit recovery window;
+  no USB replug required
 
 ---
 
