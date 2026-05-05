@@ -26,7 +26,7 @@ repos:
         name: cargo fmt (firmware)
         description: Enforce Rust code style for the firmware workspace.
         language: system
-        entry: bash -c 'cd firmware && cargo fmt --'
+        entry: cargo fmt --manifest-path firmware/Cargo.toml --all --
         pass_filenames: false
         types: [rust]
 
@@ -39,10 +39,18 @@ repos:
         pass_filenames: false
         types: [rust]
 
-      - id: cargo-clippy-firmware
-        name: cargo clippy (firmware)
-        description: Lint firmware with Clippy per package (stm32-metapac requires a single chip feature).
+      - id: cargo-clippy-h753
+        name: cargo clippy (dongle-h753)
+        description: Lint dongle-h753 firmware with Clippy (warnings = errors).
         language: system
-        entry: bash -c 'cd firmware && cargo clippy -p dongle-h753 --target thumbv7em-none-eabihf -- -D warnings && cargo clippy -p dongle-h743 --target thumbv7em-none-eabihf -- -D warnings'
+        entry: cargo clippy --manifest-path firmware/Cargo.toml -p dongle-h753 --target thumbv7em-none-eabihf -- -D warnings
+        pass_filenames: false
+        types: [rust]
+
+      - id: cargo-clippy-h743
+        name: cargo clippy (dongle-h743)
+        description: Lint dongle-h743 firmware with Clippy (warnings = errors).
+        language: system
+        entry: cargo clippy --manifest-path firmware/Cargo.toml -p dongle-h743 --target thumbv7em-none-eabihf -- -D warnings
         pass_filenames: false
         types: [rust]

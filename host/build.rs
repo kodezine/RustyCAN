@@ -21,6 +21,15 @@ fn main() {
         println!("cargo:rustc-link-arg=-rpath");
         println!("cargo:rustc-link-arg=/usr/local/lib");
     }
+
+    // On Windows, embed the application icon into the .exe so it appears on
+    // the taskbar, Alt-Tab, Explorer, and desktop shortcuts.
+    #[cfg(target_os = "windows")]
+    {
+        let mut res = winresource::WindowsResource::new();
+        res.set_icon("assets/RustyCAN.ico");
+        res.compile().expect("failed to compile Windows resource");
+    }
 }
 
 fn git_describe() -> Option<String> {
