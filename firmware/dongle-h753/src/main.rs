@@ -53,11 +53,21 @@ use embassy_stm32::Config;
 use embassy_stm32::{can, peripherals, usb};
 use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 use embassy_sync::channel::Channel;
+use embassy_usb::msos::{self, windows_version};
 use embassy_usb::Builder as UsbBuilder;
 
 use defmt::*;
 use defmt_rtt as _;
 use panic_probe as _;
+
+// ─── HardFault recovery ───────────────────────────────────────────────────────
+// Mirrors dongle-h743: reset on HardFault so the device re-enumerates cleanly
+// if the USB stack faults under a Windows rapid-reset storm.
+#[cortex_m_rt::exception]
+unsafe fn HardFault(_ef: &cortex_m_rt::ExceptionFrame) -> ! {
+    defmt::error!("HardFault — performing system reset for clean re-enumeration");
+    cortex_m::peripheral::SCB::sys_reset()
+}
 
 #[cfg(feature = "bus-test")]
 mod bus_test;
@@ -220,6 +230,9 @@ async fn main(spawner: Spawner) {
     // ── USB device descriptor ─────────────────────────────────────────────────
     static mut CONFIG_DESCRIPTOR: [u8; 256] = [0u8; 256];
     static mut BOS_DESCRIPTOR: [u8; 256] = [0u8; 256];
+    // MSOS 2.0 descriptor buffer — holds the WinUSB CompatibleID feature and
+    // DeviceInterfaceGUID property written by builder.msos_feature() below.
+    static mut MSOS_DESCRIPTOR: [u8; 256] = [0u8; 256];
     static mut CONTROL_BUF: [u8; 64] = [0u8; 64];
 
     let mut usb_config = embassy_usb::Config::new(0x1209, 0xBEEF);
@@ -242,7 +255,7 @@ async fn main(spawner: Spawner) {
         usb_config,
         unsafe { &mut *core::ptr::addr_of_mut!(CONFIG_DESCRIPTOR) },
         unsafe { &mut *core::ptr::addr_of_mut!(BOS_DESCRIPTOR) },
-        &mut [],
+        unsafe { &mut *core::ptr::addr_of_mut!(MSOS_DESCRIPTOR) },
         unsafe { &mut *core::ptr::addr_of_mut!(CONTROL_BUF) },
     );
 
@@ -253,6 +266,26 @@ async fn main(spawner: Spawner) {
     let ep0 = unsafe { &mut *core::ptr::addr_of_mut!(EP0_HANDLER) };
     ep0.uid_lo = uid_lo;
     builder.handler(ep0);
+
+    // ── Microsoft OS 2.0 descriptor (WCID) ───────────────────────────────────
+    // Tells Windows to automatically bind the WinUSB driver on first plug-in
+    // without requiring Zadig or any manual driver installation.
+    //
+    // Vendor code 0x20 is used for the MSOS GET_DESCRIPTOR request issued by
+    // Windows during enumeration.  It must not collide with KCAN EP0 request
+    // codes (0x01-0x06, 0x10, 0x11).
+    //
+    // GUID {3FA8AAA5-7EFE-4CC1-9D09-94D04DE7049F} is shared between dongle-h743
+    // and dongle-h753 (same VID/PID = same logical device class to Windows).
+    //
+    // macOS and Linux ignore BOS capabilities they do not recognise; no
+    // regression on those platforms.
+    builder.msos_descriptor(windows_version::WIN8_1, 0x20);
+    builder.msos_feature(msos::CompatibleIdFeatureDescriptor::new("WINUSB", ""));
+    builder.msos_feature(msos::RegistryPropertyFeatureDescriptor::new(
+        "DeviceInterfaceGUIDs",
+        msos::PropertyData::RegMultiSz(&["{3FA8AAA5-7EFE-4CC1-9D09-94D04DE7049F}"]),
+    ));
 
     // ── KCAN USB class ───────────────────────────────────────────────────────
     let kcan_class = KCanUsbClass::new(&mut builder);

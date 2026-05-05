@@ -1773,12 +1773,17 @@ fn render_monitor(
     logo: &egui::TextureHandle,
     http_port: u16,
 ) -> Option<Screen> {
-    // Drain all pending CAN events; intercept AdapterError before rendering.
+    // Drain all pending CAN events; intercept AdapterError/AdapterDisconnected before rendering.
     let mut adapter_error: Option<String> = None;
+    let mut adapter_disconnected = false;
     loop {
         match view.rx.try_recv() {
             Ok(CanEvent::AdapterError(e)) => {
                 adapter_error = Some(e);
+                break;
+            }
+            Ok(CanEvent::AdapterDisconnected) => {
+                adapter_disconnected = true;
                 break;
             }
             Ok(ev) => {
@@ -1974,6 +1979,12 @@ fn render_monitor(
     if let Some(e) = adapter_error {
         let mut form = std::mem::take(&mut view.form);
         form.error = Some(e);
+        return Some(Screen::Connect(form));
+    }
+
+    if adapter_disconnected {
+        let mut form = std::mem::take(&mut view.form);
+        form.error = Some("Dongle disconnected — reconnect the cable and press Connect.".into());
         return Some(Screen::Connect(form));
     }
 

@@ -298,18 +298,15 @@ fn reader_thread(
 ) {
     // Accumulation buffer: holds bytes received across multiple USB packets.
     //
-    // KCAN_FRAME_SIZE=80 is not a multiple of max-packet-size.  The device
-    // connects at USB high-speed (480 Mbps) with MPS=512 for the Bulk IN
-    // endpoint (wMaxPacketSize=64 in the descriptor, but macOS reports 512 for
-    // HS Bulk).  With MPS=512 the firmware's 64-byte write is a short packet
-    // (< MPS), so the first transfer completes with 64 bytes, and the 16-byte
-    // tail arrives as a second short packet.  Accumulate here to handle both
-    // the HS split (64+16) and the FS split (64+16 at MPS=64) transparently.
+    // KCAN_FRAME_SIZE=80 is not a multiple of MPS.  On the h743 (USB HS via
+    // ULPI, MPS=512) the firmware sends one short packet (80 bytes < 512); the
+    // transfer completes in a single read.  On the h753 (USB FS, MPS=64) the
+    // host splits the 80-byte frame across two packets (64 + 16).  The
+    // accumulation loop below handles both cases transparently.
     let mut frame_buf: Vec<u8> = Vec::with_capacity(KCAN_FRAME_SIZE * 2);
 
     // Buffer size must be a multiple of MPS to pass nusb 0.2.x validation.
-    // Use 512 bytes (= HS Bulk MPS) to cover both HS (MPS=512) and FS (MPS=64)
-    // connections.  Both 512 % 512 = 0 and 512 % 64 = 0 pass the check.
+    // 512 satisfies both HS (MPS=512) and FS (MPS=64): 512%512=0, 512%64=0.
     const BULK_IN_BUF: usize = 512;
 
     loop {
