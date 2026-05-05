@@ -226,6 +226,38 @@ impl EventLogger {
         self.log(entry);
     }
 
+    /// Log a physical adapter disconnect event.
+    pub fn log_adapter_disconnected(&mut self, ts: DateTime<Utc>) {
+        let ts_str = ts.to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
+        let entry = json!({
+            "ts":   ts_str,
+            "type": "ADAPTER_DISCONNECTED",
+        });
+        self.log(entry);
+        if let Some(w) = &mut self.text_writer {
+            let _ = writeln!(
+                w,
+                "[{ts_str}][ADAPTER_DISCONN  ][---------] dongle physically disconnected"
+            );
+        }
+    }
+
+    /// Log a successful adapter reconnect event.
+    pub fn log_adapter_reconnected(&mut self, ts: DateTime<Utc>) {
+        let ts_str = ts.to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
+        let entry = json!({
+            "ts":   ts_str,
+            "type": "ADAPTER_RECONNECTED",
+        });
+        self.log(entry);
+        if let Some(w) = &mut self.text_writer {
+            let _ = writeln!(
+                w,
+                "[{ts_str}][ADAPTER_RECONN   ][---------] dongle reconnected, session resumed"
+            );
+        }
+    }
+
     /// Log an NMT master command that was sent by this application.
     pub fn log_nmt_sent(
         &mut self,
@@ -405,6 +437,29 @@ impl EventLogger {
         });
         self.log(entry);
         self.write_text_line(&ts_str, "DBC_SIGNAL", &cob_id_str, raw);
+    }
+
+    /// Log a TX echo returned by the KCAN dongle after a successful frame transmission.
+    ///
+    /// `hw_ts_us` is the hardware timestamp captured when the last bit left the bus.
+    pub fn log_tx_echo(
+        &mut self,
+        ts: DateTime<Utc>,
+        cob_id: u16,
+        raw: &[u8],
+        hw_ts_us: Option<u32>,
+    ) {
+        let ts_str = ts.to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
+        let cob_id_str = format!("0x{cob_id:03X}");
+        let entry = json!({
+            "ts": ts_str,
+            "type": "TX_ECHO",
+            "cob_id": cob_id_str,
+            "hw_timestamp_us": hw_ts_us,
+            "raw": bytes_to_hex(raw),
+        });
+        self.log(entry);
+        self.write_text_line(&ts_str, "TX_ECHO", &cob_id_str, raw);
     }
 
     /// Log a raw CAN frame (fallback for frames not decoded by DBC or CANopen).

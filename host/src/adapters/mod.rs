@@ -36,6 +36,10 @@ pub struct ReceivedFrame {
     pub hardware_timestamp_us: Option<u32>,
     /// Source CAN channel: 0 = FDCAN1, 1 = FDCAN2.  Always 0 for PEAK.
     pub channel: u8,
+    /// `true` when this is a TX echo returned by the dongle after a successful
+    /// frame transmission.  The `hardware_timestamp_us` is the moment the last
+    /// bit left the bus.  Always `false` for PEAK (no echo mechanism).
+    pub is_tx_echo: bool,
 }
 
 /// Errors returned by adapter operations.

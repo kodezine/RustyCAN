@@ -27,6 +27,7 @@ impl CanAdapter for PeakAdapter {
                 frame,
                 hardware_timestamp_us: None,
                 channel: 0,
+                is_tx_echo: false,
             }),
             Err(e) => {
                 let msg = e.to_string();
