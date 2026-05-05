@@ -211,6 +211,16 @@ pub async fn kcan_io_task(
                     });
                     info!("USB: EP1 flushed (FIFO=24w, DATA0) — waiting for host clear_halt");
 
+                    // Discard any frames that accumulated in can_to_usb during the
+                    // closed session.  Without this drain, the IN arm immediately
+                    // writes a stale frame after BULK_RESTART fires, leaving EPENA=1
+                    // at the time of the *next* BULK_RESTART.  That causes the next
+                    // SNAK+EPDIS to abort a live transfer, which IOKit interprets as
+                    // kIOReturnBadArgument and refuses to issue IN tokens until
+                    // ClearPipeStallBothEnds is called.  Draining keeps EPENA=0
+                    // between sessions and avoids that IOKit pipe-invalid state.
+                    while can_to_usb.try_receive().is_ok() {}
+
                     // Give the host time to send CLEAR_FEATURE(ENDPOINT_HALT) for
                     // EP1 IN before we write the first frame.  On macOS the host
                     // calls ClearPipeStallBothEnds which sends CLEAR_FEATURE to the

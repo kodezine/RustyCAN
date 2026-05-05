@@ -20,7 +20,9 @@
 use embassy_usb::control::{InResponse, OutResponse, Recipient, Request, RequestType};
 use embassy_usb::Handler;
 
-use kcan_protocol::control::{KCanBtConst, KCanDeviceInfo, KCanMode, KCanModeFlags, RequestCode};
+use kcan_protocol::control::{
+    KCanBitTiming, KCanBtConst, KCanDeviceInfo, KCanMode, KCanModeFlags, RequestCode,
+};
 
 use defmt::*;
 
@@ -110,10 +112,28 @@ impl Handler for KCanEp0Handler {
 
         match req.request {
             r if r == RequestCode::SetBitTiming as u8 => {
-                // ACK the host's timing parameters; firmware always runs at
-                // 250 kbps (configured at init) and the host will compute
-                // the same BRP=8 from our 32 MHz clock constant.
-                info!("EP0 SET_BITTIMING accepted (250 kbps fixed)");
+                // Decode the timing payload to derive the actual bitrate and
+                // display it on the LCD stats row.
+                // Formula: bitrate = clock_hz / (BRP × (1 + TSEG1 + TSEG2))
+                if let Some(kbps) = _data
+                    .get(..16)
+                    .and_then(|s| <&[u8; 16]>::try_from(s).ok())
+                    .and_then(|arr| {
+                        let bt = KCanBitTiming::from_bytes(arr);
+                        let tq = 1 + bt.tseg1 + bt.tseg2;
+                        if bt.brp > 0 && tq > 0 {
+                            Some(KCanBtConst::H753_64MHZ.clock_hz / (bt.brp * tq) / 1_000)
+                        } else {
+                            None
+                        }
+                    })
+                {
+                    crate::display_task::BAUD_KBPS
+                        .store(kbps, core::sync::atomic::Ordering::Relaxed);
+                    info!("EP0 SET_BITTIMING → {} kbps", kbps);
+                } else {
+                    info!("EP0 SET_BITTIMING accepted (250 kbps fixed)");
+                }
                 Some(OutResponse::Accepted)
             }
             r if r == RequestCode::SetMode as u8 => {

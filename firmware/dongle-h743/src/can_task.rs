@@ -17,6 +17,7 @@
 //! embassy task: while the TX loop blocks on `usb_to_can.receive()`, the RX
 //! loop can freely drain the FDCAN FIFO, and vice-versa.
 
+use core::sync::atomic::Ordering;
 use embassy_stm32::can::frame::Frame;
 use embassy_stm32::can::Can;
 use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
@@ -98,7 +99,14 @@ pub async fn can_task(
                             Id::Standard(id) => id.as_raw() as u32,
                             Id::Extended(id) => id.as_raw(),
                         };
-                        info!("FDCAN RX [ID={:#010x}, DLC={}]", id_val, header.len());
+                        // Track unique standard IDs and frame count for LCD stats.
+                        if let Id::Standard(sid) = header.id() {
+                            let raw = sid.as_raw() as usize;
+                            crate::display_task::SEEN_IDS[raw >> 5]
+                                .fetch_or(1u32 << (raw & 31), Ordering::Relaxed);
+                        }
+                        crate::display_task::RX_FRAME_COUNTER.fetch_add(1, Ordering::Relaxed);
+                        trace!("FDCAN RX [ID={:#010x}, DLC={}]", id_val, header.len());
                         let mut kf = classic_to_kcan(&frame, ts_us, rx_seq);
                         kf.channel = 0;
                         rx_seq = rx_seq.wrapping_add(1);
@@ -106,7 +114,7 @@ pub async fn can_task(
                         // channel; silently drop to avoid log spam.
                         #[cfg(not(feature = "periodic-echo"))]
                         if can_to_usb.try_send(kf).is_err() {
-                            warn!("can_to_usb channel full — RX frame dropped");
+                            trace!("can_to_usb channel full — RX frame dropped");
                         }
                         #[cfg(feature = "periodic-echo")]
                         let _ = can_to_usb.try_send(kf);
@@ -123,7 +131,7 @@ pub async fn can_task(
                 let kf = usb_to_can.receive().await;
                 match kcan_to_frame(&kf) {
                     Some(frame) => {
-                        info!("FDCAN TX [ID={:#010x}, DLC={}]", kf.can_id, kf.dlc);
+                        trace!("FDCAN TX [ID={:#010x}, DLC={}]", kf.can_id, kf.dlc);
                         // write() blocks until TX FIFO has space; guard with a timeout
                         // so a Bus-Off state doesn't permanently stall this task.
                         if with_timeout(Duration::from_millis(200), tx.write(&frame))
