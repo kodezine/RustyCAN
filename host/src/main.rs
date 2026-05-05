@@ -1,3 +1,6 @@
+// Hide the console window on release builds when launched from Explorer / shortcuts.
+#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+
 use std::path::PathBuf;
 
 use clap::Parser;
