@@ -164,21 +164,30 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
 
-      - name: Build firmware
-        working-directory: firmware
+      - name: Build dongle-h753 firmware
+        working-directory: firmware/dongle-h753
         run: cargo build --release --target thumbv7em-none-eabihf
 
-      - name: Stage firmware ELF
+      - name: Build dongle-h743 firmware
+        working-directory: firmware/dongle-h743
+        run: cargo build --release --target thumbv7em-none-eabihf
+
+      - name: Stage firmware ELFs
         shell: bash
         run: |
           TAG="${GITHUB_REF_NAME}"
-          FIRMWARE_ELF="dongle-h753-${TAG}.elf"
-          cp firmware/target/thumbv7em-none-eabihf/release/dongle-h753 "$FIRMWARE_ELF"
-          echo "FIRMWARE_ELF=$FIRMWARE_ELF" >> "$GITHUB_ENV"
+          H753_ELF="dongle-h753-${TAG}.elf"
+          H743_ELF="dongle-h743-${TAG}.elf"
+          cp firmware/target/thumbv7em-none-eabihf/release/dongle-h753 "$H753_ELF"
+          cp firmware/target/thumbv7em-none-eabihf/release/dongle-h743 "$H743_ELF"
+          echo "H753_ELF=$H753_ELF" >> "$GITHUB_ENV"
+          echo "H743_ELF=$H743_ELF" >> "$GITHUB_ENV"
 
       - name: Create GitHub Release (with notes)
         uses: softprops/action-gh-release@v3.0.0
         with:
           generate_release_notes: true
           fail_on_unmatched_files: true
-          files: ${{ env.FIRMWARE_ELF }}
+          files: |
+            ${{ env.H753_ELF }}
+            ${{ env.H743_ELF }}
