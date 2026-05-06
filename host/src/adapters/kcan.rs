@@ -251,7 +251,7 @@ impl CanAdapter for KCanAdapter {
                     })?;
                     return Ok(ReceivedFrame {
                         frame,
-                        hardware_timestamp_us: Some(kf.timestamp_us),
+                        hardware_timestamp_ns: Some(kf.timestamp_100ns as u64 * 100),
                         channel: kf.channel,
                         is_tx_echo,
                     });

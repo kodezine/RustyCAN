@@ -27,12 +27,12 @@ pub struct EventLogger {
     flush_interval_entries: usize,
     /// Flush at least every N milliseconds.
     flush_interval_ms: u64,
-    /// Hardware timestamp (µs since bus-on) from the KCAN dongle ISR.
+    /// Hardware timestamp (ns since bus-on) from the KCAN dongle ISR.
     ///
     /// Set by [`set_hw_timestamp`][Self::set_hw_timestamp] before each frame's
     /// log call; cleared after each [`log`][Self::log] so it is only included
     /// in the entry it belongs to.  `None` for PEAK (no hardware timestamps).
-    hw_timestamp_us: Option<u32>,
+    hw_timestamp_ns: Option<u64>,
     /// Optional SSE broadcast sender for the live HTTP dashboard.
     ///
     /// When set via [`attach_sse`][Self::attach_sse], every serialized log line
@@ -78,7 +78,7 @@ impl EventLogger {
             last_flush: Instant::now(),
             flush_interval_entries: 50,
             flush_interval_ms: 100,
-            hw_timestamp_us: None,
+            hw_timestamp_ns: None,
             sse_tx: None,
         })
     }
@@ -113,7 +113,7 @@ impl EventLogger {
             last_flush: Instant::now(),
             flush_interval_entries,
             flush_interval_ms,
-            hw_timestamp_us: None,
+            hw_timestamp_ns: None,
             sse_tx: None,
         })
     }
@@ -125,7 +125,7 @@ impl EventLogger {
     ///
     /// Call this immediately before each frame's log method:
     /// ```ignore
-    /// logger.set_hw_timestamp(hardware_timestamp_us);
+    /// logger.set_hw_timestamp(hardware_timestamp_ns);
     /// logger.log_nmt(ts, &ev, data, cob_id);
     /// ```
     /// Attach a tokio broadcast sender so every logged line is also streamed
@@ -137,17 +137,17 @@ impl EventLogger {
         self.sse_tx = Some(tx);
     }
 
-    pub fn set_hw_timestamp(&mut self, ts: Option<u32>) {
-        self.hw_timestamp_us = ts;
+    pub fn set_hw_timestamp(&mut self, ts: Option<u64>) {
+        self.hw_timestamp_ns = ts;
     }
 
     /// Write a pre-built JSON `Value` as a single log line.
     /// Flushes periodically to balance data safety with performance.
     pub fn log(&mut self, mut entry: Value) {
         // Attach hardware timestamp if one was set for this frame.
-        if let Some(hw_ts) = self.hw_timestamp_us.take() {
+        if let Some(hw_ts) = self.hw_timestamp_ns.take() {
             if let Value::Object(ref mut map) = entry {
-                map.insert("hw_ts_us".to_string(), serde_json::json!(hw_ts));
+                map.insert("hw_ts_ns".to_string(), serde_json::json!(hw_ts));
             }
         }
 
@@ -441,13 +441,13 @@ impl EventLogger {
 
     /// Log a TX echo returned by the KCAN dongle after a successful frame transmission.
     ///
-    /// `hw_ts_us` is the hardware timestamp captured when the last bit left the bus.
+    /// `hw_ts_ns` is the hardware timestamp captured when the last bit left the bus.
     pub fn log_tx_echo(
         &mut self,
         ts: DateTime<Utc>,
         cob_id: u16,
         raw: &[u8],
-        hw_ts_us: Option<u32>,
+        hw_ts_ns: Option<u64>,
     ) {
         let ts_str = ts.to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
         let cob_id_str = format!("0x{cob_id:03X}");
@@ -455,7 +455,7 @@ impl EventLogger {
             "ts": ts_str,
             "type": "TX_ECHO",
             "cob_id": cob_id_str,
-            "hw_timestamp_us": hw_ts_us,
+            "hw_ts_ns": hw_ts_ns,
             "raw": bytes_to_hex(raw),
         });
         self.log(entry);

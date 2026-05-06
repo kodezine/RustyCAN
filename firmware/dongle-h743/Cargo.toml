@@ -24,7 +24,7 @@ embassy-stm32 = { version = "0.6", features = [
 embassy-executor  = { version = "0.10", features = ["platform-cortex-m", "executor-thread"] }
 embassy-usb       = { version = "0.6", features = ["defmt"] }
 embassy-sync      = { version = "0.8", features = ["defmt"] }
-embassy-time      = { version = "0.5", features = ["defmt", "tick-hz-1_000_000"] }
+embassy-time      = { version = "0.5", features = ["defmt", "tick-hz-10_000_000"] }
 embassy-futures   = { version = "0.1" }
 embedded-can      = "0.4"
 # Force log to no_std: usbd-hid (transitive via embassy-usb) would otherwise pull it in with std.

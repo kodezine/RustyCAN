@@ -12,7 +12,7 @@
 //! | 2      | 1    | `frame_type`    | [`FrameType`]                                     |
 //! | 3      | 1    | `flags`         | [`FrameFlags`] bitfield                           |
 //! | 4      | 4    | `can_id`        | CAN identifier (11-bit or 29-bit, LE)             |
-//! | 8      | 4    | `timestamp_us`  | µs since bus-on snapshotted in FDCAN ISR (LE)     |
+//! | 8      | 4    | `timestamp_100ns` | 100 ns units since bus-on, latched at frame SOF by FDCAN RXTS (LE) |
 //! | 12     | 1    | `dlc`           | Data length code 0–8 (classic) or 0–15 (FD)      |
 //! | 13     | 1    | `channel`       | Always 0 for single-channel dongles               |
 //! | 14     | 2    | `seq`           | 16-bit monotonic counter (replay detection)       |
@@ -24,7 +24,7 @@
 pub const KCAN_MAGIC: u8 = 0xCA;
 
 /// Current protocol version.
-pub const KCAN_VERSION: u8 = 0x01;
+pub const KCAN_VERSION: u8 = 0x02;
 
 /// Size of one KCAN frame in bytes.
 pub const KCAN_FRAME_SIZE: usize = 80;
@@ -42,7 +42,7 @@ pub enum FrameType {
     Data = 0x01,
     /// Echo of a frame that was just transmitted (device→host).
     ///
-    /// `timestamp_us` reflects the exact moment the last bit left the bus.
+    /// `timestamp_100ns` reflects the exact moment the last bit left the bus.
     TxEcho = 0x02,
     /// A CAN bus error frame was observed (device→host).
     BusError = 0x03,
@@ -98,10 +98,12 @@ pub struct KCanFrame {
     pub flags: u8,
     /// CAN identifier (standard 11-bit or extended 29-bit).
     pub can_id: u32,
-    /// µs since bus-on, captured in the FDCAN RX ISR from TIM2.
+    /// 100 ns units since bus-on, latched at frame SOF by the FDCAN hardware
+    /// RXTS counter (embassy `Instant` at 10 MHz tick rate → 100 ns resolution).
     ///
+    /// Wraps at ~429 s.  Use the host `TsRolloverTracker` for monotonic u64 ns.
     /// Set to 0 for TX frames sent from the host (dongle ignores it).
-    pub timestamp_us: u32,
+    pub timestamp_100ns: u32,
     pub dlc: u8,
     pub channel: u8,
     /// 16-bit monotonic counter; increments for every frame in this direction.
@@ -118,7 +120,7 @@ impl KCanFrame {
         flags: u8,
         dlc: u8,
         data: &[u8],
-        timestamp_us: u32,
+        timestamp_100ns: u32,
         seq: u16,
     ) -> Self {
         let mut d = [0u8; KCAN_MAX_DATA];
@@ -130,7 +132,7 @@ impl KCanFrame {
             frame_type: FrameType::Data as u8,
             flags,
             can_id,
-            timestamp_us,
+            timestamp_100ns,
             dlc,
             channel: 0,
             seq,
@@ -149,10 +151,10 @@ impl KCanFrame {
         flags: u8,
         dlc: u8,
         data: &[u8],
-        timestamp_us: u32,
+        timestamp_100ns: u32,
         seq: u16,
     ) -> Self {
-        let mut f = Self::new_data(can_id, flags, dlc, data, timestamp_us, seq);
+        let mut f = Self::new_data(can_id, flags, dlc, data, timestamp_100ns, seq);
         f.frame_type = FrameType::TxEcho as u8;
         f
     }
@@ -165,7 +167,7 @@ impl KCanFrame {
         out[2] = self.frame_type;
         out[3] = self.flags;
         out[4..8].copy_from_slice(&self.can_id.to_le_bytes());
-        out[8..12].copy_from_slice(&self.timestamp_us.to_le_bytes());
+        out[8..12].copy_from_slice(&self.timestamp_100ns.to_le_bytes());
         out[12] = self.dlc;
         out[13] = self.channel;
         out[14..16].copy_from_slice(&self.seq.to_le_bytes());
@@ -188,7 +190,7 @@ impl KCanFrame {
             frame_type: b[2],
             flags: b[3],
             can_id: u32::from_le_bytes([b[4], b[5], b[6], b[7]]),
-            timestamp_us: u32::from_le_bytes([b[8], b[9], b[10], b[11]]),
+            timestamp_100ns: u32::from_le_bytes([b[8], b[9], b[10], b[11]]),
             dlc: b[12],
             channel: b[13],
             seq: u16::from_le_bytes([b[14], b[15]]),

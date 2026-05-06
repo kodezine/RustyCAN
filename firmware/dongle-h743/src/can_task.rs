@@ -90,10 +90,11 @@ pub async fn can_task(
             loop {
                 match rx.read().await {
                     Ok(envelope) => {
-                        // Use the ISR-captured timestamp (TIM2 at 1 MHz, time-driver-tim2).
-                        // This is more accurate than Instant::now() read in the async task.
+                        // Use the ISR-captured RXTS timestamp (10 MHz tick rate → 100 ns resolution).
+                        // FDCAN hardware latches RXTS into the Rx FIFO element at frame SOF;
+                        // embassy reads it in the ISR and converts to an Instant.
                         let (frame, rx_ts) = envelope.parts();
-                        let ts_us = rx_ts.as_micros() as u32;
+                        let ts_100ns = (rx_ts.as_nanos() / 100) as u32;
                         let header = frame.header();
                         let id_val = match header.id() {
                             Id::Standard(id) => id.as_raw() as u32,
@@ -107,7 +108,7 @@ pub async fn can_task(
                         }
                         crate::display_task::RX_FRAME_COUNTER.fetch_add(1, Ordering::Relaxed);
                         trace!("FDCAN RX [ID={:#010x}, DLC={}]", id_val, header.len());
-                        let mut kf = classic_to_kcan(&frame, ts_us, rx_seq);
+                        let mut kf = classic_to_kcan(&frame, ts_100ns, rx_seq);
                         kf.channel = 0;
                         rx_seq = rx_seq.wrapping_add(1);
                         // Under periodic-echo there is no USB host draining the
@@ -141,13 +142,13 @@ pub async fn can_task(
                             warn!("FDCAN1 TX timeout — possible Bus-Off, skipping frame");
                             continue;
                         }
-                        let ts_us = Instant::now().as_micros() as u32;
+                        let ts_100ns = (Instant::now().as_nanos() / 100) as u32;
                         let echo = KCanFrame::new_tx_echo(
                             kf.can_id,
                             kf.flags,
                             kf.dlc,
                             &kf.data[..kf.dlc as usize],
-                            ts_us,
+                            ts_100ns,
                             echo_seq,
                         );
                         echo_seq = echo_seq.wrapping_add(1);
@@ -168,7 +169,7 @@ pub async fn can_task(
 
 // ─── Frame conversion helpers ─────────────────────────────────────────────────
 
-fn classic_to_kcan(frame: &Frame, timestamp_us: u32, seq: u16) -> KCanFrame {
+fn classic_to_kcan(frame: &Frame, timestamp_100ns: u32, seq: u16) -> KCanFrame {
     let header = frame.header();
     let (id_val, mut flags) = match header.id() {
         Id::Standard(id) => (id.as_raw() as u32, 0u8),
@@ -179,7 +180,7 @@ fn classic_to_kcan(frame: &Frame, timestamp_us: u32, seq: u16) -> KCanFrame {
     }
     let data = frame.data();
     let dlc = header.len();
-    KCanFrame::new_data(id_val, flags, dlc, data, timestamp_us, seq)
+    KCanFrame::new_data(id_val, flags, dlc, data, timestamp_100ns, seq)
 }
 
 fn kcan_to_frame(kf: &KCanFrame) -> Option<Frame> {
