@@ -150,6 +150,8 @@ impl Handler for KCanEp0Handler {
                 if flags & KCanModeFlags::BUS_OFF != 0 {
                     // Host app closed — revert circle to amber.
                     info!("EP0 SET_MODE bus-off (app closed)");
+                    crate::usb_task::LISTEN_ONLY
+                        .store(false, core::sync::atomic::Ordering::Relaxed);
                     lcd_terminal::boot_log!(
                         crate::display_task::LOG_CHANNEL,
                         "RustyCAN closed CAN port",
@@ -159,14 +161,28 @@ impl Handler for KCanEp0Handler {
                         .signal(crate::display_task::UsbDisplayStatus::HostConnected);
                 } else {
                     // BUS_ON — app just opened.
-                    info!("EP0 SET_MODE bus-on");
-                    lcd_terminal::boot_log!(
-                        crate::display_task::LOG_CHANNEL,
-                        "RustyCAN app opened CAN port",
-                        lcd_terminal::BootStatus::Ok
-                    );
-                    crate::display_task::USB_STATUS
-                        .signal(crate::display_task::UsbDisplayStatus::AppConnected);
+                    let listen_only = flags & KCanModeFlags::LISTEN_ONLY != 0;
+                    crate::usb_task::LISTEN_ONLY
+                        .store(listen_only, core::sync::atomic::Ordering::Relaxed);
+                    if listen_only {
+                        info!("EP0 SET_MODE bus-on (listen-only)");
+                        lcd_terminal::boot_log!(
+                            crate::display_task::LOG_CHANNEL,
+                            "RustyCAN app opened CAN port (listen-only)",
+                            lcd_terminal::BootStatus::Ok
+                        );
+                        crate::display_task::USB_STATUS
+                            .signal(crate::display_task::UsbDisplayStatus::AppConnectedListenOnly);
+                    } else {
+                        info!("EP0 SET_MODE bus-on");
+                        lcd_terminal::boot_log!(
+                            crate::display_task::LOG_CHANNEL,
+                            "RustyCAN app opened CAN port",
+                            lcd_terminal::BootStatus::Ok
+                        );
+                        crate::display_task::USB_STATUS
+                            .signal(crate::display_task::UsbDisplayStatus::AppConnected);
+                    }
                     // Signal the IO task that a new host session is starting.
                     crate::usb_task::BULK_RESTART.signal(());
                 }

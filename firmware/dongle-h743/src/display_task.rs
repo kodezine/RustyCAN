@@ -12,7 +12,7 @@
 //!   │ boot log ...                                                    │
 //!   └────────────────────────────────────────────────────────────────┘
 //!
-//! [●] dark-grey = no USB; amber = host enumerated; green = app opened port.
+//! [●] dark-grey = no USB; amber = host enumerated; green = app opened port; blue ring = listen-only.
 //!
 //! Other tasks post [`BootLogEntry`] to [`LOG_CHANNEL`] and USB state to
 //! [`USB_STATUS`].  [`crate::can_task`] increments [`RX_FRAME_COUNTER`] and
@@ -43,8 +43,11 @@ pub enum UsbDisplayStatus {
     Disconnected,
     /// Host has enumerated the device (SET_CONFIGURATION received).
     HostConnected,
-    /// RustyCAN app has opened the CAN port (SET_MODE received).
+    /// RustyCAN app has opened the CAN port in normal mode (SET_MODE BUS_ON).
     AppConnected,
+    /// RustyCAN app has opened the CAN port in listen-only (passive) mode.
+    /// Shown as a blue outlined ring instead of a filled circle.
+    AppConnectedListenOnly,
 }
 
 /// Signalled by [`crate::ep0_handler`] on every USB state change.
@@ -84,16 +87,13 @@ const COLOR_OFF: u16 = 0x18C3;
 const COLOR_USB: u16 = 0xFD20;
 /// Bright green — RustyCAN app has opened the CAN port.
 const COLOR_APP: u16 = colors::BRIGHT_GREEN;
+/// Blue — RustyCAN app opened in listen-only (passive) mode. RGB565 ≈ (60, 120, 220).
+const COLOR_LISTEN: u16 = 0x3BDB;
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 /// Redraw the single status circle from a [`UsbDisplayStatus`] value.
 fn apply_status(lcd: &LcdTerminal, status: UsbDisplayStatus) {
-    let fill = match status {
-        UsbDisplayStatus::Disconnected => COLOR_OFF,
-        UsbDisplayStatus::HostConnected => COLOR_USB,
-        UsbDisplayStatus::AppConnected => COLOR_APP,
-    };
     // Erase old circle with a solid black rectangle (DMA2D fill — no gaps).
     let erase_r = DOT_R + 2;
     lcd.fill_rect(
@@ -103,7 +103,16 @@ fn apply_status(lcd: &LcdTerminal, status: UsbDisplayStatus) {
         erase_r * 2 + 1,
         colors::BG_BLACK,
     );
-    lcd.draw_circle(DOT_CX, DOT_CY, DOT_R, fill);
+    match status {
+        UsbDisplayStatus::Disconnected => lcd.draw_circle(DOT_CX, DOT_CY, DOT_R, COLOR_OFF),
+        UsbDisplayStatus::HostConnected => lcd.draw_circle(DOT_CX, DOT_CY, DOT_R, COLOR_USB),
+        UsbDisplayStatus::AppConnected => lcd.draw_circle(DOT_CX, DOT_CY, DOT_R, COLOR_APP),
+        UsbDisplayStatus::AppConnectedListenOnly => {
+            // Blue ring: filled outer circle then black inner circle to punch the centre out.
+            lcd.draw_circle(DOT_CX, DOT_CY, DOT_R, COLOR_LISTEN);
+            lcd.draw_circle(DOT_CX, DOT_CY, DOT_R - 3, colors::BG_BLACK);
+        }
+    }
 }
 
 // ── Task ──────────────────────────────────────────────────────────────────────

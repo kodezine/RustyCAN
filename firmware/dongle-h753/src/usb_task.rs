@@ -10,6 +10,8 @@
 //! The `USB_CONFIGURED` signal gates endpoint I/O: set true when the host
 //! sends SET_CONFIGURATION, false on disconnect/reset.
 
+use core::sync::atomic::AtomicBool;
+
 use embassy_futures::select::{select, Either};
 use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 use embassy_sync::channel::Channel;
@@ -35,6 +37,11 @@ pub static USB_CONFIGURED_LED: Signal<CriticalSectionRawMutex, bool> = Signal::n
 /// which clears any stale EPENA=1 state left by a previously dropped
 /// write_packet() future, then restarts bulk IO cleanly.
 pub static BULK_RESTART: Signal<CriticalSectionRawMutex, ()> = Signal::new();
+
+/// Set true by SET_MODE when the host requests listen-only (passive) mode.
+/// The can_task reads this before every TX and silently drops the frame when set.
+/// Reset to false on SET_MODE bus-off (host closed the port).
+pub static LISTEN_ONLY: AtomicBool = AtomicBool::new(false);
 
 #[embassy_executor::task]
 pub async fn usb_device_task(

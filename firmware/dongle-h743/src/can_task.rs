@@ -130,6 +130,11 @@ pub async fn can_task(
         async {
             loop {
                 let kf = usb_to_can.receive().await;
+                // Drop TX frames silently when in listen-only (passive) mode.
+                if crate::usb_task::LISTEN_ONLY.load(core::sync::atomic::Ordering::Relaxed) {
+                    trace!("FDCAN TX suppressed (listen-only mode)");
+                    continue;
+                }
                 match kcan_to_frame(&kf) {
                     Some(frame) => {
                         trace!("FDCAN TX [ID={:#010x}, DLC={}]", kf.can_id, kf.dlc);

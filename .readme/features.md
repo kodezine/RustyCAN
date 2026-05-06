@@ -11,7 +11,7 @@
 | 🔍 **Dongle detection** | Connect button enabled only when the selected adapter is found; re-checked every 2 s |
 | 🔄 **Automatic adapter fallback** | If configured adapter unavailable, automatically tries other types (PEAK ↔ KCAN) with notice |
 | 🛡️ **Error resilience** | Continues running through adapter I/O errors; useful for waiting on unpowered buses or temporary disconnections |
-| 👂 **Listen-only mode** | Optional passive mode — no frames are ever transmitted; toggle at connect time |
+| 👂 **Listen-only mode** | Optional passive mode — no frames are ever transmitted; toggle at connect time; toolbar plug icon turns **blue** (vs green in normal mode, grey when disconnected) |
 | 💾 **Configuration persistence** | Form settings (port, baud, nodes, DBC files) saved to JSON and restored on next launch; missing files filtered out |
 | 📄 **EDS optional** | Per-node EDS files are optional; PDO frames without EDS show raw byte values |
 | 🆔 **Node ID from EDS** | Browsing to an EDS file auto-fills the Node ID from `[DeviceComissioning] NodeId` |
@@ -59,7 +59,7 @@
 | SDO segmented transfers | ✅ |
 | SDO block transfers | ✅ |
 | KCAN TSCC latch (sub-µs timestamp latched at frame SOF in hardware) | ✅ |
-| KCAN dynamic listen-only mode via SET_MODE | planned |
+| KCAN dynamic listen-only mode via SET_MODE | ✅ |
 | **LCD Boot Terminal** (H743XI, CN20 Ampire 640×480, LTDC + DMA2D) | ✅ |
 | LTDC layer init (Ampire AM640480GTNQW, PLL3R = 25 MHz pixel clock) | ✅ |
 | FMC SDRAM init (IS42S32800J-6BLI, SDCLK = HCLK/3 = 133 MHz) | ✅ |
