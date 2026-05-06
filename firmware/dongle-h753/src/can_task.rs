@@ -95,6 +95,11 @@ pub async fn can_task(
                 }
             },
             Either::Second(kf) => {
+                // Drop TX frames silently when in listen-only (passive) mode.
+                if crate::usb_task::LISTEN_ONLY.load(core::sync::atomic::Ordering::Relaxed) {
+                    trace!("FDCAN{} TX suppressed (listen-only mode)", channel_id + 1);
+                    continue;
+                }
                 if let Some(frame) = kcan_to_frame(&kf) {
                     info!("FDCAN TX [ID={:#010x}, DLC={}]", kf.can_id, kf.dlc);
                     // write() blocks until TX FIFO has space; guard with a timeout

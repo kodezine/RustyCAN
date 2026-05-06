@@ -1823,8 +1823,15 @@ fn render_monitor(
                 );
             });
             ui.separator();
-            // Green plug = actively connected
-            ui.label(egui::RichText::new(icons::PORT).color(Color32::from_rgb(60, 200, 90)));
+            // Plug icon: grey = adapter lost, blue = listen-only, green = fully connected
+            let plug_color = if view.disconnected {
+                Color32::from_rgb(120, 120, 120)
+            } else if view.listen_only {
+                Color32::from_rgb(60, 120, 220)
+            } else {
+                Color32::from_rgb(60, 200, 90)
+            };
+            ui.label(egui::RichText::new(icons::PORT).color(plug_color));
             ui.label(&view.form.port);
             ui.label("·");
             ui.label(egui::RichText::new(icons::BAUD));
@@ -1834,7 +1841,7 @@ fn render_monitor(
             ui.label(format!("{} node(s)", view.form.nodes.len()));
             if view.listen_only {
                 ui.separator();
-                ui.colored_label(Color32::YELLOW, "LISTEN-ONLY");
+                ui.colored_label(Color32::from_rgb(60, 120, 220), "LISTEN-ONLY");
             }
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 if ui

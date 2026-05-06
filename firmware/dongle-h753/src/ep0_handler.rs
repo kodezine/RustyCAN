@@ -20,7 +20,7 @@
 use embassy_usb::control::{InResponse, OutResponse, Recipient, Request, RequestType};
 use embassy_usb::Handler;
 
-use kcan_protocol::control::{KCanBtConst, KCanDeviceInfo, RequestCode};
+use kcan_protocol::control::{KCanBtConst, KCanDeviceInfo, KCanMode, KCanModeFlags, RequestCode};
 
 use defmt::*;
 
@@ -87,19 +87,47 @@ impl Handler for KCanEp0Handler {
                 Some(OutResponse::Accepted)
             }
             r if r == RequestCode::SetMode as u8 => {
-                // ACK the bus-on / listen-only request.  For now the firmware
-                // is always in normal mode; listen-only support is deferred.
-                info!("EP0 SET_MODE accepted (normal mode)");
-                // Signal the IO task that a new host session is starting.
-                // SET_MODE is sent by the host on every open() call.  We only
-                // fire BULK_RESTART here — USB_CONFIGURED is gated exclusively
-                // by the physical configured() callback (SET_CONFIGURATION).
-                // Signalling USB_CONFIGURED from SET_MODE caused a deadlock:
-                // the outer USB_CONFIGURED.wait() consumed the signal, then
-                // BULK_RESTART immediately re-fired it within the same select
-                // iteration, leaving USB_CONFIGURED empty after BULK_RESTART
-                // handling so the outer loop would block forever.
-                crate::usb_task::BULK_RESTART.signal(());
+                // Parse the mode payload to distinguish bus-on vs bus-off and
+                // extract the listen-only flag.
+                let flags = if _data.len() >= 4 {
+                    let arr: [u8; 4] = _data[..4].try_into().unwrap();
+                    KCanMode::from_bytes(&arr).flags
+                } else if !_data.is_empty() {
+                    _data[0]
+                } else {
+                    0
+                };
+
+                if flags & KCanModeFlags::BUS_OFF != 0 {
+                    // Host app closed — clear listen-only state.
+                    info!("EP0 SET_MODE bus-off (app closed)");
+                    crate::usb_task::LISTEN_ONLY
+                        .store(false, core::sync::atomic::Ordering::Relaxed);
+                } else {
+                    // BUS_ON — store the listen-only flag so the can_task can
+                    // gate TX frames accordingly.  This is the only place the
+                    // flag changes; it is reset on bus-off (above) and on USB
+                    // disconnect (configured(false) does not clear it, but the
+                    // can_task will not run TX while USB is unconfigured).
+                    let listen_only = flags & KCanModeFlags::LISTEN_ONLY != 0;
+                    crate::usb_task::LISTEN_ONLY
+                        .store(listen_only, core::sync::atomic::Ordering::Relaxed);
+                    if listen_only {
+                        info!("EP0 SET_MODE bus-on (listen-only)");
+                    } else {
+                        info!("EP0 SET_MODE bus-on");
+                    }
+                    // Signal the IO task that a new host session is starting.
+                    // SET_MODE is sent by the host on every open() call.  We only
+                    // fire BULK_RESTART here — USB_CONFIGURED is gated exclusively
+                    // by the physical configured() callback (SET_CONFIGURATION).
+                    // Signalling USB_CONFIGURED from SET_MODE caused a deadlock:
+                    // the outer USB_CONFIGURED.wait() consumed the signal, then
+                    // BULK_RESTART immediately re-fired it within the same select
+                    // iteration, leaving USB_CONFIGURED empty after BULK_RESTART
+                    // handling so the outer loop would block forever.
+                    crate::usb_task::BULK_RESTART.signal(());
+                }
                 Some(OutResponse::Accepted)
             }
             _ => None,
