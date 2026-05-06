@@ -3,9 +3,17 @@
 //! - Bulk IN  0x81: device→host (KCanFrames: RX data + TX echoes + status)
 //! - Bulk OUT 0x02: host→device (KCanFrames to transmit on the bus)
 //!
-//! EP0 vendor requests (GET_INFO, SET_BITTIMING, SET_MODE ...) are not yet
-//! handled in firmware v1; the bus runs at the default 250 kbps until future
-//! EP0 handler implementation.
+//! ## USB MPS feature-gating
+//!
+//! The `usb-hs` Cargo feature selects the bulk endpoint max packet size:
+//!
+//! | Feature | MPS | Use case |
+//! |---------|-----|----------|
+//! | `usb-hs` (default) | 512 bytes | OTG HS via ULPI (h743) — Windows requires 512 on HS |
+//! | *(off)* | 64 bytes | OTG FS fallback — h753 Nucleo or FS-only hosts |
+//!
+//! The host side (`kcan.rs`) already handles both transparently: its
+//! `BULK_IN_BUF=512` is a multiple of both 64 and 512.
 
 use embassy_usb::driver::{Driver as UsbDriver, EndpointError, EndpointIn, EndpointOut};
 use embassy_usb::Builder;
@@ -22,12 +30,15 @@ pub struct KCanReceiver<'d, D: UsbDriver<'d>> {
 
 impl<'d, D: UsbDriver<'d>> KCanSender<'d, D> {
     /// Write `data` to the Bulk IN endpoint, splitting into max-packet-size
-    /// chunks so the STM32 OTG FS 64-byte FIFO never overflows.
+    /// chunks.  The MPS is 512 bytes when the `usb-hs` feature is enabled
+    /// (default on h743 via OTG HS ULPI) or 64 bytes otherwise (default on h753).
     ///
-    /// For an 80-byte KCAN frame this produces:
-    ///   packet 1: bytes 0..64  (full-size → host waits for more)
-    ///   packet 2: bytes 64..80 (short → host knows transfer is complete)
+    /// An 80-byte KCAN frame is always shorter than MPS=512 (one short packet)
+    /// and spans two packets at MPS=64 (64 + 16 bytes).
     pub async fn write_packet(&mut self, data: &[u8]) -> Result<(), EndpointError> {
+        #[cfg(feature = "usb-hs")]
+        const MPS: usize = 512;
+        #[cfg(not(feature = "usb-hs"))]
         const MPS: usize = 64;
         let mut offset = 0;
         while offset < data.len() {
@@ -45,8 +56,27 @@ impl<'d, D: UsbDriver<'d>> KCanSender<'d, D> {
 }
 
 impl<'d, D: UsbDriver<'d>> KCanReceiver<'d, D> {
+    /// Read one KCAN frame from the Bulk OUT endpoint into `buf`.
+    ///
+    /// Loops until a short packet (< MPS) is received or `buf` is full.
+    /// At MPS=512 an 80-byte frame arrives in one short packet (single loop
+    /// iteration); at MPS=64 it arrives in two packets (64 + 16).
     pub async fn read_packet(&mut self, buf: &mut [u8]) -> Result<usize, EndpointError> {
-        self.ep.read(buf).await
+        #[cfg(feature = "usb-hs")]
+        const MPS: usize = 512;
+        #[cfg(not(feature = "usb-hs"))]
+        const MPS: usize = 64;
+        let mut total = 0;
+        loop {
+            let n = self.ep.read(&mut buf[total..]).await?;
+            total += n;
+            // A short packet (n < MPS) signals the end of the USB transfer.
+            // Stop early also if the buffer is full.
+            if n < MPS || total >= buf.len() {
+                break;
+            }
+        }
+        Ok(total)
     }
 }
 
@@ -60,13 +90,17 @@ impl<'d, D: UsbDriver<'d>> KCanUsbClass<'d, D> {
     pub fn new(builder: &mut Builder<'d, D>) -> Self {
         // Vendor-specific class, subclass and protocol (0xFF each).
         let mut func = builder.function(0xFF, 0xFF, 0xFF);
-        // Full-speed bulk endpoints, 64-byte max packet size.
-        // iface and alt are scoped here so their borrows are released before func is dropped.
+        // Bulk endpoint MPS: 64 bytes by default on h753 (OTG FS hardware);
+        // 512 bytes with the `usb-hs` feature (matches OTG HS / h743 behaviour).
+        #[cfg(feature = "usb-hs")]
+        const MPS: u16 = 512;
+        #[cfg(not(feature = "usb-hs"))]
+        const MPS: u16 = 64;
         let (rx, tx) = {
             let mut iface = func.interface();
             let mut alt = iface.alt_setting(0xFF, 0xFF, 0xFF, None);
-            let rx = alt.endpoint_bulk_out(None, 64);
-            let tx = alt.endpoint_bulk_in(None, 64);
+            let rx = alt.endpoint_bulk_out(None, MPS);
+            let tx = alt.endpoint_bulk_in(None, MPS);
             (rx, tx)
         };
         drop(func);
