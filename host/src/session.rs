@@ -445,6 +445,13 @@ fn recv_loop(
     // Track nodes that don't support block transfers (for auto-fallback)
     let mut nodes_no_block: HashSet<u8> = HashSet::new();
 
+    // Monotonic hardware timestamp tracker.
+    // The KCAN dongle encodes timestamps as 100 ns units in a u32 that wraps
+    // every ~429 s.  Detect wraps and extend to a u64 nanosecond counter that
+    // is monotonically increasing for any session length.
+    let mut ts_last_100ns: u32 = 0;
+    let mut ts_epoch_100ns: u64 = 0;
+
     loop {
         // ── Drain outbound commands from GUI ─────────────────────────────────
         // In listen-only mode, drain and discard every command — prevents the
@@ -798,8 +805,22 @@ fn recv_loop(
         }
 
         let recv_result = adapter.recv(Duration::from_millis(500));
-        let (frame, hardware_timestamp_us, channel, is_tx_echo) = match recv_result {
-            Ok(r) => (r.frame, r.hardware_timestamp_us, r.channel, r.is_tx_echo),
+        let (frame, hardware_timestamp_ns, channel, is_tx_echo) = match recv_result {
+            Ok(r) => {
+                // Apply rollover tracking: convert raw u32 100 ns ticks from the
+                // dongle into a monotonic u64 nanosecond value.
+                let hw_ns = r.hardware_timestamp_ns.map(|raw_ns| {
+                    // raw_ns is already in ns (adapter converted 100ns * 100).
+                    // Derive raw 100 ns ticks to detect wraps.
+                    let raw_100ns = (raw_ns / 100) as u32;
+                    if raw_100ns < ts_last_100ns {
+                        ts_epoch_100ns = ts_epoch_100ns.saturating_add(u32::MAX as u64 + 1);
+                    }
+                    ts_last_100ns = raw_100ns;
+                    (ts_epoch_100ns + raw_100ns as u64) * 100
+                });
+                (r.frame, hw_ns, r.channel, r.is_tx_echo)
+            }
             Err(crate::adapters::AdapterError::Timeout) => {
                 continue;
             }
@@ -834,8 +855,8 @@ fn recv_loop(
             let data = frame.data();
             let cob_id = extract_cob_id(&frame);
             let ts = Utc::now();
-            logger.set_hw_timestamp(hardware_timestamp_us);
-            logger.log_tx_echo(ts, cob_id, data, hardware_timestamp_us);
+            logger.set_hw_timestamp(hardware_timestamp_ns);
+            logger.log_tx_echo(ts, cob_id, data, hardware_timestamp_ns);
             let _ = tx.send(CanEvent::RawFrame {
                 cob_id: cob_id as u32,
                 data: data.to_vec(),
@@ -852,7 +873,7 @@ fn recv_loop(
         let cob_id = extract_cob_id(&frame);
         let ts = Utc::now();
         // Pass hardware timestamp to logger for this frame (None for PEAK).
-        logger.set_hw_timestamp(hardware_timestamp_us);
+        logger.set_hw_timestamp(hardware_timestamp_ns);
 
         // Track whether this frame was logged by any path
         let mut logged = false;

@@ -7,7 +7,7 @@
 | 🖥️ **Native GUI** | egui/eframe window — no terminal required |
 | 🔌 **Adapter selection** | Choose PEAK PCAN-USB or KCAN Dongle from the Connect screen |
 | 🔧 **KCAN Dongle** | Two targets: STM32H753ZI Nucleo (USB FS, 12 Mb/s) and STM32H743XI H743I-EVAL MB1246 Rev E (USB HS via ULPI, 480 Mb/s); Embassy firmware; custom 80-byte USB protocol with hardware timestamps |
-| ⏱️ **Hardware timestamps** | KCAN frames carry µs-precision timestamps from FDCAN TIM2; logged as `hw_ts_us` in JSONL |
+| ⏱️ **Hardware timestamps** | KCAN frames carry 100 ns-precision timestamps latched at frame SOF by FDCAN RXTS hardware; logged as `hw_ts_ns` in JSONL |
 | 🔍 **Dongle detection** | Connect button enabled only when the selected adapter is found; re-checked every 2 s |
 | 🔄 **Automatic adapter fallback** | If configured adapter unavailable, automatically tries other types (PEAK ↔ KCAN) with notice |
 | 🛡️ **Error resilience** | Continues running through adapter I/O errors; useful for waiting on unpowered buses or temporary disconnections |
@@ -58,7 +58,7 @@
 | Native plot window (egui_plot, 8 charts) | ✅ |
 | SDO segmented transfers | ✅ |
 | SDO block transfers | ✅ |
-| KCAN TSCC latch (sub-µs timestamp latched at frame SOF in hardware) | planned |
+| KCAN TSCC latch (sub-µs timestamp latched at frame SOF in hardware) | ✅ |
 | KCAN dynamic listen-only mode via SET_MODE | planned |
 | **LCD Boot Terminal** (H743XI, CN20 Ampire 640×480, LTDC + DMA2D) | ✅ |
 | LTDC layer init (Ampire AM640480GTNQW, PLL3R = 25 MHz pixel clock) | ✅ |

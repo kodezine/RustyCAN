@@ -25,7 +25,7 @@ impl CanAdapter for PeakAdapter {
         match self.inner.recv(Some(timeout)) {
             Ok(frame) => Ok(ReceivedFrame {
                 frame,
-                hardware_timestamp_us: None,
+                hardware_timestamp_ns: None,
                 channel: 0,
                 is_tx_echo: false,
             }),
