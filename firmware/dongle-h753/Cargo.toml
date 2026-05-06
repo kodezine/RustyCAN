@@ -37,6 +37,10 @@ defmt-rtt         = "1.0"
 panic-probe       = { version = "1.0", features = ["print-defmt"] }
 
 [features]
+# Gate 512-byte (HS) vs 64-byte (FS) bulk endpoint MPS in kcan_usb.rs.
+# Not enabled by default: h753 uses OTG FS hardware (64-byte MPS is correct).
+# Can be set experimentally, but the USB peripheral only runs at Full-Speed.
+usb-hs = []
 # Phase 2: enable FDCAN internal loopback for clock/timing self-test.
 # Build with: cargo build --release --features loopback
 # Remove for normal operation (Phase 3+).

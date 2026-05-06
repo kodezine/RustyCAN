@@ -39,6 +39,13 @@ defmt-rtt         = "1.0"
 panic-probe       = { version = "1.0", features = ["print-defmt"] }
 
 [features]
+# Default: use USB High-Speed (512-byte MPS) — required for OTG HS via ULPI.
+# Disable with --no-default-features to build an FS-compatible image (64-byte MPS).
+default = ["usb-hs"]
+# Gate 512-byte (HS) vs 64-byte (FS) bulk endpoint MPS in kcan_usb.rs.
+# Must be enabled when the device enumerates at High-Speed (OTG HS via ULPI);
+# Windows rejects HS devices that advertise a 64-byte (FS) MPS.
+usb-hs = []
 # Phase 2: enable FDCAN internal loopback for clock/timing self-test.
 # Build with: cargo build --release --features loopback
 # Remove for normal operation (Phase 3+).
