@@ -38,6 +38,7 @@ pub struct KCanAdapter {
     /// Joined in `Drop` to ensure ep_in/ep_out are released before the OS
     /// interface claim is freed, preventing claim_interface() failures on reconnect.
     reader_thread: Option<std::thread::JoinHandle<()>>,
+    pub fw_version: (u8, u8, u8),
     name: String,
     tx_seq: u16,
 }
@@ -182,6 +183,7 @@ impl KCanAdapter {
             error_rx,
             tx_cmd_tx,
             reader_thread: Some(reader_thread),
+            fw_version: (fw_maj, fw_min, fw_pat),
             name,
             tx_seq: 0,
         })
@@ -208,6 +210,47 @@ impl KCanAdapter {
         let s = self.tx_seq;
         self.tx_seq = self.tx_seq.wrapping_add(1);
         s
+    }
+
+    /// Send a DFU_DETACH request to the DFU Runtime interface.
+    ///
+    /// The firmware's `AppDfuHandler::enter_dfu` signals the `dfu_app_task`
+    /// which calls `mark_dfu()` and `sys_reset()`.  The device will reboot
+    /// into the bootloader's USB DFU download mode.
+    ///
+    /// Returns `Ok(())` immediately after the request is sent — the device
+    /// may disconnect before the response arrives, which is expected.
+    pub fn enter_dfu_mode(serial: Option<&str>) -> Result<(), AdapterError> {
+        let dev_info = find_device_info(serial)?;
+        let device = dev_info
+            .open()
+            .wait()
+            .map_err(|e| AdapterError::Io(format!("open device: {e}")))?;
+
+        // Find the DFU Runtime interface (class=0xFE, subclass=0x01, protocol=0x01).
+        // The KCAN app exposes it alongside the vendor CAN interface.
+        // Embassy-usb adds it as interface 1 (interface 0 is the vendor CAN).
+        let iface = device
+            .claim_interface(1)
+            .wait()
+            .map_err(|e| AdapterError::Io(format!("claim DFU Runtime interface: {e}")))?;
+
+        // DFU_DETACH (bmRequestType=0x21, bRequest=0, wValue=timeout_ms, wIndex=1)
+        let _ = iface
+            .control_out(
+                ControlOut {
+                    control_type: ControlType::Class,
+                    recipient: Recipient::Interface,
+                    request: 0x00, // DFU_DETACH
+                    value: 1000,   // wDetachTimeOut in ms
+                    index: 1,      // interface number
+                    data: &[],
+                },
+                Duration::from_millis(500),
+            )
+            .wait(); // device may reset before ACKing — ignore result
+
+        Ok(())
     }
 }
 
@@ -284,6 +327,10 @@ impl CanAdapter for KCanAdapter {
 
     fn name(&self) -> &str {
         &self.name
+    }
+
+    fn firmware_version(&self) -> Option<(u8, u8, u8)> {
+        Some(self.fw_version)
     }
 }
 

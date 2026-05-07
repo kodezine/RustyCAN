@@ -11,13 +11,20 @@ path = "src/main.rs"
 [dependencies]
 kcan-protocol = { path = "../../kcan-protocol", default-features = false }
 
+# Embassy-boot for mark_dfu (enter DFU mode) and mark_booted (confirm new image).
+embassy-boot          = { version = "0.7" }
+embassy-boot-stm32    = { version = "0.8" }
+embassy-embedded-hal  = { version = "0.6" }
+
+# DFU Runtime interface.
+embassy-usb-dfu = { version = "0.3", features = ["application"] }
+
 embassy-stm32 = { version = "0.6", features = [
     "defmt",
     "stm32h753zi",
     "time-driver-tim2",
     "exti",
     "unstable-pac",
-    "memory-x",
 ] }
 embassy-executor  = { version = "0.10", features = ["platform-cortex-m", "executor-thread"] }
 embassy-usb       = { version = "0.6", features = ["defmt"] }

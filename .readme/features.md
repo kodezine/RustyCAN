@@ -63,6 +63,11 @@
 | **LCD Boot Terminal** (H743XI, CN20 Ampire 640×480, LTDC + DMA2D) | ✅ |
 | LTDC layer init (Ampire AM640480GTNQW, PLL3R = 25 MHz pixel clock) | ✅ |
 | FMC SDRAM init (IS42S32800J-6BLI, SDCLK = HCLK/3 = 133 MHz) | ✅ |
+| KCAN USB DFU firmware update (embassy-boot + DFU Class 1.1, A/B bank swap) | ✅ |
+| KCAN firmware Ed25519 image signing (host + bootloader two-layer verification) | ✅ |
+| KCAN firmware auto-update: notify + confirm (GUI banner / TUI prompt / CLI flag) | ✅ |
+| KCAN firmware rollback via `mark_booted()` (embassy-boot verify — reverts on bad update) | ✅ |
+| KCAN firmware bundled in host release + GitHub Releases background version check | ✅ |
 | KCAN Phase 3: STM32H563 HW encryption | planned |
 | CAN FD (KCAN firmware + host) | planned |
 | EMCY message decode | planned |

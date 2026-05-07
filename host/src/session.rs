@@ -263,6 +263,10 @@ pub fn start(config: SessionConfig) -> SessionResult {
                 return;
             }
         };
+        // Emit firmware version for display / update-check in the TUI.
+        if let Some((maj, min, pat)) = adapter.firmware_version() {
+            let _ = tx.send(CanEvent::FirmwareVersion(maj, min, pat));
+        }
         // Notify the UI that DBCs were loaded successfully.
         for name in dbc_filenames {
             let _ = tx.send(CanEvent::DbcLoaded(name));

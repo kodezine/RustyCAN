@@ -68,6 +68,7 @@
 //! ```
 use std::path::PathBuf;
 use std::sync::mpsc;
+use std::sync::{Arc, Mutex};
 use std::time::{Instant, SystemTime};
 
 use eframe::egui::{self, vec2, Button, Color32};
@@ -153,6 +154,28 @@ fn format_bps(s: &str) -> String {
     }
 }
 
+// ─── DFU GUI types ───────────────────────────────────────────────────────────
+
+/// Progress messages from the DFU background thread to the GUI.
+enum DfuMsg {
+    Block(usize, usize),
+    Done,
+    Error(String),
+}
+
+/// State machine for the in-GUI DFU update flow.
+#[derive(Default)]
+enum DfuGuiState {
+    #[default]
+    Idle,
+    InProgress {
+        done: usize,
+        total: usize,
+    },
+    Success,
+    Failed(String),
+}
+
 // ─── Top-level app ────────────────────────────────────────────────────────────
 
 pub struct RustyCanApp {
@@ -160,6 +183,10 @@ pub struct RustyCanApp {
     logo: egui::TextureHandle,
     sse_server: SseServer,
     http_port: u16,
+    /// Signed firmware binary path (from `--dfu-update`), threaded into MonitorView.
+    dfu_path: Option<PathBuf>,
+    /// Latest RustyCAN release on GitHub — populated by a background thread.
+    latest_release: Arc<Mutex<Option<(u8, u8, u8)>>>,
 }
 
 #[allow(clippy::large_enum_variant)]
@@ -173,6 +200,7 @@ impl RustyCanApp {
         cc: &eframe::CreationContext,
         config_path: Option<std::path::PathBuf>,
         http_port: u16,
+        dfu_path: Option<PathBuf>,
     ) -> Self {
         let icon_bytes = include_bytes!("../../assets/RustyCAN.iconset/icon_256x256.png");
         let icon_data =
@@ -186,11 +214,26 @@ impl RustyCanApp {
             .load_texture("app_logo", color_image, egui::TextureOptions::LINEAR);
         let sse_server = SseServer::start(http_port);
 
+        // Spawn background GitHub releases check (non-blocking; result arrives within a few secs).
+        let latest_release: Arc<Mutex<Option<(u8, u8, u8)>>> = Arc::new(Mutex::new(None));
+        {
+            let lr = latest_release.clone();
+            std::thread::spawn(move || {
+                if let Some(ver) = check_github_latest_release() {
+                    *lr.lock().unwrap() = Some(ver);
+                }
+            });
+        }
+
         let screen = if let Some(ref path) = config_path {
             match PersistedConfig::load_from(path) {
                 Some(config) => {
                     let mut form = config.into_form();
-                    match form.try_connect(sse_server.tx.clone()) {
+                    match form.try_connect(
+                        sse_server.tx.clone(),
+                        dfu_path.clone(),
+                        latest_release.clone(),
+                    ) {
                         Ok(monitor) => Screen::Monitor(Box::new(monitor)),
                         Err(msg) => {
                             form.error = Some(msg);
@@ -215,6 +258,8 @@ impl RustyCanApp {
             logo,
             sse_server,
             http_port,
+            dfu_path,
+            latest_release,
         }
     }
 }
@@ -233,6 +278,8 @@ impl eframe::App for RustyCanApp {
                     &self.logo,
                     self.sse_server.tx.clone(),
                     self.http_port,
+                    self.dfu_path.clone(),
+                    self.latest_release.clone(),
                 ) {
                     next_screen = Some(s);
                 }
@@ -519,6 +566,8 @@ impl ConnectForm {
     fn try_connect(
         &self,
         sse_tx: tokio::sync::broadcast::Sender<String>,
+        dfu_path: Option<PathBuf>,
+        latest_release: Arc<Mutex<Option<(u8, u8, u8)>>>,
     ) -> Result<MonitorView, String> {
         let baud: u32 = self
             .baud
@@ -645,6 +694,10 @@ impl ConnectForm {
             sdo_browser: SdoBrowserPanel::default(),
             plot_state: plot_view::PlotState::default(),
             plot_open: false,
+            dfu_path,
+            dfu_state: DfuGuiState::Idle,
+            dfu_msg_rx: None,
+            latest_release,
         })
     }
 }
@@ -704,6 +757,8 @@ fn render_connect(
     logo: &egui::TextureHandle,
     sse_tx: tokio::sync::broadcast::Sender<String>,
     http_port: u16,
+    dfu_path: Option<PathBuf>,
+    latest_release: Arc<Mutex<Option<(u8, u8, u8)>>>,
 ) -> Option<Screen> {
     // ── Dongle probe cycle ────────────────────────────────────────────────────
     // 1. Drain any pending probe result.
@@ -798,7 +853,7 @@ fn render_connect(
                 } else if has_dupes {
                     resp.on_disabled_hover_text("Fix duplicate node IDs before connecting");
                 } else if resp.clicked() {
-                    match form.try_connect(sse_tx) {
+                    match form.try_connect(sse_tx, dfu_path.clone(), latest_release.clone()) {
                         Ok(view) => transition = Some(Screen::Monitor(Box::new(view))),
                         Err(e) => form.error = Some(e),
                     }
@@ -1591,6 +1646,14 @@ struct MonitorView {
     plot_state: plot_view::PlotState,
     /// Whether the plot window is currently open.
     plot_open: bool,
+    /// Path to signed firmware binary for in-GUI DFU update (from `--dfu-update`).
+    dfu_path: Option<PathBuf>,
+    /// DFU update UI state machine.
+    dfu_state: DfuGuiState,
+    /// Progress messages from the DFU background thread.
+    dfu_msg_rx: Option<mpsc::Receiver<DfuMsg>>,
+    /// Latest RustyCAN release on GitHub — polled from the background check.
+    latest_release: Arc<Mutex<Option<(u8, u8, u8)>>>,
 }
 
 /// Smart truncation of file paths for display.
@@ -1802,6 +1865,27 @@ fn render_monitor(
         }
     }
 
+    // ── Drain DFU progress messages ───────────────────────────────────────
+    if let Some(ref rx) = view.dfu_msg_rx {
+        while let Ok(msg) = rx.try_recv() {
+            match msg {
+                DfuMsg::Block(done, total) => {
+                    view.dfu_state = DfuGuiState::InProgress { done, total };
+                }
+                DfuMsg::Done => {
+                    view.dfu_state = DfuGuiState::Success;
+                    view.dfu_msg_rx = None;
+                    break;
+                }
+                DfuMsg::Error(e) => {
+                    view.dfu_state = DfuGuiState::Failed(e);
+                    view.dfu_msg_rx = None;
+                    break;
+                }
+            }
+        }
+    }
+
     let mut disconnect_clicked = false;
 
     // ── Top toolbar ───────────────────────────────────────────────────────
@@ -1898,6 +1982,202 @@ fn render_monitor(
             });
         });
     });
+
+    // ── Firmware update banner (shown when dfu_path is set) ──────────────
+    let device_fw = view.state.device_fw_version;
+    let bundled_fw = crate::bundled_firmware_version();
+    let show_banner = view.dfu_path.is_some()
+        || !matches!(view.dfu_state, DfuGuiState::Idle)
+        || match (device_fw, bundled_fw) {
+            (Some(d), Some(b)) => d != b,
+            _ => false,
+        };
+    if show_banner {
+        egui::Panel::top("firmware_banner")
+            .frame(egui::Frame::new().inner_margin(egui::Margin::symmetric(8, 4)))
+            .show_inside(ui, |ui| {
+                match &view.dfu_state {
+                    DfuGuiState::Idle => {
+                        let fill = match (device_fw, bundled_fw) {
+                            (Some(d), Some(b)) if d != b => {
+                                Color32::from_rgb(160, 100, 10)
+                            }
+                            _ => Color32::from_rgb(60, 90, 140),
+                        };
+                        egui::Frame::new()
+                            .fill(fill)
+                            .corner_radius(4.0)
+                            .inner_margin(egui::Margin::symmetric(8, 4))
+                            .show(ui, |ui| {
+                                ui.horizontal(|ui| {
+                                    match (device_fw, bundled_fw) {
+                                        (Some((dv_maj, dv_min, dv_pat)), Some((bv_maj, bv_min, bv_pat)))
+                                            if (dv_maj, dv_min, dv_pat) != (bv_maj, bv_min, bv_pat) =>
+                                        {
+                                            ui.colored_label(
+                                                Color32::WHITE,
+                                                format!("\u{f0aa} Dongle firmware update available: v{dv_maj}.{dv_min}.{dv_pat} \u{2192} v{bv_maj}.{bv_min}.{bv_pat}"),
+                                            );
+                                        }
+                                        _ => {
+                                            ui.colored_label(Color32::WHITE, "\u{f0c2} Firmware update ready");
+                                        }
+                                    }
+
+                                    if let Some(ref dfu_path) = view.dfu_path.clone() {
+                                        if ui
+                                            .add(
+                                                egui::Button::new(
+                                                    egui::RichText::new("\u{f019} Update Now")
+                                                        .color(Color32::WHITE),
+                                                )
+                                                .fill(Color32::from_rgb(34, 160, 54)),
+                                            )
+                                            .clicked()
+                                        {
+                                            let (tx, rx) = mpsc::channel();
+                                            view.dfu_msg_rx = Some(rx);
+                                            view.dfu_state = DfuGuiState::InProgress { done: 0, total: 0 };
+                                            let path = dfu_path.clone();
+                                            std::thread::spawn(move || {
+                                                use crate::adapters::kcan::KCanAdapter;
+                                                use crate::dfu::flash_firmware;
+                                                use crate::KCAN_SIGNING_PUBKEY;
+                                                use std::time::Duration;
+                                                // Send DFU_DETACH to the running app.
+                                                let _ = KCanAdapter::enter_dfu_mode(None);
+                                                // Wait a moment for the device to reset.
+                                                std::thread::sleep(Duration::from_millis(500));
+                                                // flash_firmware opens the device in DFU mode
+                                                // (polls up to 10 s internally via rusb).
+                                                let progress_tx = tx.clone();
+                                                let result = flash_firmware(
+                                                    &path,
+                                                    &KCAN_SIGNING_PUBKEY,
+                                                    Some(Box::new(move |done, total| {
+                                                        let _ = progress_tx.send(DfuMsg::Block(done, total));
+                                                    })),
+                                                );
+                                                match result {
+                                                    Ok(()) => {
+                                                        let _ = tx.send(DfuMsg::Done);
+                                                    }
+                                                    Err(e) => {
+                                                        let _ = tx.send(DfuMsg::Error(format!("{e:?}")));
+                                                    }
+                                                }
+                                            });
+                                        }
+                                    }
+                                });
+                            });
+                    }
+
+                    DfuGuiState::InProgress { done, total } => {
+                        let done = *done;
+                        let total = *total;
+                        egui::Frame::new()
+                            .fill(Color32::from_rgb(30, 80, 160))
+                            .corner_radius(4.0)
+                            .inner_margin(egui::Margin::symmetric(8, 4))
+                            .show(ui, |ui| {
+                                ui.horizontal(|ui| {
+                                    ui.colored_label(Color32::WHITE, "\u{f019} Flashing firmware…");
+                                    if total > 0 {
+                                        let pct = done as f32 / total as f32;
+                                        ui.add(
+                                            egui::ProgressBar::new(pct)
+                                                .desired_width(200.0)
+                                                .text(format!("{done}/{total} blocks")),
+                                        );
+                                    } else {
+                                        ui.colored_label(Color32::from_gray(200), "Waiting for device…");
+                                    }
+                                });
+                            });
+                    }
+
+                    DfuGuiState::Success => {
+                        egui::Frame::new()
+                            .fill(Color32::from_rgb(30, 120, 50))
+                            .corner_radius(4.0)
+                            .inner_margin(egui::Margin::symmetric(8, 4))
+                            .show(ui, |ui| {
+                                ui.horizontal(|ui| {
+                                    ui.colored_label(
+                                        Color32::WHITE,
+                                        "\u{f058} Firmware updated — device rebooting",
+                                    );
+                                    if ui
+                                        .small_button(egui::RichText::new("\u{f00d}").color(Color32::WHITE))
+                                        .clicked()
+                                    {
+                                        view.dfu_state = DfuGuiState::Idle;
+                                    }
+                                });
+                            });
+                    }
+
+                    DfuGuiState::Failed(msg) => {
+                        let msg = msg.clone();
+                        egui::Frame::new()
+                            .fill(Color32::from_rgb(160, 40, 40))
+                            .corner_radius(4.0)
+                            .inner_margin(egui::Margin::symmetric(8, 4))
+                            .show(ui, |ui| {
+                                ui.horizontal(|ui| {
+                                    ui.colored_label(
+                                        Color32::WHITE,
+                                        format!("\u{f06a} DFU failed: {msg}"),
+                                    );
+                                    if ui
+                                        .small_button(egui::RichText::new("\u{f021}").color(Color32::WHITE))
+                                        .on_hover_text("Retry")
+                                        .clicked()
+                                    {
+                                        view.dfu_state = DfuGuiState::Idle;
+                                    }
+                                });
+                            });
+                    }
+                }
+            });
+    }
+
+    // ── GitHub release notice (host app update) ───────────────────────────
+    if let Ok(guard) = view.latest_release.try_lock() {
+        if let Some((lr_maj, lr_min, lr_pat)) = *guard {
+            let bundled = crate::bundled_firmware_version();
+            let is_newer =
+                bundled.is_none_or(|(bm, bn, bp)| (lr_maj, lr_min, lr_pat) > (bm, bn, bp));
+            if is_newer {
+                egui::Panel::top("github_release_notice")
+                    .frame(egui::Frame::new().inner_margin(egui::Margin::symmetric(8, 3)))
+                    .show_inside(ui, |ui| {
+                        egui::Frame::new()
+                            .fill(Color32::from_rgb(50, 50, 80))
+                            .corner_radius(4.0)
+                            .inner_margin(egui::Margin::symmetric(8, 3))
+                            .show(ui, |ui| {
+                                ui.horizontal(|ui| {
+                                    ui.colored_label(
+                                        Color32::from_rgb(180, 210, 255),
+                                        format!(
+                                            "\u{f019} RustyCAN v{lr_maj}.{lr_min}.{lr_pat} available on GitHub"
+                                        ),
+                                    );
+                                    ui.hyperlink_to(
+                                        "Release notes",
+                                        format!(
+                                            "https://github.com/kodezine/RustyCAN/releases/tag/v{lr_maj}.{lr_min}.{lr_pat}"
+                                        ),
+                                    );
+                                });
+                            });
+                    });
+            }
+        }
+    }
 
     // ── Bottom status bar ─────────────────────────────────────────────────
     egui::Panel::bottom("status_bar").show_inside(ui, |ui| {
@@ -3135,9 +3415,43 @@ fn sdo_section(ui: &mut egui::Ui, state: &AppState) {
 
 // ─── Public entry point ───────────────────────────────────────────────────────
 
-/// Launch the native egui window. Blocks until the user closes it.
-/// No CLI arguments needed — all config is entered via the Connect screen.
-pub fn run(config_path: Option<std::path::PathBuf>, http_port: u16) -> Result<(), eframe::Error> {
+// ─── GitHub release check ─────────────────────────────────────────────────────
+
+/// Parse a SemVer git tag like `v1.2.3` or `v1.2.3-5-gabcdef` into `(u8, u8, u8)`.
+fn parse_semver_tag(tag: &str) -> Option<(u8, u8, u8)> {
+    let s = tag.trim().trim_start_matches('v');
+    let base = s.split('-').next()?;
+    let mut parts = base.splitn(3, '.');
+    let maj: u8 = parts.next()?.parse().ok()?;
+    let min: u8 = parts.next()?.parse().ok()?;
+    let pat: u8 = parts.next()?.parse().ok()?;
+    Some((maj, min, pat))
+}
+
+/// Query the GitHub Releases API for the latest RustyCAN release.
+///
+/// Spawned in a background thread; returns `None` on any network or parse error.
+fn check_github_latest_release() -> Option<(u8, u8, u8)> {
+    let resp = ureq::get("https://api.github.com/repos/kodezine/RustyCAN/releases/latest")
+        .set(
+            "User-Agent",
+            concat!("RustyCAN/", env!("CARGO_PKG_VERSION")),
+        )
+        .set("Accept", "application/vnd.github+json")
+        .call()
+        .ok()?;
+    let body: serde_json::Value = resp.into_json().ok()?;
+    let tag = body["tag_name"].as_str()?;
+    parse_semver_tag(tag)
+}
+
+// ─── Entry point ──────────────────────────────────────────────────────────────
+
+pub fn run(
+    config_path: Option<std::path::PathBuf>,
+    http_port: u16,
+    dfu_path: Option<PathBuf>,
+) -> Result<(), eframe::Error> {
     let icon = eframe::icon_data::from_png_bytes(include_bytes!(
         "../../assets/RustyCAN.iconset/icon_512x512@2x.png"
     ))
@@ -3201,7 +3515,12 @@ pub fn run(config_path: Option<std::path::PathBuf>, http_port: u16) -> Result<()
                 );
             });
 
-            Ok(Box::new(RustyCanApp::new(cc, config_path, http_port)))
+            Ok(Box::new(RustyCanApp::new(
+                cc,
+                config_path,
+                http_port,
+                dfu_path,
+            )))
         }),
     )
 }

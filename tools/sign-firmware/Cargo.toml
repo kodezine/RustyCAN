@@ -1,0 +1,14 @@
+[package]
+name = "sign-firmware"
+version = "0.1.0"
+edition = "2021"
+description = "Ed25519 firmware signing tool for KCAN dongle images"
+
+[[bin]]
+name = "sign-firmware"
+path = "src/main.rs"
+
+[dependencies]
+ed25519-dalek = { version = "2", features = ["rand_core"] }
+rand = "0.8"
+sha2 = "0.10"

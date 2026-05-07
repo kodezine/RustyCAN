@@ -83,40 +83,36 @@ jobs:
         shell: bash
         run: ls -lh dist/
 
-      - name: Set artifact name (macOS DMG)
-        if: matrix.os == 'macos-latest'
+      - name: Set artifact paths
+        id: set-artifact
         shell: bash
         run: |
           TAG="${GITHUB_REF_NAME}"
-          DMG=$(ls dist/*.dmg | head -1)
-          DEST="dist/rustycan-${TAG}-aarch64-apple-darwin.dmg"
-          mv "$DMG" "$DEST"
-          echo "ARTIFACT=$DEST" >> "$GITHUB_ENV"
-          echo "DMG_PATH=$DEST" >> "$GITHUB_ENV"
-
-      - name: Set artifact name (Windows)
-        if: matrix.os == 'windows-latest'
-        shell: bash
-        run: |
-          TAG="${GITHUB_REF_NAME}"
-          EXE=$(ls dist/*.exe | head -1)
-          DEST="dist/rustycan-${TAG}-x86_64-pc-windows-msvc.exe"
-          mv "$EXE" "$DEST"
-          echo "ARTIFACT=$DEST" >> "$GITHUB_ENV"
-
-      - name: Set artifact name (Linux)
-        if: matrix.os == 'ubuntu-22.04'
-        shell: bash
-        run: |
-          TAG="${GITHUB_REF_NAME}"
-          APPIMAGE=$(ls dist/*.AppImage 2>/dev/null | head -1)
-          DEB=$(ls dist/*.deb 2>/dev/null | head -1)
-          DEST_AI="dist/rustycan-${TAG}-x86_64-linux.AppImage"
-          DEST_DEB="dist/rustycan-${TAG}-x86_64-linux.deb"
-          [[ -n "$APPIMAGE" ]] && mv "$APPIMAGE" "$DEST_AI"
-          [[ -n "$DEB" ]] && mv "$DEB" "$DEST_DEB"
-          echo "ARTIFACT=$DEST_AI" >> "$GITHUB_ENV"
-          [[ -n "$DEB" ]] && echo "DEB_PATH=$DEST_DEB" >> "$GITHUB_ENV"
+          case "$RUNNER_OS" in
+            macOS)
+              DMG=$(ls dist/*.dmg | head -1)
+              DEST="dist/rustycan-${TAG}-aarch64-apple-darwin.dmg"
+              mv "$DMG" "$DEST"
+              echo "artifact=$DEST" >> "$GITHUB_OUTPUT"
+              echo "dmg_path=$DEST" >> "$GITHUB_OUTPUT"
+              ;;
+            Windows)
+              EXE=$(ls dist/*.exe | head -1)
+              DEST="dist/rustycan-${TAG}-x86_64-pc-windows-msvc.exe"
+              mv "$EXE" "$DEST"
+              echo "artifact=$DEST" >> "$GITHUB_OUTPUT"
+              ;;
+            Linux)
+              APPIMAGE=$(ls dist/*.AppImage 2>/dev/null | head -1)
+              DEB=$(ls dist/*.deb 2>/dev/null | head -1)
+              DEST_AI="dist/rustycan-${TAG}-x86_64-linux.AppImage"
+              DEST_DEB="dist/rustycan-${TAG}-x86_64-linux.deb"
+              [[ -n "$APPIMAGE" ]] && mv "$APPIMAGE" "$DEST_AI"
+              [[ -n "$DEB" ]] && mv "$DEB" "$DEST_DEB"
+              echo "artifact=$DEST_AI" >> "$GITHUB_OUTPUT"
+              [[ -n "$DEB" ]] && echo "deb_path=$DEST_DEB" >> "$GITHUB_OUTPUT"
+              ;;
+          esac
 
       # ── Upload to GitHub Release ────────────────────────────────────────
       - name: Upload release artifact
@@ -124,9 +120,15 @@ jobs:
         with:
           generate_release_notes: false
           fail_on_unmatched_files: true
-          files: |
-            ${{ env.ARTIFACT }}
-            ${{ env.DEB_PATH }}
+          files: ${{ steps.set-artifact.outputs.artifact }}
+
+      - name: Upload Linux DEB
+        if: steps.set-artifact.outputs.deb_path != ''
+        uses: softprops/action-gh-release@v3.0.0
+        with:
+          generate_release_notes: false
+          fail_on_unmatched_files: true
+          files: ${{ steps.set-artifact.outputs.deb_path }}
 
       # ── Trigger Homebrew tap update via repository_dispatch ────────────
       # The tap repo's own workflow commits using its GITHUB_TOKEN — this
@@ -139,6 +141,7 @@ jobs:
         run: |
           TAG="${GITHUB_REF_NAME}"
           VERSION="${TAG#v}"
+          DMG_PATH="${{ steps.set-artifact.outputs.dmg_path }}"
           SHA256=$(shasum -a 256 "$DMG_PATH" | awk '{print $1}')
           DMG_FILENAME=$(basename "$DMG_PATH")
           DMG_URL="https://github.com/kodezine/RustyCAN/releases/download/${TAG}/${DMG_FILENAME}"
@@ -153,7 +156,7 @@ jobs:
   # ─── Firmware ─────────────────────────────────────────────────────────────
   release-firmware:
     name: Release firmware
-    runs-on: macos-latest
+    runs-on: ubuntu-latest
 
     steps:
       - uses: actions/checkout@v6
@@ -161,33 +164,72 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: thumbv7em-none-eabihf
+          components: llvm-tools-preview
 
       - uses: Swatinem/rust-cache@v2
 
+      - name: Install arm-none-eabi binutils
+        run: sudo apt-get install -y --no-install-recommends binutils-arm-none-eabi
+
       - name: Build dongle-h753 firmware
-        working-directory: firmware/dongle-h753
-        run: cargo build --release --target thumbv7em-none-eabihf
+        working-directory: firmware
+        run: cargo build -p dongle-h753 --release --target thumbv7em-none-eabihf
 
       - name: Build dongle-h743 firmware
-        working-directory: firmware/dongle-h743
-        run: cargo build --release --target thumbv7em-none-eabihf
+        working-directory: firmware
+        run: cargo build -p dongle-h743 --release --target thumbv7em-none-eabihf
 
-      - name: Stage firmware ELFs
+      - name: Build bootloader-h753
+        working-directory: firmware
+        run: cargo build -p bootloader-h753 --release --target thumbv7em-none-eabihf
+
+      - name: Build bootloader-h743
+        working-directory: firmware
+        run: cargo build -p bootloader-h743 --release --target thumbv7em-none-eabihf
+
+      - name: Build sign-firmware tool
+        run: cargo build -p sign-firmware --release
+
+      - name: Stage, convert and sign firmware
+        id: firmware
         shell: bash
+        env:
+          SIGNING_KEY: ${{ secrets.KCAN_SIGNING_KEY }}
         run: |
           TAG="${GITHUB_REF_NAME}"
-          H753_ELF="dongle-h753-${TAG}.elf"
-          H743_ELF="dongle-h743-${TAG}.elf"
-          cp firmware/target/thumbv7em-none-eabihf/release/dongle-h753 "$H753_ELF"
-          cp firmware/target/thumbv7em-none-eabihf/release/dongle-h743 "$H743_ELF"
-          echo "H753_ELF=$H753_ELF" >> "$GITHUB_ENV"
-          echo "H743_ELF=$H743_ELF" >> "$GITHUB_ENV"
+          FW_DIR="firmware/target/thumbv7em-none-eabihf/release"
 
-      - name: Create GitHub Release (with notes)
+          BL_H753="bootloader-h753-${TAG}.elf"
+          BL_H743="bootloader-h743-${TAG}.elf"
+          FW_H753_BIN="dongle-h753-${TAG}.bin"
+          FW_H743_BIN="dongle-h743-${TAG}.bin"
+          FW_H753_SIGNED="dongle-h753-${TAG}.bin.signed"
+          FW_H743_SIGNED="dongle-h743-${TAG}.bin.signed"
+
+          # Stage bootloader ELFs (no signing needed — distributed for re-flashing via SWD)
+          cp "${FW_DIR}/bootloader-h753" "$BL_H753"
+          cp "${FW_DIR}/bootloader-h743" "$BL_H743"
+
+          # Convert dongle ELFs → flat binary for signing
+          arm-none-eabi-objcopy -O binary "${FW_DIR}/dongle-h753" "$FW_H753_BIN"
+          arm-none-eabi-objcopy -O binary "${FW_DIR}/dongle-h743" "$FW_H743_BIN"
+
+          # Sign (private key is a hex-encoded 32-byte Ed25519 seed)
+          ./target/release/sign-firmware --key "$SIGNING_KEY" "$FW_H753_BIN"
+          ./target/release/sign-firmware --key "$SIGNING_KEY" "$FW_H743_BIN"
+
+          echo "bl_h753=${BL_H753}"           >> "$GITHUB_OUTPUT"
+          echo "bl_h743=${BL_H743}"           >> "$GITHUB_OUTPUT"
+          echo "fw_h753_signed=${FW_H753_SIGNED}" >> "$GITHUB_OUTPUT"
+          echo "fw_h743_signed=${FW_H743_SIGNED}" >> "$GITHUB_OUTPUT"
+
+      - name: Upload firmware to GitHub Release
         uses: softprops/action-gh-release@v3.0.0
         with:
           generate_release_notes: true
           fail_on_unmatched_files: true
           files: |
-            ${{ env.H753_ELF }}
-            ${{ env.H743_ELF }}
+            ${{ steps.firmware.outputs.bl_h753 }}
+            ${{ steps.firmware.outputs.bl_h743 }}
+            ${{ steps.firmware.outputs.fw_h753_signed }}
+            ${{ steps.firmware.outputs.fw_h743_signed }}

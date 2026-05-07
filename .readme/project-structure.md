@@ -29,14 +29,28 @@ host/               rustycan host application
       pdo.rs        PdoDecoder built from EDS TPDO/RPDO mapping objects
     gui/
       mod.rs        egui application — Connect & Monitor screens
+    dfu/
+      mod.rs        DFU Class 1.1 flash protocol over nusb (wait_for_dfu_interface, flash_firmware)
+    firmware_verify.rs  Ed25519 host-side signature verification before DFU
+    version_check.rs    Bundled vs GitHub Releases version comparison; background fetch
+  assets/
+    firmware/
+      dongle-h743-app-latest.bin.signed   signed app binary bundled with host release
+      dongle-h753-app-latest.bin.signed
   tests/
     integration_test.rs   end-to-end EDS + PDO + SDO + NMT tests
     fixtures/
       sample_drive.eds    CiA 402 servo drive test fixture
+tools/
+  sign-firmware/    Ed25519 firmware signing tool (key generation, signing, verify)
 firmware/           separate Cargo workspace (embedded target)
-  Cargo.toml        firmware workspace (dongle-h753, dongle-h743, lcd-terminal)
+  Cargo.toml        firmware workspace (bootloader-h743, bootloader-h753, dongle-h743, dongle-h753, lcd-terminal)
   memory.x          STM32H743XI/H753ZI memory map — FLASH 2 MB, DTCM 128 KB,
                     AXI 512 KB, SRAM4 64 KB (.lcd_handoff), SDRAM 32 MB (framebuffer)
+  signing-pubkey.bin  32-byte Ed25519 public key (committed; private key in CI secret only)
+  bootloader-h743/  embassy-boot bootloader for H743XI: USB DFU class, signature verify, A/B swap
+  bootloader-h753/  embassy-boot bootloader for H753ZI: same + OTG-FS SDIS delay
+  dongle-h743/      per-crate memory.x (app at 0x08020000); ENTER_DFU_MODE EP0 handler; mark_booted()
   lcd-terminal/     shared no_std crate — LTDC + DMA2D + FMC SDRAM boot console
     build.rs        generates ibm_cp437_1bpp.rs + lcd_handoff.x (NOLOAD linker snippet)
     ibm_cp437_8x16.bin  public-domain IBM CP437 VGA 8×16 font bitmap (4096 bytes)

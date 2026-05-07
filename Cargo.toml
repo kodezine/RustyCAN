@@ -1,5 +1,5 @@
 [workspace]
-members = ["host", "kcan-protocol"]
+members = ["host", "kcan-protocol", "tools/sign-firmware"]
 resolver = "2"
 
 # Patch phf_generator 0.11.x to use rand 0.9, removing the rand 0.8.6
