@@ -152,12 +152,28 @@ pub enum TuiMode {
     Normal,
     /// The user is typing a command.  `buf` holds the characters typed so far.
     Input { kind: InputKind, buf: String },
+    /// Waiting for y/N confirmation before starting a DFU firmware update.
+    DfuConfirm,
+}
+
+/// Reason the TUI exited.
+#[derive(Debug, Clone, PartialEq)]
+pub enum TuiExitReason {
+    /// User quit normally (q / Ctrl-C).
+    Quit,
+    /// User confirmed a DFU firmware update (U then y).
+    DfuUpdate,
 }
 
 // ─── Entry points ─────────────────────────────────────────────────────────────
 
 /// Load a config file and run the full-screen TUI.
 ///
+/// `dfu_path` — when `Some`, a `[U] update firmware` hint is shown in the
+/// command bar; pressing `U` prompts y/N, and `y` exits with
+/// [`TuiExitReason::DfuUpdate`] so the caller can run the DFU update.
+///
+/// Returns [`TuiExitReason::Quit`] on normal exit.
 /// This is the entry point called from `main` when `--tui` is supplied.
 /// It loads the [`crate::session::SessionConfig`] from the JSON file at
 /// `config_path`, starts the CAN session, then hands off to [`run`].
@@ -169,7 +185,11 @@ pub enum TuiMode {
 /// # Errors
 /// Returns an [`io::Error`] on terminal setup failure or if the config file
 /// cannot be read / parsed (wrapped as `InvalidData`).
-pub fn run_from_config(config_path: &Path, _http_port: u16) -> io::Result<()> {
+pub fn run_from_config(
+    config_path: &Path,
+    _http_port: u16,
+    dfu_path: Option<&std::path::Path>,
+) -> io::Result<TuiExitReason> {
     // Build SessionConfig from the JSON file.
     let session_cfg = crate::gui::load_session_config(config_path, None)
         .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
@@ -199,7 +219,7 @@ pub fn run_from_config(config_path: &Path, _http_port: u16) -> io::Result<()> {
         .map_err(|e| io::Error::other(format!("Session start failed: {e}")))?;
 
     let state = AppState::new(log_path, baud);
-    run(rx, cmd_tx, state, node_labels)
+    run(rx, cmd_tx, state, node_labels, dfu_path)
 }
 
 /// Run the TUI event loop with an already-started CAN session.
@@ -213,12 +233,14 @@ pub fn run_from_config(config_path: &Path, _http_port: u16) -> io::Result<()> {
 /// - `cmd_tx` — sender for [`CanCommand`]s back to the session thread.
 /// - `state` — initial (empty) [`AppState`]; nodes are pre-seeded inside.
 /// - `nodes` — `(node_id, label)` pairs from the session handshake.
+/// - `dfu_path` — optional signed firmware path for in-TUI DFU update flow.
 pub fn run(
     rx: mpsc::Receiver<CanEvent>,
     cmd_tx: mpsc::Sender<CanCommand>,
     state: AppState,
     nodes: Vec<(u8, String)>,
-) -> io::Result<()> {
+    dfu_path: Option<&std::path::Path>,
+) -> io::Result<TuiExitReason> {
     enable_raw_mode()?;
     let mut stdout = io::stdout();
     execute!(stdout, EnterAlternateScreen)?;
@@ -226,7 +248,7 @@ pub fn run(
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
 
-    let result = event_loop(&mut terminal, rx, cmd_tx, state, nodes);
+    let result = event_loop(&mut terminal, rx, cmd_tx, state, nodes, dfu_path);
 
     // Always restore the terminal, even on error.
     disable_raw_mode()?;
@@ -244,7 +266,8 @@ fn event_loop(
     cmd_tx: mpsc::Sender<CanCommand>,
     mut state: AppState,
     nodes: Vec<(u8, String)>,
-) -> io::Result<()> {
+    dfu_path: Option<&std::path::Path>,
+) -> io::Result<TuiExitReason> {
     state.init_nodes(&nodes);
 
     let mut mode = TuiMode::Normal;
@@ -257,12 +280,12 @@ fn event_loop(
         let alive = drain_events_with_log(&mut state, &rx, &mut log_entries);
 
         // Render current frame.
-        draw(terminal, &state, &mode, &log_entries, show_log)?;
+        draw(terminal, &state, &mode, &log_entries, show_log, dfu_path)?;
 
         if !alive {
             // Adapter thread died — show the final frame for a moment then exit.
             std::thread::sleep(Duration::from_millis(500));
-            return Ok(());
+            return Ok(TuiExitReason::Quit);
         }
 
         // Poll keyboard for up to `tick` duration.
@@ -270,9 +293,15 @@ fn event_loop(
             if let Event::Key(key) = event::read()? {
                 match &mut mode {
                     TuiMode::Normal => match key.code {
-                        KeyCode::Char('q') | KeyCode::Char('Q') => return Ok(()),
+                        KeyCode::Char('q') | KeyCode::Char('Q') => {
+                            return Ok(TuiExitReason::Quit);
+                        }
                         KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                            return Ok(());
+                            return Ok(TuiExitReason::Quit);
+                        }
+                        // DFU update: only available when a signed binary path was supplied.
+                        KeyCode::Char('U') | KeyCode::Char('u') if dfu_path.is_some() => {
+                            mode = TuiMode::DfuConfirm;
                         }
                         KeyCode::Char('n') => {
                             mode = TuiMode::Input {
@@ -294,6 +323,18 @@ fn event_loop(
                         }
                         KeyCode::Char('L') | KeyCode::Char('l') => {
                             show_log = !show_log;
+                        }
+                        _ => {}
+                    },
+                    TuiMode::DfuConfirm => match key.code {
+                        KeyCode::Char('y') | KeyCode::Char('Y') => {
+                            return Ok(TuiExitReason::DfuUpdate);
+                        }
+                        KeyCode::Char('n')
+                        | KeyCode::Char('N')
+                        | KeyCode::Esc
+                        | KeyCode::Char('q') => {
+                            mode = TuiMode::Normal;
                         }
                         _ => {}
                     },
@@ -332,6 +373,7 @@ fn draw(
     mode: &TuiMode,
     log_entries: &VecDeque<String>,
     show_log: bool,
+    dfu_path: Option<&std::path::Path>,
 ) -> io::Result<()> {
     terminal.draw(|f| {
         let size = f.area();
@@ -383,7 +425,15 @@ fn draw(
         }
         widgets::render_stats_bar(f, state, vertical[idx]);
         idx += 1;
-        widgets::render_command_bar(f, mode, vertical[idx]);
+        let bundled_ver = crate::bundled_firmware_version();
+        widgets::render_command_bar(
+            f,
+            mode,
+            dfu_path,
+            state.device_fw_version,
+            bundled_ver,
+            vertical[idx],
+        );
     })?;
     Ok(())
 }
@@ -470,6 +520,7 @@ fn event_to_log_line(event: &CanEvent) -> Option<String> {
             Some("ADAPTER DISCONNECTED — waiting to reconnect…".into())
         }
         CanEvent::AdapterReconnected => Some("ADAPTER RECONNECTED — session resumed".into()),
+        CanEvent::FirmwareVersion(maj, min, pat) => Some(format!("FW VERSION  v{maj}.{min}.{pat}")),
     }
 }
 

@@ -28,8 +28,14 @@ chrono = { version = "0.4", features = ["serde"] }
 dirs = "6"
 # KCAN dongle support
 nusb = "0.2"
+rusb = "0.9"
+ed25519-dalek = { version = "2", features = ["rand_core"] }
+sha2 = "0.10"
+atty = "0.2"
 kcan-protocol = { path = "../kcan-protocol", features = ["std"] }
 futures-lite = "2.6.1"
+# Lightweight blocking HTTP client — used for background GitHub release check
+ureq = { version = "2", features = ["tls", "json"] }
 # Terminal UI (TUI mode)
 ratatui = "0.30"
 crossterm = "0.29"

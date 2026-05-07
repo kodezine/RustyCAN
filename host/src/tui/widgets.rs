@@ -246,45 +246,100 @@ pub fn render_log_panel(f: &mut Frame, log_entries: &VecDeque<String>, area: Rec
 
 /// Render the bottom command-hint bar or active input line.
 ///
-/// In [`TuiMode::Normal`] this shows a one-line key-binding reference.
+/// In [`TuiMode::Normal`] this shows a one-line key-binding reference,
+/// plus a firmware-update hint when `dfu_path` is `Some` and the bundled
+/// version differs from the device version.
 /// In [`TuiMode::Input`] this shows a prompt with the buffer being typed.
-pub fn render_command_bar(f: &mut Frame, mode: &TuiMode, area: Rect) {
+/// In [`TuiMode::DfuConfirm`] this shows a y/N confirmation prompt.
+pub fn render_command_bar(
+    f: &mut Frame,
+    mode: &TuiMode,
+    dfu_path: Option<&std::path::Path>,
+    device_fw: Option<(u8, u8, u8)>,
+    bundled_fw: Option<(u8, u8, u8)>,
+    area: Rect,
+) {
     let line = match mode {
-        TuiMode::Normal => Line::from(vec![
-            Span::styled(
-                " [n]",
-                Style::default()
-                    .fg(Color::Yellow)
-                    .add_modifier(Modifier::BOLD),
-            ),
-            Span::raw(" NMT  "),
-            Span::styled(
-                "[s]",
-                Style::default()
-                    .fg(Color::Yellow)
-                    .add_modifier(Modifier::BOLD),
-            ),
-            Span::raw(" SDO read  "),
-            Span::styled(
-                "[w]",
-                Style::default()
-                    .fg(Color::Yellow)
-                    .add_modifier(Modifier::BOLD),
-            ),
-            Span::raw(" SDO write  "),
-            Span::styled(
-                "[L]",
-                Style::default()
-                    .fg(Color::Yellow)
-                    .add_modifier(Modifier::BOLD),
-            ),
-            Span::raw(" log  "),
-            Span::styled(
-                "[q]",
-                Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
-            ),
-            Span::raw(" quit"),
-        ]),
+        TuiMode::Normal => {
+            // Build the standard key-binding hint.
+            let mut spans = vec![
+                Span::styled(
+                    " [n]",
+                    Style::default()
+                        .fg(Color::Yellow)
+                        .add_modifier(Modifier::BOLD),
+                ),
+                Span::raw(" NMT  "),
+                Span::styled(
+                    "[s]",
+                    Style::default()
+                        .fg(Color::Yellow)
+                        .add_modifier(Modifier::BOLD),
+                ),
+                Span::raw(" SDO read  "),
+                Span::styled(
+                    "[w]",
+                    Style::default()
+                        .fg(Color::Yellow)
+                        .add_modifier(Modifier::BOLD),
+                ),
+                Span::raw(" SDO write  "),
+                Span::styled(
+                    "[L]",
+                    Style::default()
+                        .fg(Color::Yellow)
+                        .add_modifier(Modifier::BOLD),
+                ),
+                Span::raw(" log  "),
+                Span::styled(
+                    "[q]",
+                    Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
+                ),
+                Span::raw(" quit"),
+            ];
+            // Firmware update hint: shown when a signed binary is provided.
+            if dfu_path.is_some() {
+                let hint = match (device_fw, bundled_fw) {
+                    (Some((dv_maj, dv_min, dv_pat)), Some((bv_maj, bv_min, bv_pat)))
+                        if (dv_maj, dv_min, dv_pat) != (bv_maj, bv_min, bv_pat) =>
+                    {
+                        format!(
+                            "  [U] update firmware  v{dv_maj}.{dv_min}.{dv_pat} → v{bv_maj}.{bv_min}.{bv_pat}"
+                        )
+                    }
+                    _ => "  [U] update firmware".into(),
+                };
+                spans.push(Span::styled(
+                    hint,
+                    Style::default()
+                        .fg(Color::Magenta)
+                        .add_modifier(Modifier::BOLD),
+                ));
+            }
+            Line::from(spans)
+        }
+        TuiMode::DfuConfirm => {
+            let prompt = match (device_fw, bundled_fw) {
+                (Some((dv_maj, dv_min, dv_pat)), Some((bv_maj, bv_min, bv_pat))) => format!(
+                    " Update firmware v{dv_maj}.{dv_min}.{dv_pat} → v{bv_maj}.{bv_min}.{bv_pat}? [y/N]: "
+                ),
+                _ => " Update firmware? [y/N]: ".into(),
+            };
+            Line::from(vec![
+                Span::styled(
+                    prompt,
+                    Style::default()
+                        .fg(Color::Magenta)
+                        .add_modifier(Modifier::BOLD),
+                ),
+                Span::styled(
+                    "_",
+                    Style::default()
+                        .fg(Color::White)
+                        .add_modifier(Modifier::SLOW_BLINK),
+                ),
+            ])
+        }
         TuiMode::Input { kind, buf } => {
             let prompt = match kind {
                 super::InputKind::Nmt => "NMT  <node> <command>  e.g. `1 start` → ",

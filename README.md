@@ -78,6 +78,7 @@ Comprehensive documentation is organized in the [`.readme/`](.readme/) directory
 
 ### Tools
 - [bbd — BinaryBlockDownload](.readme/bbd.md) — CANopen firmware update CLI tool (PEAK & KCAN, developer build only)
+- [KCAN Firmware Updates](.readme/firmware-update.md) — USB DFU update over the KCAN protocol: flash layout, Ed25519 signing, rollback safety, release pipeline
 
 ### Firmware
 - [LCD Boot Terminal](.readme/lcd-terminal.md) — LTDC + DMA2D + SDRAM boot console, warm-boot handoff, shared `lcd-terminal` crate

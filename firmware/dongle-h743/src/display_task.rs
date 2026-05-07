@@ -36,7 +36,7 @@ pub const LOG_CHANNEL_CAP: usize = 32;
 pub static LOG_CHANNEL: Channel<CriticalSectionRawMutex, BootLogEntry, LOG_CHANNEL_CAP> =
     Channel::new();
 
-/// USB connection state reported by [`crate::ep0_handler`].
+/// USB connection state reported by [`crate::ep0_handler`] and [`crate::dfu_app`].
 #[derive(Clone, Copy)]
 pub enum UsbDisplayStatus {
     /// No USB host connected.
@@ -48,6 +48,9 @@ pub enum UsbDisplayStatus {
     /// RustyCAN app has opened the CAN port in listen-only (passive) mode.
     /// Shown as a blue outlined ring instead of a filled circle.
     AppConnectedListenOnly,
+    /// Firmware has accepted a DFU_DETACH and is about to `sys_reset()` into
+    /// the bootloader.  Shown as a magenta dot — device will disappear shortly.
+    EnteringDfu,
 }
 
 /// Signalled by [`crate::ep0_handler`] on every USB state change.
@@ -89,6 +92,8 @@ const COLOR_USB: u16 = 0xFD20;
 const COLOR_APP: u16 = colors::BRIGHT_GREEN;
 /// Blue — RustyCAN app opened in listen-only (passive) mode. RGB565 ≈ (60, 120, 220).
 const COLOR_LISTEN: u16 = 0x3BDB;
+/// Magenta — device is entering DFU bootloader mode (will vanish shortly).
+const COLOR_DFU: u16 = 0xF81F;
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -112,21 +117,77 @@ fn apply_status(lcd: &LcdTerminal, status: UsbDisplayStatus) {
             lcd.draw_circle(DOT_CX, DOT_CY, DOT_R, COLOR_LISTEN);
             lcd.draw_circle(DOT_CX, DOT_CY, DOT_R - 3, colors::BG_BLACK);
         }
+        UsbDisplayStatus::EnteringDfu => lcd.draw_circle(DOT_CX, DOT_CY, DOT_R, COLOR_DFU),
     }
 }
 
-// ── Task ──────────────────────────────────────────────────────────────────────
+// ── Version line formatter ───────────────────────────────────────────────
+
+/// Format the LCD header version line into `buf`.
+///
+/// Always:          `KCAN USB-CAN Adapter  app vXXX.YYY.ZZZ`
+/// With bootloader: `KCAN USB-CAN Adapter  app vXXX.YYY.ZZZ  bl vXXX.YYY.ZZZ`
+///
+/// App version is the compile-time `FW_VERSION_DISPLAY` constant (`v001.002.003`
+/// form, 3 digits per field with leading zeros).  BL version comes from
+/// `RTC_BKP1R` written by the bootloader before jumping; shown only when the
+/// sentinel in `BKP2R` is valid AND the packed version is non-zero.
+fn fmt_version_line(bl: Option<(u8, u8, u8)>, buf: &mut [u8; 64]) -> &str {
+    use core::fmt::Write;
+    struct W<'b>(&'b mut [u8], usize);
+    impl core::fmt::Write for W<'_> {
+        fn write_str(&mut self, s: &str) -> core::fmt::Result {
+            let b = s.as_bytes();
+            let n = b.len().min(self.0.len().saturating_sub(self.1));
+            self.0[self.1..self.1 + n].copy_from_slice(&b[..n]);
+            self.1 += n;
+            Ok(())
+        }
+    }
+    let mut w = W(buf, 0);
+    // Show BL version only when packed triple is non-zero (real bootloader).
+    let bl_valid = matches!(bl, Some((maj, min, pat))
+        if (maj as u32) << 16 | (min as u32) << 8 | pat as u32 > 0);
+    match (bl_valid, bl) {
+        (true, Some((maj, min, pat))) => {
+            let _ = write!(
+                w,
+                "KCAN USB-CAN Adapter  app {}  bl v{:03}.{:03}.{:03}",
+                env!("FW_VERSION_DISPLAY"),
+                maj,
+                min,
+                pat
+            );
+        }
+        _ => {
+            let _ = write!(
+                w,
+                "KCAN USB-CAN Adapter  app {}",
+                env!("FW_VERSION_DISPLAY")
+            );
+        }
+    }
+    let len = w.1;
+    core::str::from_utf8(&buf[..len]).unwrap_or("KCAN USB-CAN Adapter")
+}
+
+// ── Task ────────────────────────────────────────────────────────────────────────────────
 
 /// Main LCD display task.  Takes ownership of the `LcdTerminal` returned by
 /// `lcd_terminal::init_or_attach()` and runs forever.
 #[embassy_executor::task]
-pub async fn display_task(mut lcd: LcdTerminal) {
+pub async fn display_task(mut lcd: LcdTerminal, bl_version: Option<(u8, u8, u8)>) {
     // ── Icon + title ──────────────────────────────────────────────────────────
     lcd.blit_image(&icon::ICON, icon::ICON_W, icon::ICON_H, 8, 8);
     lcd.write_large("RustyCAN", 148, 32, colors::CYAN, colors::BG_BLACK, 3);
 
     lcd.set_cursor(6, 19);
-    lcd.write_colored("KCAN USB-CAN Adapter", colors::FG_WHITE, colors::BG_BLACK);
+    let mut ver_buf = [0u8; 64];
+    lcd.write_colored(
+        fmt_version_line(bl_version, &mut ver_buf),
+        colors::FG_WHITE,
+        colors::BG_BLACK,
+    );
     lcd.set_cursor(7, 19);
     lcd.write_colored(
         "STM32H743XI  @  400 MHz",

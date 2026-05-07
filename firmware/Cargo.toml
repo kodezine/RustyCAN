@@ -1,7 +1,10 @@
 [workspace]
 members = [
+    "bootloader-h743",
+    "bootloader-h753",
     "dongle-h753",
     "dongle-h743",
+    "bootloader-size-probe",
     "lcd-terminal",
 ]
 resolver = "2"

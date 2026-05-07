@@ -87,6 +87,7 @@ unsafe fn HardFault(_ef: &cortex_m_rt::ExceptionFrame) -> ! {
 }
 
 mod can_task;
+mod dfu_app;
 mod display_task;
 #[cfg(feature = "periodic-echo")]
 mod echo_task;
@@ -361,6 +362,19 @@ async fn main(spawner: Spawner) {
 
     // ── KCAN USB class ───────────────────────────────────────────────────────
     let kcan_class = KCanUsbClass::new(&mut builder);
+
+    // ── DFU Runtime interface ────────────────────────────────────────────────
+    // Exposes a DFU Runtime interface (class 0xFE/01/01) so the host can
+    // trigger firmware update mode via a standard DFU_DETACH + USB reset
+    // sequence.  The handler signals dfu_app_task which writes flash + resets.
+    static mut DFU_STATE: Option<dfu_app::DfuState<dfu_app::AppDfuHandler>> = None;
+    // SAFETY: single-threaded init, no concurrent access before builder.build().
+    let dfu_state = unsafe {
+        DFU_STATE = Some(dfu_app::make_dfu_state(dfu_app::AppDfuHandler));
+        (&raw mut DFU_STATE).as_mut().unwrap().as_mut().unwrap()
+    };
+    embassy_usb_dfu::application::usb_dfu(&mut builder, dfu_state, |_| {});
+
     let usb = builder.build();
 
     // ── Spawn tasks ───────────────────────────────────────────────────────────
@@ -380,6 +394,7 @@ async fn main(spawner: Spawner) {
             .ok()
             .unwrap(),
     );
+    spawner.spawn(dfu_app::dfu_app_task(p.FLASH).ok().unwrap());
     #[cfg(feature = "periodic-echo")]
     spawner.spawn(echo_task::echo_task(&USB_TO_CAN).ok().unwrap());
 
@@ -482,7 +497,22 @@ async fn main(spawner: Spawner) {
         )
     };
 
-    spawner.spawn(display_task::display_task(lcd).ok().unwrap());
+    // Read bootloader version from RTC backup registers (written by bootloader
+    // before jumping to the app).  Sentinel 0xB007_B007 in BKP2R confirms a
+    // valid bootloader handoff; BKP1R holds the packed version (maj<<16|min<<8|pat).
+    // If the app runs without a bootloader (e.g. directly via probe-rs), the
+    // sentinel is absent and bl_version is None — no BL line on the LCD.
+    let bl_version: Option<(u8, u8, u8)> = {
+        use embassy_stm32::pac;
+        if pac::RTC.bkpr(2).read().bkp() == 0xB007_B007 {
+            let p = pac::RTC.bkpr(1).read().bkp();
+            Some(((p >> 16) as u8, (p >> 8) as u8, p as u8))
+        } else {
+            None
+        }
+    };
+
+    spawner.spawn(display_task::display_task(lcd, bl_version).ok().unwrap());
 
     info!("All tasks spawned — ready for USB enumeration");
 }

@@ -21,6 +21,8 @@ use embassy_usb::UsbDevice;
 
 use kcan_protocol::frame::{KCanFrame, KCAN_FRAME_SIZE};
 
+use crate::dfu_app::MARK_BOOTED;
+
 use defmt::*;
 
 /// Signalled true when USB is configured (host set configuration),
@@ -66,6 +68,8 @@ pub async fn kcan_io_task(
     let (mut sender, mut receiver) = class.split();
     info!("USB: Bulk IN/OUT task started — waiting for host configuration");
 
+    let mut booted_signalled = false;
+
     loop {
         // Wait until the host physically configures the device (SET_CONFIGURATION).
         // This is only ever signalled by the configured() callback, NOT by SET_MODE.
@@ -75,6 +79,11 @@ pub async fn kcan_io_task(
             }
         }
         info!("USB: host configured — starting Bulk IN/OUT");
+
+        if !booted_signalled {
+            booted_signalled = true;
+            MARK_BOOTED.signal(());
+        }
 
         // Inner restart loop: handles successive BULK_RESTART events (one per
         // host open() call) without going back through USB_CONFIGURED.wait().

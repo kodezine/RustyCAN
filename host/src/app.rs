@@ -84,6 +84,9 @@ pub enum CanEvent {
     AdapterDisconnected,
     /// Dongle has been reconnected and the session has resumed.
     AdapterReconnected,
+    /// Device firmware version reported by GET_INFO immediately after adapter open.
+    /// Carried as `(major, minor, patch)` for display and update-check in the TUI.
+    FirmwareVersion(u8, u8, u8),
     /// Signals decoded from a CAN frame against the loaded DBC database.
     DbcSignal(DbcFrameSignals),
     /// Emitted once when the DBC database is loaded successfully.
@@ -126,6 +129,9 @@ pub struct AppState {
     pub bus_load: f64,
     /// Baud rate in bps — kept so `record_frame` can re-derive bus load.
     pub baud_rate: u32,
+    /// Firmware version reported by the connected device, or `None` before the
+    /// first GET_INFO response arrives (or for non-KCAN adapters).
+    pub device_fw_version: Option<(u8, u8, u8)>,
     /// Path of the JSONL log file for display.
     pub log_path: String,
     // Internal FPS tracking.
@@ -149,6 +155,7 @@ impl AppState {
             fps: 0.0,
             bus_load: 0.0,
             baud_rate,
+            device_fw_version: None,
             log_path,
             fps_window_start: Instant::now(),
             fps_window_count: 0,
@@ -246,6 +253,9 @@ pub fn apply_event(state: &mut AppState, ev: CanEvent) {
         CanEvent::AdapterError(_)
         | CanEvent::AdapterDisconnected
         | CanEvent::AdapterReconnected => {}
+        CanEvent::FirmwareVersion(maj, min, pat) => {
+            state.device_fw_version = Some((maj, min, pat));
+        }
         CanEvent::DbcLoaded(name) => {
             state.dbc_loaded = Some(name);
         }

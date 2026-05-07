@@ -72,6 +72,7 @@ unsafe fn HardFault(_ef: &cortex_m_rt::ExceptionFrame) -> ! {
 #[cfg(feature = "bus-test")]
 mod bus_test;
 mod can_task;
+mod dfu_app;
 #[cfg(feature = "periodic-echo")]
 mod echo_task;
 mod ep0_handler;
@@ -289,15 +290,25 @@ async fn main(spawner: Spawner) {
 
     // ── KCAN USB class ───────────────────────────────────────────────────────
     let kcan_class = KCanUsbClass::new(&mut builder);
+
+    // ── DFU Runtime interface ────────────────────────────────────
+    static mut DFU_STATE: Option<dfu_app::DfuState<dfu_app::AppDfuHandler>> = None;
+    let dfu_state = unsafe {
+        DFU_STATE = Some(dfu_app::make_dfu_state(dfu_app::AppDfuHandler));
+        (&raw mut DFU_STATE).as_mut().unwrap().as_mut().unwrap()
+    };
+    embassy_usb_dfu::application::usb_dfu(&mut builder, dfu_state, |_| {});
+
     let usb = builder.build();
 
-    // ── Spawn tasks ───────────────────────────────────────────────────────────
+    // ── Spawn tasks ──────────────────────────────────────────────
     spawner.spawn(usb_task::usb_device_task(usb).ok().unwrap());
     spawner.spawn(
         usb_task::kcan_io_task(kcan_class, &CAN_TO_USB, &USB_TO_CAN, &USB_TO_CAN2)
             .ok()
             .unwrap(),
     );
+    spawner.spawn(dfu_app::dfu_app_task(p.FLASH).ok().unwrap());
     spawner.spawn(
         can_task::can_task(
             can,

@@ -101,6 +101,14 @@ pub trait CanAdapter {
 
     /// Human-readable adapter name for log messages and UI display.
     fn name(&self) -> &str;
+
+    /// Firmware version reported by the device during open, if available.
+    ///
+    /// Returns `Some((major, minor, patch))` for KCAN dongles; `None` for
+    /// all other adapters (PEAK, virtual, etc.).
+    fn firmware_version(&self) -> Option<(u8, u8, u8)> {
+        None
+    }
 }
 
 // ─── Factory ──────────────────────────────────────────────────────────────────

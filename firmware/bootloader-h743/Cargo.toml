@@ -1,0 +1,44 @@
+[package]
+name = "bootloader-h743"
+version = "0.1.0"
+edition = "2021"
+description = "Embassy-boot bootloader for STM32H743XI (KCAN DFU, Ed25519 verify, A/B swap)"
+
+[[bin]]
+name = "bootloader-h743"
+path = "src/main.rs"
+
+[dependencies]
+embassy-boot       = { version = "0.7" }
+embassy-boot-stm32 = { version = "0.8", features = ["defmt"] }
+
+# DFU class (bootloader download mode) + ed25519-salty verification.
+embassy-usb-dfu = { version = "0.3", features = ["dfu", "ed25519-salty", "defmt", "cortex-m"] }
+
+embassy-stm32 = { version = "0.6", features = [
+    "defmt",
+    "stm32h743xi",
+    "exti",
+    "unstable-pac",
+    # No memory-x: we provide our own memory.x with partition symbols.
+] }
+embassy-executor  = { version = "0.10", features = ["platform-cortex-m", "executor-thread"] }
+embassy-usb       = { version = "0.6", features = ["defmt"] }
+embassy-sync      = { version = "0.8", features = ["defmt"] }
+embassy-time      = { version = "0.5", features = ["defmt", "tick-hz-1_000_000"] }
+
+cortex-m          = { version = "0.7", features = ["inline-asm", "critical-section-single-core"] }
+cortex-m-rt       = "0.7"
+critical-section  = "1.1"
+
+defmt             = "1.0"
+defmt-rtt         = "1.0"
+panic-probe       = { version = "1.0", features = ["print-defmt"] }
+
+log               = { version = "0.4", default-features = false }
+
+[profile.release]
+opt-level     = "s"
+lto           = true
+codegen-units = 1
+debug         = 2

@@ -330,6 +330,33 @@ cargo run --release -- --config host/config.kcan-h743.json
 
 ---
 
+### Phase 7: DFU OTA Firmware Update (H743) ✅
+
+**Gate:** Host triggers update → LCD shows DFU mode → bootloader verifies + flashes → app resumes with new version
+
+#### LCD Status Indicators (firmware side)
+- [x] Header row 6 displays `KCAN USB-CAN Adapter  v<CARGO_PKG_VERSION>` — version sourced from `Cargo.toml` via `build.rs` at compile time
+- [x] `ep0_handler` GET_INFO response carries `fw_major/minor/patch` from `Cargo.toml` (replaces hardcoded `1.0.0`)
+- [x] `EnteringDfu` LCD state: magenta dot (RGB565 `0xF81F`) + boot-log line `"Entering DFU mode — USB bootloader active"` signalled by `dfu_app_task` before `mark_dfu()` + `sys_reset()`
+
+#### Host DFU Flow
+- [x] Firmware version comparison: GET_INFO `fw_major/minor/patch` vs. bundled binary version
+- [x] GUI update banner: `"Dongle vX.Y.Z → vA.B.C available [Update Now] [Later]"`
+- [x] `enter_dfu_mode()` + `wait_for_dfu_device()` + `flash_firmware()` wired into GUI flow
+- [x] Progress bar during DFU_DNLOAD block transfer
+- [x] Re-enumeration wait after DFU reset — `wait_for_dfu_device(15 s)` in CLI/TUI path; `flash_firmware()` internal 10 s poll covers GUI path (bootloader re-enumerates in < 2 s)
+- [x] TUI status line: `"[FIRMWARE] vX.Y.Z → vA.B.C available (y/N)"`
+- [x] CLI `--dfu-update` flag for non-interactive update (signed binary path arg)
+- [x] Bundled firmware assets: CI signs and attaches `.bin.signed` + bootloader `.elf` to GitHub Releases (supersedes `host/assets/firmware/` embed approach; host checks releases API for version + user supplies path to `--dfu-update`)
+- [x] **CI release pipeline** — add bootloader builds + `sign-firmware` signing step to `release.yml`:
+  - Build `bootloader-h753` and `bootloader-h743` in `release-firmware` job
+  - Upload `bootloader-h753-${TAG}.elf` and `bootloader-h743-${TAG}.elf` as release assets
+  - Run `sign-firmware` (private key from GitHub secret) to produce `dongle-h753-${TAG}.bin.signed` and `dongle-h743-${TAG}.bin.signed`
+  - Upload signed binaries as release assets for use by `rustycan --dfu-update`
+- [x] GitHub Releases API background version check (non-blocking, notify-only)
+
+---
+
 ## Shared Reference
 
 ### Key Files

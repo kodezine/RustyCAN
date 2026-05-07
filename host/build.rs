@@ -4,6 +4,8 @@ fn main() {
     // Re-run this script if HEAD or any tag changes.
     println!("cargo:rerun-if-changed=.git/HEAD");
     println!("cargo:rerun-if-changed=.git/refs/tags");
+    // Re-run if the signing public key changes (key rotation).
+    println!("cargo:rerun-if-changed=../firmware/signing-pubkey.bin");
 
     let version = git_describe().unwrap_or_else(|| {
         // Fallback to Cargo.toml version when git is unavailable.

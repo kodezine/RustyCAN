@@ -163,5 +163,6 @@ fn format_event(event: &CanEvent) -> Option<String> {
             Some("ADAPTER DISCONNECTED — waiting to reconnect…".into())
         }
         CanEvent::AdapterReconnected => Some("ADAPTER RECONNECTED — session resumed".into()),
+        CanEvent::FirmwareVersion(maj, min, pat) => Some(format!("FW VERSION  v{maj}.{min}.{pat}")),
     }
 }
