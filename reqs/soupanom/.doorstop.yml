@@ -1,0 +1,16 @@
+settings:
+  digits: 3
+  prefix: SOUPANOM
+  sep: ''
+  itemformat: markdown
+  parent: SOUP
+attributes:
+  defaults:
+    type: anomaly
+    iec62304-clause: '8.1.3'
+  reviewed:
+    - type
+    - iec62304-clause
+  publish:
+    - type
+    - iec62304-clause

@@ -1,0 +1,78 @@
+name: Doorstop
+
+# Runs on every push / PR that touches the requirements tree or this workflow.
+# The badge on the README reflects the latest run of this workflow on main.
+# On main-branch pushes the generated HTML is also deployed to GitHub Pages.
+on:
+  push:
+    branches: ['**']
+    paths:
+      - 'reqs/**'
+      - '.github/workflows/doorstop.yml'
+  pull_request:
+    paths:
+      - 'reqs/**'
+      - '.github/workflows/doorstop.yml'
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+jobs:
+  validate:
+    name: Validate & publish requirements
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version-file: '.python-version'   # honours repo's 3.14 pin
+
+      - name: Install Doorstop
+        run: pip install doorstop
+
+      # Validate the full requirements tree: checks link integrity, parent
+      # references, and flags any items whose content has changed since the
+      # last `doorstop review` stamp.
+      - name: Validate requirements tree
+        run: doorstop
+
+      # Generate HTML documentation even on non-release branches so that
+      # reviewers can download it as a CI artifact.
+      - name: Publish requirements HTML
+        run: doorstop publish all docs/reqs-output
+
+      - name: Upload CI artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: requirements-docs-${{ github.sha }}
+          path: docs/reqs-output/
+          retention-days: 30
+
+      # Prepare the Pages artifact only on main-branch pushes (not PRs,
+      # not feature branches) so only reviewed/merged content is published.
+      - name: Upload Pages artifact
+        if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: docs/reqs-output/
+
+  deploy-pages:
+    name: Deploy to GitHub Pages
+    runs-on: ubuntu-latest
+    needs: validate
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deploy
+        uses: actions/deploy-pages@v4

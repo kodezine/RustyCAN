@@ -54,3 +54,16 @@ repos:
         entry: cargo clippy --manifest-path firmware/Cargo.toml -p dongle-h743 --target thumbv7em-none-eabihf -- -D warnings
         pass_filenames: false
         types: [rust]
+
+      # ── Requirements (Doorstop) ──────────────────────────────────────────────
+      - id: doorstop-validate
+        name: doorstop validate
+        description: >
+          Validate the Doorstop requirements tree (broken links, unreviewed
+          items, missing parent links) whenever a file under reqs/ changes.
+        language: python
+        additional_dependencies: ['doorstop']
+        entry: doorstop
+        args: []
+        pass_filenames: false
+        files: ^reqs/

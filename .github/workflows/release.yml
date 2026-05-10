@@ -14,6 +14,8 @@ env:
 
 permissions:
   contents: write
+  pages: write
+  id-token: write
 
 jobs:
   # ─── Host app — matrix across three platforms ─────────────────────────────
@@ -233,3 +235,70 @@ jobs:
             ${{ steps.firmware.outputs.bl_h743 }}
             ${{ steps.firmware.outputs.fw_h753_signed }}
             ${{ steps.firmware.outputs.fw_h743_signed }}
+
+  # ─── Requirements documentation ───────────────────────────────────────────
+  release-docs:
+    name: Requirements docs
+    runs-on: ubuntu-latest
+    # Run after firmware so release notes are already generated; upload
+    # independently so a docs failure does not block firmware artifacts.
+    needs: [release-firmware]
+    if: always()
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version-file: '.python-version'
+
+      - name: Install Doorstop
+        run: pip install doorstop
+
+      # Fail the release if requirements have broken links or invalid structure.
+      - name: Validate requirements tree
+        run: doorstop
+
+      - name: Publish requirements HTML
+        run: doorstop publish all docs/reqs-output
+
+      # Zip with tag + timestamp so the archive is self-identifying.
+      - name: Archive requirements docs
+        id: archive
+        shell: bash
+        run: |
+          TAG="${GITHUB_REF_NAME}"
+          TIMESTAMP=$(date -u +%Y%m%dT%H%M%SZ)
+          ARCHIVE="rustycan-requirements-${TAG}-${TIMESTAMP}.zip"
+          zip -r "$ARCHIVE" docs/reqs-output/
+          echo "archive=${ARCHIVE}" >> "$GITHUB_OUTPUT"
+
+      - name: Upload requirements archive to GitHub Release
+        uses: softprops/action-gh-release@v3.0.0
+        with:
+          generate_release_notes: false
+          fail_on_unmatched_files: true
+          files: ${{ steps.archive.outputs.archive }}
+
+      # Prepare Pages artifact so the release-deploy-pages job can publish.
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: docs/reqs-output/
+
+  # ─── Deploy requirements docs to GitHub Pages on release ─────────────────
+  release-deploy-pages:
+    name: Deploy requirements to GitHub Pages
+    runs-on: ubuntu-latest
+    needs: [release-docs]
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deploy
+        uses: actions/deploy-pages@v4
