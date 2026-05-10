@@ -1,0 +1,15 @@
+settings:
+  digits: 3
+  prefix: SOUPTC
+  sep: ''
+  itemformat: markdown
+  parent: SOUP
+attributes:
+  defaults:
+    method: manual
+    test-command: ''
+  reviewed:
+    - method
+  publish:
+    - method
+    - test-command

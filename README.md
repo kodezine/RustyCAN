@@ -4,6 +4,7 @@
 [![Latest release](https://img.shields.io/github/v/release/kodezine/RustyCAN)](https://github.com/kodezine/RustyCAN/releases/latest)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Windows%20%7C%20Linux-lightgrey)](#installation)
+[![Requirements (IEC 62304 SOUP)](https://github.com/kodezine/RustyCAN/actions/workflows/doorstop.yml/badge.svg)](https://github.com/kodezine/RustyCAN/actions/workflows/doorstop.yml)
 
 A native cross-platform GUI for monitoring, decoding, and controlling CANopen networks.
 

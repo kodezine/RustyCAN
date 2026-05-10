@@ -1,0 +1,15 @@
+settings:
+  digits: 3
+  prefix: SOUP
+  sep: ''
+  itemformat: markdown
+attributes:
+  defaults:
+    type: functional
+    iec62304-clause: '8.1.2'
+  reviewed:
+    - type
+    - iec62304-clause
+  publish:
+    - type
+    - iec62304-clause
