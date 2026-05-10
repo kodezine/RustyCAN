@@ -18,7 +18,7 @@ RustyCAN is a native cross-platform application for monitoring, decoding, and co
 |---|---|
 | **Name** | RustyCAN |
 | **Manufacturer** | Kodezine |
-| **Version** | 0.1.0 (authoritative: `git describe --tags`) |
+| **Version** | __GIT_VERSION__ |
 | **License** | MIT |
 | **Repository** | https://github.com/kodezine/RustyCAN |
 | **Language** | Rust (2021 edition) |
