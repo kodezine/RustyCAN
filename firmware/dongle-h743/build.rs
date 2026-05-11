@@ -83,6 +83,23 @@ fn main() {
     .expect("cannot write bootloader-partitions.x");
     println!("cargo:rustc-link-arg=-T{}", partitions.display());
 
+    // Place the .lcd_handoff NOLOAD section at 0x38000000 (SRAM4).
+    // cargo:rustc-link-arg from a *library* build script is not propagated to
+    // the final binary link, so we emit the -T arg here in the binary crate.
+    let lcd_handoff_x = out.join("lcd_handoff.x");
+    fs::write(
+        &lcd_handoff_x,
+        "/* lcd_handoff.x — kept in sync with lcd-terminal/build.rs */\n\
+         SECTIONS {\n\
+         \x20   .lcd_handoff (NOLOAD) :\n\
+         \x20   {\n\
+         \x20       KEEP(*(.lcd_handoff .lcd_handoff.*));\n\
+         \x20   } > SRAM4\n\
+         } INSERT BEFORE .bss;\n",
+    )
+    .expect("cannot write lcd_handoff.x");
+    println!("cargo:rustc-link-arg=-T{}", lcd_handoff_x.display());
+
     println!("cargo:rerun-if-changed={}", memory_x_src.display());
     println!("cargo:rerun-if-changed=build.rs");
 }
