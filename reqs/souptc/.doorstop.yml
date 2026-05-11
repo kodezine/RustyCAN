@@ -6,6 +6,9 @@ settings:
   parent: SOUP
 attributes:
   defaults:
+    doc:
+      title: RustyCAN — SOUP Test Cases
+      copyright: RustyCAN
     method: manual
     test-command: ''
   reviewed:
