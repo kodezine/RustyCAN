@@ -307,7 +307,9 @@ jobs:
   release-deploy-pages:
     name: Deploy requirements to GitHub Pages
     runs-on: ubuntu-latest
-    needs: [release-docs]    if: always() && needs.release-docs.result == 'success'    permissions:
+    needs: [release-docs]
+    if: always() && needs.release-docs.result == 'success'
+    permissions:
       pages: write
       id-token: write
     environment:
