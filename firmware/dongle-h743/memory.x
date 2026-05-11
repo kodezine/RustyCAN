@@ -19,6 +19,7 @@ MEMORY
     FLASH  (rx)  : ORIGIN = 0x08020000, LENGTH = 768K  /* app code */
     RAM    (rwx) : ORIGIN = 0x20000000, LENGTH = 128K  /* DTCM — stack */
     AXISRAM (rw) : ORIGIN = 0x24000000, LENGTH = 512K  /* AXI SRAM — data/bss */
+    SRAM4   (rw) : ORIGIN = 0x38000000, LENGTH = 64K   /* D3 SRAM4 — lcd_handoff NOLOAD */
 }
 
 _stack_start = ORIGIN(RAM) + LENGTH(RAM);
