@@ -6,6 +6,9 @@ settings:
   parent: SOUP
 attributes:
   defaults:
+    doc:
+      title: RustyCAN — SOUP Anomaly List
+      copyright: RustyCAN
     type: anomaly
     iec62304-clause: '8.1.3'
   reviewed:

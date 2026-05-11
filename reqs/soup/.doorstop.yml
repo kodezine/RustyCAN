@@ -5,6 +5,9 @@ settings:
   itemformat: markdown
 attributes:
   defaults:
+    doc:
+      title: RustyCAN — Software of Unknown Provenance (SOUP)
+      copyright: RustyCAN
     type: functional
     iec62304-clause: '8.1.2'
   reviewed:

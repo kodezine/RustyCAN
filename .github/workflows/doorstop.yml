@@ -17,6 +17,10 @@ on:
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
+concurrency:
+  group: github-pages
+  cancel-in-progress: false
+
 jobs:
   validate:
     name: Validate & publish requirements
@@ -32,9 +36,7 @@ jobs:
           python-version-file: '.python-version'   # honours repo's 3.14 pin
 
       - name: Install dependencies
-        run: |
-          pip install doorstop
-          sudo apt-get install -y --no-install-recommends librsvg2-bin
+        run: pip install doorstop
 
       # Validate the full requirements tree: checks link integrity, parent
       # references, and flags any items whose content has changed since the
@@ -55,14 +57,12 @@ jobs:
       - name: Publish requirements HTML
         run: doorstop publish all docs/reqs-output
 
-      # Overlay Kodezine branding: CSS + logo (SVG converted to PNG).
-      - name: Apply Kodezine branding
+      # Apply RustyCAN theme: CSS + 128×128 app icon as navbar logo.
+      - name: Apply RustyCAN theme
         run: |
           cp reqs/brand/doorstop.css docs/reqs-output/template/doorstop.css
-          if [ -f reqs/brand/logo.svg ]; then
-            rsvg-convert -h 60 reqs/brand/logo.svg \
-              -o docs/reqs-output/template/logo-black-white.png
-          fi
+          cp host/assets/RustyCAN.iconset/icon_128x128.png \
+             docs/reqs-output/template/logo-black-white.png
 
       - name: Upload CI artifact
         uses: actions/upload-artifact@v4

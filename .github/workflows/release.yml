@@ -17,6 +17,10 @@ permissions:
   pages: write
   id-token: write
 
+concurrency:
+  group: github-pages
+  cancel-in-progress: false
+
 jobs:
   # ─── Host app — matrix across three platforms ─────────────────────────────
   release-host:
@@ -253,9 +257,7 @@ jobs:
           python-version-file: '.python-version'
 
       - name: Install dependencies
-        run: |
-          pip install doorstop
-          sudo apt-get install -y --no-install-recommends librsvg2-bin
+        run: pip install doorstop
 
       # Fail the release if requirements have broken links or invalid structure.
       - name: Validate requirements tree
@@ -270,14 +272,12 @@ jobs:
       - name: Publish requirements HTML
         run: doorstop publish all docs/reqs-output
 
-      # Overlay Kodezine branding: CSS + logo (SVG converted to PNG).
-      - name: Apply Kodezine branding
+      # Apply RustyCAN theme: CSS + 128×128 app icon as navbar logo.
+      - name: Apply RustyCAN theme
         run: |
           cp reqs/brand/doorstop.css docs/reqs-output/template/doorstop.css
-          if [ -f reqs/brand/logo.svg ]; then
-            rsvg-convert -h 60 reqs/brand/logo.svg \
-              -o docs/reqs-output/template/logo-black-white.png
-          fi
+          cp host/assets/RustyCAN.iconset/icon_128x128.png \
+             docs/reqs-output/template/logo-black-white.png
 
       # Zip with tag + timestamp so the archive is self-identifying.
       - name: Archive requirements docs
@@ -307,8 +307,7 @@ jobs:
   release-deploy-pages:
     name: Deploy requirements to GitHub Pages
     runs-on: ubuntu-latest
-    needs: [release-docs]
-    permissions:
+    needs: [release-docs]    if: always() && needs.release-docs.result == 'success'    permissions:
       pages: write
       id-token: write
     environment:
