@@ -123,6 +123,10 @@ pub struct PlotState {
     pub active_chart: usize,
     /// Whether the signal picker sidebar is open.
     pub picker_open: bool,
+    /// Text filter applied to signal names in the picker.
+    pub filter_text: String,
+    /// When `Some(node_id)`, only PDO signals from that node are shown.
+    pub pdo_node_filter: Option<u8>,
 }
 
 impl Default for PlotState {
@@ -132,6 +136,8 @@ impl Default for PlotState {
             charts: std::array::from_fn(ChartConfig::new),
             active_chart: 0,
             picker_open: false,
+            filter_text: String::new(),
+            pdo_node_filter: None,
         }
     }
 }
@@ -207,22 +213,28 @@ impl PlotState {
 ///
 /// Handles the `ViewportClass::EmbeddedWindow` fallback (when the egui backend
 /// does not support multiple OS windows) by wrapping content in an `egui::Window`.
-pub fn render(ui: &mut egui::Ui, class: egui::ViewportClass, state: &mut PlotState) {
+pub fn render(
+    ui: &mut egui::Ui,
+    class: egui::ViewportClass,
+    state: &mut PlotState,
+    node_labels: &[(u8, String)],
+) {
     match class {
         egui::ViewportClass::EmbeddedWindow => {
             egui::Window::new("Plots")
                 .resizable(true)
-                .show(ui.ctx(), |ui| render_inner(ui, state));
+                .show(ui.ctx(), |ui| render_inner(ui, state, node_labels));
         }
         _ => {
-            egui::CentralPanel::default().show_inside(ui, |ui| render_inner(ui, state));
+            egui::CentralPanel::default()
+                .show_inside(ui, |ui| render_inner(ui, state, node_labels));
         }
     }
 }
 
 // ─── Inner layout ─────────────────────────────────────────────────────────────
 
-fn render_inner(ui: &mut egui::Ui, state: &mut PlotState) {
+fn render_inner(ui: &mut egui::Ui, state: &mut PlotState, node_labels: &[(u8, String)]) {
     // ── Tab strip ─────────────────────────────────────────────────────────
     ui.horizontal(|ui| {
         for i in 0..NUM_CHARTS {
@@ -282,7 +294,14 @@ fn render_inner(ui: &mut egui::Ui, state: &mut PlotState) {
             .resizable(true)
             .default_size(220.0)
             .show_inside(ui, |ui| {
-                render_picker(ui, &mut state.charts[state.active_chart], &state.registry);
+                render_picker(
+                    ui,
+                    &mut state.charts[state.active_chart],
+                    &state.registry,
+                    &mut state.filter_text,
+                    &mut state.pdo_node_filter,
+                    node_labels,
+                );
             });
     }
 
@@ -358,9 +377,52 @@ fn render_picker(
     ui: &mut egui::Ui,
     chart: &mut ChartConfig,
     registry: &HashMap<SignalKey, SignalHistory>,
+    filter_text: &mut String,
+    pdo_node_filter: &mut Option<u8>,
+    node_labels: &[(u8, String)],
 ) {
     ui.strong("Assign signals");
     ui.separator();
+
+    // ── Search filter ──────────────────────────────────────────────────────
+    ui.horizontal(|ui| {
+        ui.add(
+            egui::TextEdit::singleline(filter_text)
+                .desired_width(f32::INFINITY)
+                .hint_text("filter signals…"),
+        );
+        if !filter_text.is_empty() && ui.small_button("×").clicked() {
+            filter_text.clear();
+        }
+    });
+
+    // ── PDO node selector (only when more than one node is configured) ─────
+    if node_labels.len() > 1 {
+        let selected_label = pdo_node_filter
+            .as_ref()
+            .and_then(|id| node_labels.iter().find(|(n, _)| n == id))
+            .map(|(_, name)| name.as_str())
+            .unwrap_or("All nodes");
+        egui::ComboBox::from_id_salt("pdo_node_filter_combo")
+            .selected_text(selected_label)
+            .show_ui(ui, |ui| {
+                if ui
+                    .selectable_label(pdo_node_filter.is_none(), "All nodes")
+                    .clicked()
+                {
+                    *pdo_node_filter = None;
+                }
+                for (id, name) in node_labels {
+                    let label = format!("Node {id}: {name}");
+                    if ui
+                        .selectable_label(*pdo_node_filter == Some(*id), &label)
+                        .clicked()
+                    {
+                        *pdo_node_filter = Some(*id);
+                    }
+                }
+            });
+    }
 
     if registry.is_empty() {
         ui.label(
@@ -370,6 +432,8 @@ fn render_picker(
         );
         return;
     }
+
+    let filter_lower = filter_text.to_lowercase();
 
     // ── Assigned signals (with remove button) ────────────────────────────
     if !chart.assigned.is_empty() {
@@ -396,49 +460,67 @@ fn render_picker(
     // ── Available signals tree, grouped by source ─────────────────────────
     ui.label(egui::RichText::new("Available:").strong());
 
-    // Collect and sort registry keys for stable display.
+    // Collect, filter, and sort registry keys for stable display.
     let mut pdo_keys: Vec<&SignalKey> = Vec::new();
     let mut dbc_keys: Vec<&SignalKey> = Vec::new();
     for key in registry.keys() {
+        let label_lower = key.label().to_lowercase();
+        if !filter_lower.is_empty() && !label_lower.contains(&filter_lower) {
+            continue;
+        }
         match &key.source {
-            PlotSignalSource::Pdo { .. } => pdo_keys.push(key),
+            PlotSignalSource::Pdo { node_id, .. } => {
+                if pdo_node_filter.map(|f| f == *node_id).unwrap_or(true) {
+                    pdo_keys.push(key);
+                }
+            }
             PlotSignalSource::Dbc { .. } => dbc_keys.push(key),
         }
     }
     pdo_keys.sort_by_key(|k| k.label());
     dbc_keys.sort_by_key(|k| k.label());
 
-    if !pdo_keys.is_empty() {
-        ui.collapsing("PDO", |ui| {
-            for key in &pdo_keys {
-                let assigned = chart.assigned.contains(key);
-                let resp = ui.selectable_label(assigned, key.label());
-                if resp.clicked() {
-                    if assigned {
-                        chart.assigned.retain(|k| k != *key);
-                    } else {
-                        chart.assigned.push((*key).clone());
+    egui::ScrollArea::vertical().show(ui, |ui| {
+        if !pdo_keys.is_empty() {
+            ui.collapsing("PDO", |ui| {
+                for key in &pdo_keys {
+                    let assigned = chart.assigned.contains(key);
+                    let resp = ui.selectable_label(assigned, key.label());
+                    if resp.clicked() {
+                        if assigned {
+                            chart.assigned.retain(|k| k != *key);
+                        } else {
+                            chart.assigned.push((*key).clone());
+                        }
                     }
                 }
-            }
-        });
-    }
+            });
+        }
 
-    if !dbc_keys.is_empty() {
-        ui.collapsing("DBC", |ui| {
-            for key in &dbc_keys {
-                let assigned = chart.assigned.contains(key);
-                let resp = ui.selectable_label(assigned, key.label());
-                if resp.clicked() {
-                    if assigned {
-                        chart.assigned.retain(|k| k != *key);
-                    } else {
-                        chart.assigned.push((*key).clone());
+        if !dbc_keys.is_empty() {
+            ui.collapsing("DBC", |ui| {
+                for key in &dbc_keys {
+                    let assigned = chart.assigned.contains(key);
+                    let resp = ui.selectable_label(assigned, key.label());
+                    if resp.clicked() {
+                        if assigned {
+                            chart.assigned.retain(|k| k != *key);
+                        } else {
+                            chart.assigned.push((*key).clone());
+                        }
                     }
                 }
-            }
-        });
-    }
+            });
+        }
+
+        if pdo_keys.is_empty() && dbc_keys.is_empty() && !filter_lower.is_empty() {
+            ui.label(
+                egui::RichText::new("No matching signals.")
+                    .italics()
+                    .color(egui::Color32::from_gray(120)),
+            );
+        }
+    });
 }
 
 // ─── Tests ────────────────────────────────────────────────────────────────────
@@ -493,6 +575,78 @@ mod tests {
         assert_eq!(state.active_chart, 0);
         assert!(!state.picker_open);
         assert_eq!(state.charts.len(), NUM_CHARTS);
+        assert!(state.filter_text.is_empty());
+        assert_eq!(state.pdo_node_filter, None);
+    }
+
+    #[test]
+    fn filter_narrows_dbc_keys() {
+        // Build a small registry with two DBC keys.
+        let mut registry: HashMap<SignalKey, SignalHistory> = HashMap::new();
+        let key_speed = SignalKey {
+            source: PlotSignalSource::Dbc {
+                can_id: 0,
+                message_name: "Engine".to_string(),
+            },
+            name: "EngineSpeed".to_string(),
+        };
+        let key_temp = SignalKey {
+            source: PlotSignalSource::Dbc {
+                can_id: 0,
+                message_name: "Engine".to_string(),
+            },
+            name: "CoolantTemp".to_string(),
+        };
+        registry.insert(key_speed.clone(), SignalHistory::new(String::new()));
+        registry.insert(key_temp.clone(), SignalHistory::new(String::new()));
+
+        let filter = "speed";
+        let filter_lower = filter.to_lowercase();
+        let mut dbc_keys: Vec<&SignalKey> = registry
+            .keys()
+            .filter(|k| k.label().to_lowercase().contains(&filter_lower))
+            .collect();
+        dbc_keys.sort_by_key(|k| k.label());
+        assert_eq!(dbc_keys.len(), 1);
+        assert_eq!(dbc_keys[0].name, "EngineSpeed");
+    }
+
+    #[test]
+    fn pdo_node_filter_excludes_other_nodes() {
+        let mut registry: HashMap<SignalKey, SignalHistory> = HashMap::new();
+        let key1 = SignalKey {
+            source: PlotSignalSource::Pdo {
+                node_id: 1,
+                cob_id: 0x181,
+            },
+            name: "sig".to_string(),
+        };
+        let key2 = SignalKey {
+            source: PlotSignalSource::Pdo {
+                node_id: 2,
+                cob_id: 0x281,
+            },
+            name: "sig".to_string(),
+        };
+        registry.insert(key1.clone(), SignalHistory::new(String::new()));
+        registry.insert(key2.clone(), SignalHistory::new(String::new()));
+
+        let node_filter: Option<u8> = Some(1);
+        let pdo_keys: Vec<&SignalKey> = registry
+            .keys()
+            .filter(|k| {
+                if let PlotSignalSource::Pdo { node_id, .. } = &k.source {
+                    node_filter.map(|f| f == *node_id).unwrap_or(true)
+                } else {
+                    false
+                }
+            })
+            .collect();
+        assert_eq!(pdo_keys.len(), 1);
+        assert!(matches!(
+            &pdo_keys[0].source,
+            PlotSignalSource::Pdo { node_id: 1, .. }
+        ));
     }
 
     #[test]

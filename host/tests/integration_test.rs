@@ -189,60 +189,56 @@ fn classify_tpdo_rpdo() {
 fn dbc_parse_fixture_message_name() {
     let db = rustycan::dbc::load_dbc(&fixture("sample_bus.dbc"))
         .expect("failed to parse sample_bus.dbc");
-    // CAN ID 770 (0x302) should map to "EngineData"
-    let frame = db.decode_frame(770, &[0x00; 8]);
-    assert!(frame.is_some(), "No signals decoded for CAN ID 770");
-    assert_eq!(frame.unwrap().message_name, "EngineData");
+    // CAN ID 0 (0x000) should map to "HPA_1" in the updated fixture.
+    let frame = db.decode_frame(0, &[0x00; 8]);
+    assert!(frame.is_some(), "No signals decoded for CAN ID 0");
+    assert_eq!(frame.unwrap().message_name, "HPA_1");
 }
 
 #[test]
-fn dbc_decode_engine_speed_intel_le() {
-    // EngineSpeed: start_bit=0, length=16, Intel LE, factor=0.125, offset=0
-    // raw = 800 (0x0320) → physical = 800 * 0.125 = 100.0 rpm
-    let payload: [u8; 8] = [0x20, 0x03, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00];
+fn dbc_decode_hsp_abs_position_intel_le() {
+    // HSP_ABS_POSITION_M: CAN ID 105 (HSP_Q1), start_bit=0, length=16,
+    // Intel LE, unsigned, factor=0.0342, offset=0
+    // raw = 1000 (0x03E8) → physical = 1000 * 0.0342 = 34.2
+    let payload: [u8; 8] = [0xE8, 0x03, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00];
 
     let db = rustycan::dbc::load_dbc(&fixture("sample_bus.dbc"))
         .expect("failed to parse sample_bus.dbc");
     let frame = db
-        .decode_frame(770, &payload)
-        .expect("decode returned None");
+        .decode_frame(105, &payload)
+        .expect("decode returned None for CAN ID 105");
 
     let sig = frame
         .values
         .iter()
-        .find(|s| s.signal_name == "EngineSpeed")
-        .expect("EngineSpeed signal not found");
-    assert_eq!(sig.raw_int, 800);
+        .find(|s| s.signal_name == "HSP_ABS_POSITION_M")
+        .expect("HSP_ABS_POSITION_M signal not found");
+    assert_eq!(sig.raw_int, 1000);
     assert!(
-        (sig.physical - 100.0).abs() < 1e-6,
-        "Expected 100.0 rpm, got {}",
+        (sig.physical - 34.2).abs() < 1e-6,
+        "Expected 34.2, got {}",
         sig.physical
     );
-    assert_eq!(sig.unit, "rpm");
 }
 
 #[test]
-fn dbc_decode_coolant_temp_with_val_description() {
-    // CoolantTemp: start_bit=16, length=8, Intel LE, factor=1, offset=-40
-    // raw = 0 → physical = -40 degC → VAL_ description = "Sensor_Error"
-    let payload: [u8; 8] = [0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00];
+fn dbc_decode_bool_signal_with_val_description() {
+    // BP_DIRECTION_GET_M: CAN ID 57 (FPB_1_Q1), start_bit=24, length=8,
+    // Intel LE, unsigned, factor=1, offset=0.
+    // raw = 1 at byte index 3 → VAL_ description = "True"
+    let payload: [u8; 8] = [0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00];
 
     let db = rustycan::dbc::load_dbc(&fixture("sample_bus.dbc"))
         .expect("failed to parse sample_bus.dbc");
     let frame = db
-        .decode_frame(770, &payload)
-        .expect("decode returned None");
+        .decode_frame(57, &payload)
+        .expect("decode returned None for CAN ID 57");
 
     let sig = frame
         .values
         .iter()
-        .find(|s| s.signal_name == "CoolantTemp")
-        .expect("CoolantTemp signal not found");
-    assert_eq!(sig.raw_int, 0);
-    assert!(
-        (sig.physical - (-40.0)).abs() < 1e-6,
-        "Expected -40.0, got {}",
-        sig.physical
-    );
-    assert_eq!(sig.description.as_deref(), Some("Sensor_Error"));
+        .find(|s| s.signal_name == "BP_DIRECTION_GET_M")
+        .expect("BP_DIRECTION_GET_M signal not found");
+    assert_eq!(sig.raw_int, 1);
+    assert_eq!(sig.description.as_deref(), Some("True"));
 }

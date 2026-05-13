@@ -16,7 +16,7 @@ use std::path::Path;
 
 use can_dbc::{ByteOrder, Dbc, MessageId, MultiplexIndicator, ValueDescription, ValueType};
 
-pub use types::{DbcFrameSignals, DbcSignalValue};
+pub use types::{DbcByteOrder, DbcFrameSignals, DbcSignalDef, DbcSignalValue, DbcValueType};
 
 // ─── Public database type ─────────────────────────────────────────────────────
 
@@ -70,12 +70,29 @@ impl DbcDatabase {
                 .and_then(|map| map.get(&raw_int))
                 .cloned();
 
+            let encoding_def = Some(DbcSignalDef {
+                start_bit: sig.start_bit,
+                bit_size: sig.size,
+                byte_order: match sig.byte_order {
+                    ByteOrder::LittleEndian => DbcByteOrder::LittleEndian,
+                    ByteOrder::BigEndian => DbcByteOrder::BigEndian,
+                },
+                value_type: match sig.value_type {
+                    ValueType::Signed => DbcValueType::Signed,
+                    ValueType::Unsigned => DbcValueType::Unsigned,
+                },
+                factor: sig.factor,
+                offset: sig.offset,
+                dlc: msg.size as u8,
+            });
+
             values.push(DbcSignalValue {
                 signal_name: sig.name.clone(),
                 raw_int,
                 physical,
                 unit: sig.unit.clone(),
                 description,
+                encoding_def,
             });
         }
 
@@ -84,6 +101,7 @@ impl DbcDatabase {
             can_id,
             values,
             source_dbc: source_dbc.clone(),
+            raw_data: data.to_vec(),
         })
     }
 }
@@ -146,6 +164,121 @@ pub fn load_dbc(path: &Path) -> Result<DbcDatabase, String> {
         messages,
         val_descs,
     })
+}
+
+// ─── Encoding ─────────────────────────────────────────────────────────────────
+
+impl DbcDatabase {
+    /// Return the DLC (payload length in bytes) of the message with `can_id`,
+    /// or `None` if the ID is not in this database.
+    pub fn message_dlc(&self, can_id: u32) -> Option<u8> {
+        let (_, msg) = self.messages.get(&can_id)?.first()?;
+        Some(msg.size as u8)
+    }
+
+    /// Encode a physical value for one signal into a copy of `current_bytes`.
+    ///
+    /// `current_bytes` must be at least `dlc` bytes long; the bits belonging to
+    /// other signals in the same message are preserved unchanged.
+    ///
+    /// Returns `None` if `can_id` or `signal_name` is not in the database.
+    pub fn encode_signal(
+        &self,
+        can_id: u32,
+        signal_name: &str,
+        physical: f64,
+        current_bytes: &[u8],
+    ) -> Option<Vec<u8>> {
+        let (_, msg) = self.messages.get(&can_id)?.first()?;
+        let sig = msg.signals.iter().find(|s| s.name == signal_name)?;
+
+        let dlc = msg.size as usize;
+        let mut data: Vec<u8> = current_bytes
+            .iter()
+            .copied()
+            .chain(std::iter::repeat(0))
+            .take(dlc)
+            .collect();
+
+        // Inverse of physical = raw * factor + offset
+        let factor = sig.factor;
+        let offset = sig.offset;
+        let raw_f = if factor == 0.0 {
+            0.0
+        } else {
+            (physical - offset) / factor
+        };
+
+        // Clamp to representable bit-field range.
+        let max_unsigned = if sig.size >= 64 {
+            u64::MAX
+        } else {
+            (1u64 << sig.size) - 1
+        };
+        let raw_u64: u64 = match sig.value_type {
+            ValueType::Signed => {
+                let min_s = -(1i64 << (sig.size - 1).min(63));
+                let max_s = (1i64 << (sig.size - 1).min(63)) - 1;
+                let clamped = (raw_f.round() as i64).clamp(min_s, max_s);
+                // Reinterpret as unsigned twos-complement for packing.
+                clamped as u64 & max_unsigned
+            }
+            ValueType::Unsigned => (raw_f.round() as u64).min(max_unsigned),
+        };
+
+        match sig.byte_order {
+            ByteOrder::LittleEndian => pack_intel(&mut data, sig.start_bit, sig.size, raw_u64),
+            ByteOrder::BigEndian => pack_motorola(&mut data, sig.start_bit, sig.size, raw_u64),
+        }
+
+        Some(data)
+    }
+}
+
+/// Pack `length` bits of `raw` into `data` using Intel (little-endian) byte order.
+///
+/// Mirrors [`extract_intel`]: `start_bit` is the LSBit position.  Bits that
+/// belong to other signals are left unchanged.
+fn pack_intel(data: &mut [u8], start_bit: u64, length: u64, raw: u64) {
+    for i in 0..length {
+        let bit_pos = start_bit + i;
+        let byte_idx = (bit_pos / 8) as usize;
+        let bit_in_byte = (bit_pos % 8) as u8;
+        if byte_idx >= data.len() {
+            break;
+        }
+        let bit_val = ((raw >> i) & 1) as u8;
+        data[byte_idx] &= !(1 << bit_in_byte);
+        data[byte_idx] |= bit_val << bit_in_byte;
+    }
+}
+
+/// Pack `length` bits of `raw` into `data` using Motorola (big-endian) byte order.
+///
+/// Mirrors [`extract_motorola`]: `start_bit` is the MSBit position in DBC
+/// numbering.  Other bits are left unchanged.
+fn pack_motorola(data: &mut [u8], start_bit: u64, length: u64, raw: u64) {
+    if length == 0 {
+        return;
+    }
+    let mut bit_pos = start_bit as usize;
+    for i in 0..length as usize {
+        let byte_idx = bit_pos / 8;
+        let bit_in_byte = bit_pos % 8;
+        if byte_idx >= data.len() {
+            break;
+        }
+        // MSBit first: bit i of the traversal → position (length-1-i) in raw.
+        let bit_val = ((raw >> (length as usize - 1 - i)) & 1) as u8;
+        data[byte_idx] &= !(1 << bit_in_byte);
+        data[byte_idx] |= bit_val << bit_in_byte;
+        // Same traversal order as extract_motorola.
+        if bit_in_byte == 0 {
+            bit_pos = (byte_idx + 1) * 8 + 7;
+        } else {
+            bit_pos -= 1;
+        }
+    }
 }
 
 /// Merge multiple DBC databases into one.
@@ -299,5 +432,70 @@ mod tests {
     #[test]
     fn to_signed_8bit_minus128() {
         assert_eq!(to_signed(0x80, 8), -128);
+    }
+
+    // ─── pack / encode tests ─────────────────────────────────────────────────
+
+    #[test]
+    fn pack_intel_roundtrip_single_byte() {
+        let mut data = [0u8; 1];
+        pack_intel(&mut data, 0, 8, 0xAB);
+        assert_eq!(extract_intel(&data, 0, 8), 0xAB);
+    }
+
+    #[test]
+    fn pack_intel_preserves_other_bits() {
+        // Put 0xFF in byte 0, then overwrite only the lower nibble with 0x5.
+        let mut data = [0xFFu8; 1];
+        pack_intel(&mut data, 0, 4, 0x5);
+        // Upper nibble (bits 4-7) must stay 0xF.
+        assert_eq!(data[0], 0xF5);
+    }
+
+    #[test]
+    fn pack_motorola_roundtrip_single_byte() {
+        let mut data = [0u8; 1];
+        pack_motorola(&mut data, 7, 8, 0xAB);
+        assert_eq!(extract_motorola(&data, 7, 8), 0xAB);
+    }
+
+    #[test]
+    fn encode_signal_intel_le_factor_offset() {
+        use std::path::Path;
+        // Load the integration fixture and round-trip HSP_ABS_POSITION_M.
+        // physical = 34.2, factor = 0.0342, offset = 0  → raw = 1000
+        let db = super::load_dbc(Path::new(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/fixtures/sample_bus.dbc"
+        )))
+        .expect("fixture not found");
+        let current = [0u8; 8];
+        let encoded = db
+            .encode_signal(105, "HSP_ABS_POSITION_M", 34.2, &current)
+            .expect("encode_signal returned None");
+        // raw 1000 = 0x03E8 → bytes [0xE8, 0x03, ...]
+        assert_eq!(encoded[0], 0xE8);
+        assert_eq!(encoded[1], 0x03);
+    }
+
+    #[test]
+    fn encode_signal_preserves_adjacent_bits() {
+        use std::path::Path;
+        // BP_DIRECTION_GET_M: CAN ID 57, start_bit=24, length=8.
+        // Pre-fill byte 3 with something else, encode raw=1 ("True"),
+        // and verify only byte 3 changed.
+        let db = super::load_dbc(Path::new(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/fixtures/sample_bus.dbc"
+        )))
+        .expect("fixture not found");
+        let current = [0xAA, 0xBB, 0xCC, 0x00, 0x11, 0x22, 0x33, 0x44];
+        let encoded = db
+            .encode_signal(57, "BP_DIRECTION_GET_M", 1.0, &current)
+            .expect("encode_signal returned None");
+        assert_eq!(encoded[3], 0x01);
+        // Non-overlapping bytes are unchanged.
+        assert_eq!(encoded[0], 0xAA);
+        assert_eq!(encoded[4], 0x11);
     }
 }

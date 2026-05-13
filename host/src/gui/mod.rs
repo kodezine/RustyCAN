@@ -694,6 +694,9 @@ impl ConnectForm {
             sdo_browser: SdoBrowserPanel::default(),
             plot_state: plot_view::PlotState::default(),
             plot_open: false,
+            dbc_filter: String::new(),
+            dbc_inline_edit: None,
+            dbc_compose: None,
             dfu_path,
             dfu_state: DfuGuiState::Idle,
             dfu_msg_rx: None,
@@ -1626,6 +1629,16 @@ impl Default for SdoBrowserPanel {
     }
 }
 
+/// State for the DBC compose-and-send panel.
+struct DbcComposePanel {
+    can_id: u32,
+    message_name: String,
+    /// signal_name → current draft text (pre-filled with current physical value).
+    drafts: std::collections::HashMap<String, String>,
+    /// Validation / send error to show in the panel.
+    send_error: Option<String>,
+}
+
 struct MonitorView {
     rx: mpsc::Receiver<CanEvent>,
     cmd_tx: mpsc::Sender<CanCommand>,
@@ -1646,6 +1659,12 @@ struct MonitorView {
     plot_state: plot_view::PlotState,
     /// Whether the plot window is currently open.
     plot_open: bool,
+    /// Filter string for the DBC signals table.
+    dbc_filter: String,
+    /// Signal currently being edited inline: (can_id, signal_name, draft_text).
+    dbc_inline_edit: Option<(u32, String, String)>,
+    /// Compose panel for building and transmitting a whole DBC message.
+    dbc_compose: Option<DbcComposePanel>,
     /// Path to signed firmware binary for in-GUI DFU update (from `--dfu-update`).
     dfu_path: Option<PathBuf>,
     /// DFU update UI state machine.
@@ -2246,7 +2265,15 @@ fn render_monitor(
             ui.add_space(4.0);
             pdo_section(ui, &view.state);
             ui.add_space(4.0);
-            dbc_section(ui, &view.state);
+            dbc_section(
+                ui,
+                &view.state,
+                &mut view.dbc_filter,
+                &mut view.dbc_inline_edit,
+                &mut view.dbc_compose,
+                &view.cmd_tx,
+                view.listen_only,
+            );
             ui.add_space(4.0);
             sdo_browser_section(
                 ui,
@@ -2287,6 +2314,7 @@ fn render_monitor(
         let builder = egui::ViewportBuilder::default()
             .with_title("RustyCAN – Plots")
             .with_inner_size(egui::vec2(1020.0, 660.0));
+        let node_labels = view.node_labels.clone();
         let plot_state = &mut view.plot_state;
         let plot_open = &mut view.plot_open;
         let ctx = ui.ctx().clone();
@@ -2294,7 +2322,7 @@ fn render_monitor(
             if ui.ctx().input(|i| i.viewport().close_requested()) {
                 *plot_open = false;
             }
-            plot_view::render(ui, class, plot_state);
+            plot_view::render(ui, class, plot_state, &node_labels);
         });
     }
 
@@ -2654,9 +2682,96 @@ fn pdo_value_ui(ui: &mut egui::Ui, val: &PdoRawValue) {
     }
 }
 
+// ─── DBC signal encoding helper ──────────────────────────────────────────────
+
+/// Pack a physical value into a copy of `base_bytes` for a single DBC signal.
+///
+/// Uses the same bit-layout logic as [`crate::dbc::DbcDatabase::encode_signal`]
+/// but works from the encoding metadata already cached in [`crate::app::DbcSignalEntry`]
+/// so the GUI does not need a reference to the database.
+#[allow(clippy::too_many_arguments)]
+fn encode_dbc_signal_manual(
+    base_bytes: &[u8],
+    start_bit: u64,
+    bit_size: u64,
+    byte_order: can_dbc::ByteOrder,
+    value_type: can_dbc::ValueType,
+    factor: f64,
+    offset: f64,
+    physical: f64,
+) -> Option<Vec<u8>> {
+    if bit_size == 0 {
+        return None;
+    }
+    let mut data = base_bytes.to_vec();
+    let raw_f = if factor == 0.0 {
+        0.0
+    } else {
+        (physical - offset) / factor
+    };
+    let max_unsigned: u64 = if bit_size >= 64 {
+        u64::MAX
+    } else {
+        (1u64 << bit_size) - 1
+    };
+    let raw_u64: u64 = match value_type {
+        can_dbc::ValueType::Signed => {
+            let half = bit_size.min(63);
+            let min_s = -(1i64 << (half - 1));
+            let max_s = (1i64 << (half - 1)) - 1;
+            let clamped = (raw_f.round() as i64).clamp(min_s, max_s);
+            clamped as u64 & max_unsigned
+        }
+        can_dbc::ValueType::Unsigned => (raw_f.round() as u64).min(max_unsigned),
+    };
+    match byte_order {
+        can_dbc::ByteOrder::LittleEndian => {
+            for i in 0..bit_size {
+                let bit_pos = start_bit + i;
+                let byte_idx = (bit_pos / 8) as usize;
+                let bit_in_byte = (bit_pos % 8) as u8;
+                if byte_idx >= data.len() {
+                    break;
+                }
+                let bit_val = ((raw_u64 >> i) & 1) as u8;
+                data[byte_idx] &= !(1 << bit_in_byte);
+                data[byte_idx] |= bit_val << bit_in_byte;
+            }
+        }
+        can_dbc::ByteOrder::BigEndian => {
+            let mut bit_pos = start_bit as usize;
+            for i in 0..bit_size as usize {
+                let byte_idx = bit_pos / 8;
+                let bit_in_byte = bit_pos % 8;
+                if byte_idx >= data.len() {
+                    break;
+                }
+                let bit_val = ((raw_u64 >> (bit_size as usize - 1 - i)) & 1) as u8;
+                data[byte_idx] &= !(1 << bit_in_byte);
+                data[byte_idx] |= bit_val << bit_in_byte;
+                if bit_in_byte == 0 {
+                    bit_pos = (byte_idx + 1) * 8 + 7;
+                } else {
+                    bit_pos -= 1;
+                }
+            }
+        }
+    }
+    Some(data)
+}
+
 // ─── DBC Signals section ─────────────────────────────────────────────────────
 
-fn dbc_section(ui: &mut egui::Ui, state: &AppState) {
+#[allow(clippy::too_many_arguments)]
+fn dbc_section(
+    ui: &mut egui::Ui,
+    state: &AppState,
+    filter: &mut String,
+    inline_edit: &mut Option<(u32, String, String)>,
+    compose: &mut Option<DbcComposePanel>,
+    cmd_tx: &mpsc::Sender<CanCommand>,
+    listen_only: bool,
+) {
     egui::CollapsingHeader::new(
         egui::RichText::new(format!("{} DBC Signals", icons::DBC_HEADER)).strong(),
     )
@@ -2684,7 +2799,21 @@ fn dbc_section(ui: &mut egui::Ui, state: &AppState) {
                     return;
                 }
 
-                // Collect and sort signals by (can_id, signal_name)
+                // Search filter bar.
+                ui.horizontal(|ui| {
+                    ui.label("Filter:");
+                    ui.add(
+                        egui::TextEdit::singleline(filter)
+                            .desired_width(180.0)
+                            .hint_text("message or signal…"),
+                    );
+                    if !filter.is_empty() && ui.small_button("×").clicked() {
+                        filter.clear();
+                    }
+                });
+
+                // Collect and sort signals by (can_id, signal_name).
+                let filter_lower = filter.to_lowercase();
                 let mut entries: Vec<&crate::app::DbcSignalEntry> =
                     state.dbc_signals.values().collect();
                 entries.sort_by(|a, b| {
@@ -2692,58 +2821,339 @@ fn dbc_section(ui: &mut egui::Ui, state: &AppState) {
                         .cmp(&b.can_id)
                         .then_with(|| a.signal_name.cmp(&b.signal_name))
                 });
-
-                egui::Grid::new("dbc_signals_grid")
-                    .striped(true)
-                    .min_col_width(60.0)
-                    .spacing([12.0, 4.0])
-                    .show(ui, |ui| {
-                        ui.strong("Message");
-                        ui.strong("Signal");
-                        ui.strong("Value");
-                        ui.strong("Unit");
-                        ui.strong("Age");
-                        ui.strong("Count");
-                        ui.end_row();
-
-                        for entry in entries {
-                            let age_secs = entry.last_seen.elapsed().as_secs_f64();
-                            let age_str = if age_secs < 60.0 {
-                                format!("{age_secs:.2}s ago")
-                            } else {
-                                format!("{:.0}m ago", age_secs / 60.0)
-                            };
-
-                            let value_str =
-                                if entry.physical.fract() == 0.0 && entry.physical.abs() < 1e12 {
-                                    format!("{}", entry.physical as i64)
-                                } else {
-                                    format!("{:.4}", entry.physical)
-                                };
-
-                            ui.label(format!("0x{:03X} {}", entry.can_id, &entry.message_name))
-                                .on_hover_text(format!("CAN ID 0x{:03X}", entry.can_id));
-                            ui.label(&entry.signal_name);
-                            // If there's a VAL_ description, show it with the raw integer too.
-                            let val_lbl = match &entry.description {
-                                Some(desc) => {
-                                    let lbl = ui
-                                        .label(
-                                            egui::RichText::new(format!("{value_str} ({desc})"))
-                                                .color(Color32::from_rgb(130, 200, 255)),
-                                        )
-                                        .on_hover_text(format!("raw = {}", entry.raw_int));
-                                    lbl
-                                }
-                                None => ui.label(&value_str),
-                            };
-                            drop(val_lbl);
-                            ui.label(&entry.unit);
-                            ui.label(age_str);
-                            ui.label(entry.count.to_string());
-                            ui.end_row();
-                        }
+                if !filter_lower.is_empty() {
+                    entries.retain(|e| {
+                        e.signal_name.to_lowercase().contains(&filter_lower)
+                            || e.message_name.to_lowercase().contains(&filter_lower)
                     });
+                }
+
+                // Track the first entry per can_id so we show the ✏ compose button once per message.
+                let mut last_shown_can_id: Option<u32> = None;
+
+                egui::ScrollArea::vertical()
+                    .max_height(360.0)
+                    .show(ui, |ui| {
+                        egui::Grid::new("dbc_signals_grid")
+                            .striped(true)
+                            .min_col_width(60.0)
+                            .spacing([12.0, 4.0])
+                            .show(ui, |ui| {
+                                ui.strong("Message");
+                                ui.strong("Signal");
+                                ui.strong("Value");
+                                ui.strong("Unit");
+                                ui.strong("Age");
+                                ui.strong("Count");
+                                if !listen_only {
+                                    ui.strong("");
+                                }
+                                ui.end_row();
+
+                                for entry in &entries {
+                                    let age_secs = entry.last_seen.elapsed().as_secs_f64();
+                                    let age_str = if age_secs < 60.0 {
+                                        format!("{age_secs:.2}s ago")
+                                    } else {
+                                        format!("{:.0}m ago", age_secs / 60.0)
+                                    };
+
+                                    let value_str = if entry.physical.fract() == 0.0
+                                        && entry.physical.abs() < 1e12
+                                    {
+                                        format!("{}", entry.physical as i64)
+                                    } else {
+                                        format!("{:.4}", entry.physical)
+                                    };
+
+                                    let is_first_for_id = last_shown_can_id != Some(entry.can_id);
+                                    ui.label(format!(
+                                        "0x{:03X} {}",
+                                        entry.can_id, &entry.message_name
+                                    ))
+                                    .on_hover_text(format!("CAN ID 0x{:03X}", entry.can_id));
+                                    last_shown_can_id = Some(entry.can_id);
+
+                                    ui.label(&entry.signal_name);
+
+                                    // Value cell: clickable for inline edit when not listen-only.
+                                    let is_editing = inline_edit
+                                        .as_ref()
+                                        .map(|(id, name, _)| {
+                                            *id == entry.can_id && name == &entry.signal_name
+                                        })
+                                        .unwrap_or(false);
+
+                                    if !listen_only && is_editing {
+                                        let draft = &mut inline_edit.as_mut().unwrap().2;
+                                        let resp = ui.add(
+                                            egui::TextEdit::singleline(draft)
+                                                .desired_width(80.0)
+                                                .font(egui::TextStyle::Monospace),
+                                        );
+                                        let committed = resp.lost_focus()
+                                            || ui.input(|i| i.key_pressed(egui::Key::Enter));
+                                        let cancelled =
+                                            ui.input(|i| i.key_pressed(egui::Key::Escape));
+                                        if committed || cancelled {
+                                            if committed && !cancelled {
+                                                if let Some((cid, sname, dtext)) =
+                                                    inline_edit.take()
+                                                {
+                                                    if let Ok(phys) = dtext.parse::<f64>() {
+                                                        let base = state
+                                                            .last_raw_bytes
+                                                            .get(&cid)
+                                                            .cloned()
+                                                            .unwrap_or_else(|| {
+                                                                vec![0u8; entry.dlc as usize]
+                                                            });
+                                                        // Look up encoding params for this signal.
+                                                        let sig_key = (cid, sname.clone());
+                                                        if let Some(e) =
+                                                            state.dbc_signals.get(&sig_key)
+                                                        {
+                                                            use crate::dbc::types::{
+                                                                DbcByteOrder, DbcValueType,
+                                                            };
+                                                            let bo = match e.byte_order {
+                                                                DbcByteOrder::LittleEndian => {
+                                                                    can_dbc::ByteOrder::LittleEndian
+                                                                }
+                                                                DbcByteOrder::BigEndian => {
+                                                                    can_dbc::ByteOrder::BigEndian
+                                                                }
+                                                            };
+                                                            let vt = match e.value_type {
+                                                                DbcValueType::Unsigned => {
+                                                                    can_dbc::ValueType::Unsigned
+                                                                }
+                                                                DbcValueType::Signed => {
+                                                                    can_dbc::ValueType::Signed
+                                                                }
+                                                            };
+                                                            if let Some(encoded) =
+                                                                encode_dbc_signal_manual(
+                                                                    &base,
+                                                                    e.start_bit,
+                                                                    e.bit_size,
+                                                                    bo,
+                                                                    vt,
+                                                                    e.factor,
+                                                                    e.offset,
+                                                                    phys,
+                                                                )
+                                                            {
+                                                                let _ = cmd_tx.send(
+                                                                    CanCommand::SendRaw {
+                                                                        can_id: cid,
+                                                                        data: encoded,
+                                                                    },
+                                                                );
+                                                            }
+                                                        }
+                                                    }
+                                                }
+                                            } else {
+                                                *inline_edit = None;
+                                            }
+                                        }
+                                    } else {
+                                        // Clickable label — click starts inline edit.
+                                        let val_resp = match &entry.description {
+                                            Some(desc) => ui
+                                                .label(
+                                                    egui::RichText::new(format!(
+                                                        "{value_str} ({desc})"
+                                                    ))
+                                                    .color(Color32::from_rgb(130, 200, 255)),
+                                                )
+                                                .on_hover_text(format!("raw = {}", entry.raw_int)),
+                                            None => ui.label(&value_str),
+                                        };
+                                        if !listen_only
+                                            && val_resp.interact(egui::Sense::click()).clicked()
+                                        {
+                                            *inline_edit = Some((
+                                                entry.can_id,
+                                                entry.signal_name.clone(),
+                                                value_str.clone(),
+                                            ));
+                                        }
+                                    }
+
+                                    ui.label(&entry.unit);
+                                    ui.label(age_str);
+                                    ui.label(entry.count.to_string());
+
+                                    // Compose button: one per unique message (first row for that can_id).
+                                    if !listen_only {
+                                        if is_first_for_id {
+                                            let open_for_this = compose
+                                                .as_ref()
+                                                .map(|p| p.can_id == entry.can_id)
+                                                .unwrap_or(false);
+                                            if ui
+                                                .small_button(if open_for_this {
+                                                    "✖"
+                                                } else {
+                                                    "✏"
+                                                })
+                                                .on_hover_text("Compose full message")
+                                                .clicked()
+                                            {
+                                                if open_for_this {
+                                                    *compose = None;
+                                                } else {
+                                                    let drafts = state
+                                                        .dbc_signals
+                                                        .values()
+                                                        .filter(|e| e.can_id == entry.can_id)
+                                                        .map(|e| {
+                                                            let vs = if e.physical.fract() == 0.0
+                                                                && e.physical.abs() < 1e12
+                                                            {
+                                                                format!("{}", e.physical as i64)
+                                                            } else {
+                                                                format!("{:.4}", e.physical)
+                                                            };
+                                                            (e.signal_name.clone(), vs)
+                                                        })
+                                                        .collect();
+                                                    *compose = Some(DbcComposePanel {
+                                                        can_id: entry.can_id,
+                                                        message_name: entry.message_name.clone(),
+                                                        drafts,
+                                                        send_error: None,
+                                                    });
+                                                }
+                                            }
+                                        } else {
+                                            ui.label(""); // spacer
+                                        }
+                                    }
+
+                                    ui.end_row();
+                                }
+                            });
+                    });
+
+                // Compose window (floats above the panel).
+                if let Some(panel) = compose {
+                    let can_id = panel.can_id;
+                    let title = format!("Compose 0x{:03X} {}", can_id, &panel.message_name);
+                    let mut keep_open = true;
+                    egui::Window::new(&title)
+                        .id(egui::Id::new("dbc_compose_window"))
+                        .collapsible(false)
+                        .resizable(false)
+                        .default_width(320.0)
+                        .open(&mut keep_open)
+                        .show(ui.ctx(), |ui| {
+                            let mut sig_names: Vec<String> = panel.drafts.keys().cloned().collect();
+                            sig_names.sort();
+
+                            egui::Grid::new("dbc_compose_grid")
+                                .num_columns(2)
+                                .spacing([8.0, 4.0])
+                                .show(ui, |ui| {
+                                    for name in &sig_names {
+                                        ui.label(name.as_str());
+                                        let draft = panel.drafts.entry(name.clone()).or_default();
+                                        ui.add(
+                                            egui::TextEdit::singleline(draft)
+                                                .desired_width(120.0)
+                                                .font(egui::TextStyle::Monospace),
+                                        );
+                                        ui.end_row();
+                                    }
+                                });
+
+                            if let Some(err) = &panel.send_error {
+                                ui.colored_label(Color32::from_rgb(230, 80, 80), err);
+                            }
+
+                            ui.add_space(4.0);
+                            if ui
+                                .add_sized(
+                                    vec2(f32::INFINITY, 28.0),
+                                    Button::new(
+                                        egui::RichText::new("Send All").color(Color32::WHITE),
+                                    )
+                                    .fill(Color32::from_rgb(34, 120, 200)),
+                                )
+                                .clicked()
+                            {
+                                let mut base =
+                                    state.last_raw_bytes.get(&can_id).cloned().unwrap_or_else(
+                                        || {
+                                            let dlc = state
+                                                .dbc_signals
+                                                .values()
+                                                .find(|e| e.can_id == can_id)
+                                                .map(|e| e.dlc as usize)
+                                                .unwrap_or(8);
+                                            vec![0u8; dlc]
+                                        },
+                                    );
+                                let mut error: Option<String> = None;
+                                for name in &sig_names {
+                                    let draft_text =
+                                        panel.drafts.get(name).map(|s| s.as_str()).unwrap_or("");
+                                    match draft_text.parse::<f64>() {
+                                        Ok(phys) => {
+                                            if let Some(e) =
+                                                state.dbc_signals.get(&(can_id, name.clone()))
+                                            {
+                                                use crate::dbc::types::{
+                                                    DbcByteOrder, DbcValueType,
+                                                };
+                                                let bo = match e.byte_order {
+                                                    DbcByteOrder::LittleEndian => {
+                                                        can_dbc::ByteOrder::LittleEndian
+                                                    }
+                                                    DbcByteOrder::BigEndian => {
+                                                        can_dbc::ByteOrder::BigEndian
+                                                    }
+                                                };
+                                                let vt = match e.value_type {
+                                                    DbcValueType::Unsigned => {
+                                                        can_dbc::ValueType::Unsigned
+                                                    }
+                                                    DbcValueType::Signed => {
+                                                        can_dbc::ValueType::Signed
+                                                    }
+                                                };
+                                                if let Some(updated) = encode_dbc_signal_manual(
+                                                    &base,
+                                                    e.start_bit,
+                                                    e.bit_size,
+                                                    bo,
+                                                    vt,
+                                                    e.factor,
+                                                    e.offset,
+                                                    phys,
+                                                ) {
+                                                    base = updated;
+                                                }
+                                            }
+                                        }
+                                        Err(_) => {
+                                            error = Some(format!("Invalid value for '{name}'"));
+                                            break;
+                                        }
+                                    }
+                                }
+                                if error.is_none() {
+                                    let _ = cmd_tx.send(CanCommand::SendRaw { can_id, data: base });
+                                }
+                                panel.send_error = error;
+                            }
+                        });
+                    if !keep_open {
+                        *compose = None;
+                    }
+                }
             }
         }
     });
