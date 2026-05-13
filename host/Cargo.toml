@@ -30,8 +30,7 @@ dirs = "6"
 nusb = "0.2"
 rusb = "0.9"
 ed25519-dalek = { version = "2", features = ["rand_core"] }
-sha2 = "0.10"
-atty = "0.2"
+sha2 = "0.11"
 kcan-protocol = { path = "../kcan-protocol", features = ["std"] }
 futures-lite = "2.6.1"
 # Lightweight blocking HTTP client — used for background GitHub release check

@@ -167,9 +167,9 @@ fn run_dfu_update(signed_path: &std::path::Path, serial: Option<&str>) {
                         "[DFU] Device is already at v{b_maj}.{b_min}.{b_pat} — firmware is up to date"
                     );
                     // Prompt only when stdin is an interactive terminal.
-                    if atty::is(atty::Stream::Stdin) {
+                    use std::io::{IsTerminal, Write};
+                    if std::io::stdin().is_terminal() {
                         print!("[DFU] Update anyway? [y/N] ");
-                        use std::io::Write;
                         let _ = std::io::stdout().flush();
                         let mut line = String::new();
                         let _ = std::io::stdin().read_line(&mut line);
