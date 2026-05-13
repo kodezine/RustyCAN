@@ -114,6 +114,26 @@ fn main() {
         }
     } else if args.tui {
         let path = args.config.as_deref().unwrap();
+        // ── Pre-TUI app update check (SOUP025) ───────────────────────────
+        // Run a background check with a 5-second timeout before starting the
+        // CAN session, so the user can update before monitoring begins.
+        {
+            let (tx, rx) = std::sync::mpsc::channel();
+            std::thread::spawn(move || {
+                let _ = tx.send(rustycan::updater::check_for_app_update());
+            });
+            // Wait up to 5 seconds for the check to complete.
+            let update_result = rx
+                .recv_timeout(std::time::Duration::from_secs(5))
+                .unwrap_or(None);
+            if let Some(release) = update_result {
+                match rustycan::tui::show_app_update_prompt(&release) {
+                    Ok(_) => {} // UpdateNow exits the process; Defer falls through.
+                    Err(e) => eprintln!("warning: update prompt error: {e}"),
+                }
+            }
+        }
+
         let dfu_path = args.dfu_update.as_deref();
         match rustycan::tui::run_from_config(path, effective_port, dfu_path) {
             Ok(rustycan::tui::TuiExitReason::DfuUpdate) => {

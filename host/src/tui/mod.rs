@@ -165,7 +165,217 @@ pub enum TuiExitReason {
     DfuUpdate,
 }
 
+/// Action chosen by the user on the app-update startup prompt.
+#[derive(Debug, Clone, PartialEq)]
+pub enum AppUpdateAction {
+    /// User chose to update now (macOS: in-place; Windows/Linux: browser opened).
+    UpdateNow,
+    /// User deferred — proceed with the current session.
+    Defer,
+}
+
 // ─── Entry points ─────────────────────────────────────────────────────────────
+
+/// Show a full-screen TUI prompt for an available RustyCAN app update (SOUP025).
+///
+/// Called from `main` **before** the CAN session starts.  On macOS Apple
+/// Silicon the user can trigger an in-place download + restart; on all other
+/// platforms the release page is opened in the system browser and this function
+/// returns [`AppUpdateAction::Defer`] so the session can continue normally.
+///
+/// Key bindings:
+/// - macOS: `U` / `u` → download, apply, relaunch (process exits on success)
+/// - macOS: `D` / `d` / any other key → Defer
+/// - Windows / Linux: `O` / `o` → open browser; `D` / any other key → Defer
+pub fn show_app_update_prompt(
+    release: &crate::updater::AppUpdateRelease,
+) -> io::Result<AppUpdateAction> {
+    use ratatui::{
+        layout::Alignment,
+        style::{Color, Style},
+        text::{Line, Span},
+        widgets::{Block, Borders, Clear, Paragraph},
+    };
+
+    enable_raw_mode()?;
+    let mut stdout = io::stdout();
+    execute!(stdout, EnterAlternateScreen)?;
+    let backend = CrosstermBackend::new(stdout);
+    let mut terminal = Terminal::new(backend)?;
+
+    let ver = release.version_string();
+    let can_download = release.can_download();
+
+    // Build the prompt lines once.
+    let title = format!(" RustyCAN {} available ", ver);
+    let (action_line, key_update) = if can_download {
+        ("[U] Update now  [D] Defer", 'u')
+    } else {
+        ("[O] Open release page  [D] Defer", 'o')
+    };
+
+    // Download progress state (macOS only).
+    let mut download_progress: Option<f32> = None;
+    let mut download_msg: Option<String> = None;
+    let mut progress_rx: Option<std::sync::mpsc::Receiver<crate::updater::DownloadMsg>> = None;
+
+    let action = loop {
+        terminal.draw(|f| {
+            let area = f.area();
+            // Centre a 60×10 box.
+            let box_w = 60u16.min(area.width.saturating_sub(4));
+            let box_h = 10u16;
+            let x = area.width.saturating_sub(box_w) / 2;
+            let y = area.height.saturating_sub(box_h) / 2;
+            let popup = ratatui::layout::Rect::new(x, y, box_w, box_h);
+
+            f.render_widget(Clear, popup);
+
+            let mut lines = vec![
+                Line::from(""),
+                Line::from(Span::styled(
+                    format!("  A new version of RustyCAN is available: {ver}"),
+                    Style::default().fg(Color::Cyan),
+                )),
+                Line::from(""),
+            ];
+
+            if let Some(ref msg) = download_msg {
+                lines.push(Line::from(Span::styled(
+                    format!("  {msg}"),
+                    Style::default().fg(Color::Green),
+                )));
+            } else if let Some(p) = download_progress {
+                let filled = ((p * 30.0) as usize).min(30);
+                let bar = format!(
+                    "  [{}>{}] {:.0}%",
+                    "=".repeat(filled),
+                    " ".repeat(30 - filled),
+                    p * 100.0
+                );
+                lines.push(Line::from(Span::styled(
+                    bar,
+                    Style::default().fg(Color::Yellow),
+                )));
+            } else {
+                lines.push(Line::from(Span::styled(
+                    format!("  {action_line}"),
+                    Style::default().fg(Color::White),
+                )));
+            }
+
+            let block = Block::default()
+                .title(title.as_str())
+                .title_alignment(Alignment::Center)
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(Color::Blue));
+
+            let para = Paragraph::new(lines).block(block);
+            f.render_widget(para, popup);
+        })?;
+
+        // Drain download progress if active.
+        let mut clear_rx = false;
+        if let Some(ref rx) = progress_rx {
+            while let Ok(msg) = rx.try_recv() {
+                match msg {
+                    crate::updater::DownloadMsg::Progress(p) => {
+                        download_progress = Some(p);
+                    }
+                    crate::updater::DownloadMsg::Done(path) => {
+                        download_msg = Some("Applying update, restarting\u{2026}".to_string());
+                        terminal.draw(|f| {
+                            // Trigger one last render to show "Applying…" before apply blocks.
+                            let _ = f.area();
+                        })?;
+                        #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+                        {
+                            if let Err(e) = crate::updater::apply_and_restart(&path) {
+                                download_msg =
+                                    Some(format!("Update failed: {e}. Press any key to continue."));
+                                clear_rx = true;
+                            }
+                        }
+                        #[cfg(not(all(target_os = "macos", target_arch = "aarch64")))]
+                        let _ = path;
+                    }
+                    crate::updater::DownloadMsg::Err(e) => {
+                        download_msg =
+                            Some(format!("Download failed: {e}. Press any key to continue."));
+                        clear_rx = true;
+                    }
+                }
+            }
+        }
+        if clear_rx {
+            progress_rx = None;
+        }
+
+        if event::poll(std::time::Duration::from_millis(100))? {
+            if let Event::Key(key) = event::read()? {
+                // If we're mid-download, only Escape / Ctrl-C aborts (Defer).
+                if progress_rx.is_some() || download_msg.is_some() {
+                    // After a failure message, any key returns Defer.
+                    if download_msg.is_some() {
+                        break AppUpdateAction::Defer;
+                    }
+                    // During download, ignore keys.
+                    continue;
+                }
+
+                match key.code {
+                    KeyCode::Char(c) if c == key_update || c == key_update.to_ascii_uppercase() => {
+                        #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+                        {
+                            // macOS: start background download.
+                            let (tx, rx) =
+                                std::sync::mpsc::channel::<crate::updater::DownloadMsg>();
+                            let rel = release.clone();
+                            std::thread::spawn(move || {
+                                let tx_p = tx.clone();
+                                match crate::updater::download_update(&rel, move |p| {
+                                    let _ =
+                                        tx_p.send(crate::updater::DownloadMsg::Progress(p as f32));
+                                }) {
+                                    Ok(path) => {
+                                        let _ = tx.send(crate::updater::DownloadMsg::Done(path));
+                                    }
+                                    Err(e) => {
+                                        let _ = tx.send(crate::updater::DownloadMsg::Err(e));
+                                    }
+                                }
+                            });
+                            progress_rx = Some(rx);
+                        }
+                        // Windows / Linux: open browser and defer.
+                        #[cfg(not(all(target_os = "macos", target_arch = "aarch64")))]
+                        {
+                            let _ = can_download; // always false on non-macOS
+                            crate::updater::open_release_page(release);
+                            break AppUpdateAction::Defer;
+                        }
+                    }
+                    KeyCode::Char('d') | KeyCode::Char('D') | KeyCode::Esc => {
+                        break AppUpdateAction::Defer;
+                    }
+                    KeyCode::Char('c')
+                        if key
+                            .modifiers
+                            .contains(crossterm::event::KeyModifiers::CONTROL) =>
+                    {
+                        break AppUpdateAction::Defer;
+                    }
+                    _ => {}
+                }
+            }
+        }
+    };
+
+    disable_raw_mode()?;
+    execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
+    terminal.show_cursor()?;
+    Ok(action)
+}
 
 /// Load a config file and run the full-screen TUI.
 ///
