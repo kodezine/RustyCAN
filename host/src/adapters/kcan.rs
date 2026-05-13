@@ -106,9 +106,8 @@ impl KCanAdapter {
                 info.protocol_version
             )));
         }
-        let (fw_maj, fw_min, fw_pat, uid) =
-            (info.fw_major, info.fw_minor, info.fw_patch, info.uid_lo);
-        let name = format!("KCAN Dongle v{fw_maj}.{fw_min}.{fw_pat} (uid={uid:08X})");
+        let (fw_maj, fw_min, fw_pat) = (info.fw_major, info.fw_minor, info.fw_patch);
+        let name = format!("KCAN Dongle v{fw_maj}.{fw_min}.{fw_pat}");
 
         // GET_BT_CONST.
         let bt_data = iface
