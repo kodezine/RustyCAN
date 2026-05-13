@@ -71,6 +71,11 @@ pub enum CanCommand {
         /// Transfer mode: Auto (try block, fallback to segmented), ForcedSegmented, or ForcedBlock.
         mode: SdoTransferMode,
     },
+    /// Transmit a raw CAN frame with an arbitrary payload.
+    ///
+    /// Used by the DBC write UI to set signal values.  Standard IDs (≤ 0x7FF)
+    /// and extended IDs (≤ 0x1FFF_FFFF) are both supported.
+    SendRaw { can_id: u32, data: Vec<u8> },
 }
 
 // ─── Public API ───────────────────────────────────────────────────────────────
@@ -797,6 +802,24 @@ fn recv_loop(
                                         }
                                     }
                                 }
+                            }
+                        }
+                    }
+
+                    CanCommand::SendRaw { can_id, data } => {
+                        let dlc = data.len().min(8);
+                        let payload = &data[..dlc];
+                        let frame_opt = if can_id <= 0x7FF {
+                            host_can::id::new_standard(can_id as u16)
+                                .and_then(|id| CanFrame::new(id, payload))
+                        } else {
+                            embedded_can::ExtendedId::new(can_id)
+                                .map(embedded_can::Id::Extended)
+                                .and_then(|id| CanFrame::new(id, payload))
+                        };
+                        if let Some(frame) = frame_opt {
+                            if let Err(e) = adapter.send(&frame) {
+                                eprintln!("SendRaw error (CAN ID 0x{can_id:X}): {e:?}");
                             }
                         }
                     }

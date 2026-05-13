@@ -1,15 +1,265 @@
-VERSION ""
+VERSION "0.2.11"
 
-NS_ :
+
+NS_ : 
+	NS_DESC_
+	CM_
+	BA_DEF_
+	BA_
+	VAL_
+	CAT_DEF_
+	CAT_
+	FILTER
+	BA_DEF_DEF_
+	EV_DATA_
+	ENVVAR_DATA_
+	SGTYPE_
+	SGTYPE_VAL_
+	BA_DEF_SGTYPE_
+	BA_SGTYPE_
+	SIG_TYPE_REF_
+	VAL_TABLE_
+	SIG_GROUP_
+	SIG_VALTYPE_
+	SIGTYPE_VALTYPE_
+	BO_TX_BU_
+	BA_DEF_REL_
+	BA_REL_
+	BA_DEF_DEF_REL_
+	BU_SG_REL_
+	BU_EV_REL_
+	BU_BO_REL_
+	SG_MUL_VAL_
 
 BS_:
 
-BU_: Vector__XXX ECU1
+BU_: MCPU FPB1 HSP ATB1 SPB BRB HMI HMIU
 
-BO_ 770 EngineData: 8 Vector__XXX
- SG_ EngineSpeed : 0|16@1+ (0.125,0) [0|8031.875] "rpm" Vector__XXX
- SG_ CoolantTemp : 16|8@1+ (1,-40) [-40|215] "degC" Vector__XXX
- SG_ ThrottlePos : 24|8@0+ (0.392157,0) [0|100] "%" Vector__XXX
+BO_ 0 HPA_1: 8 MCPU
+ SG_ HP_ALARM_32_63 : 32|32@1+ (1,0) [0|4294967295] "" HMI
+ SG_ HP_ALARM_0_31 : 0|32@1+ (1,0) [0|4294967295] "" HMI
 
-VAL_ 770 CoolantTemp 0 "Sensor_Error" ;
+BO_ 1 HPA_2: 8 MCPU
+ SG_ HP_ALARM_96_127 : 32|32@1+ (1,0) [0|4294967295] "" HMI
+ SG_ HP_ALARM_64_95 : 0|32@1+ (1,0) [0|4294967295] "" HMI
+
+BO_ 48 FPB_1_I0: 7 MCPU
+ SG_ BP_MAX_CURRENT_SET : 48|8@1+ (1,0) [0|0] ""  FPB1
+ SG_ BP_DIRECTION_SET_M : 40|8@1+ (1,0) [0|0] ""  FPB1
+ SG_ BP_POSITION_SET_M : 32|8@1+ (1,0) [0|0] ""  FPB1
+ SG_ BP_RPH_SET_M : 16|16@1+ (1,0) [0|0] ""  FPB1
+ SG_ BP_HALT_MOTOR_M : 8|8@1+ (1,0) [0|0] ""  FPB1
+ SG_ BP_RELEASE_MOTOR_M : 0|8@1+ (1,0) [0|0] ""  FPB1
+
+BO_ 50 FPB_1_I2: 3 MCPU
+ SG_ P2_ENC_TYPE m6 : 16|8@1+ (1,0) [0|0] ""  FPB1
+ SG_ P1_ENC_TYPE m6 : 8|8@1+ (1,0) [0|0] ""  FPB1
+ SG_ BPFP_CMD_M M : 0|8@1+ (1,0) [0|0] ""  FPB1
+
+BO_ 56 FPB_1_Q0: 4 FPB1
+ SG_ BPFP_ERROR_CODE_M : 24|8@1+ (1,0) [0|0] ""  MCPU
+ SG_ BPFP_DOOR_ACT_GET_M : 16|8@1+ (1,0) [0|0] ""  MCPU
+ SG_ BPFP_STATUS_M : 8|8@1+ (1,0) [0|0] ""  MCPU
+ SG_ BPFP_ADDRESS_M : 0|8@1+ (1,0) [0|0] ""  MCPU
+
+BO_ 57 FPB_1_Q1: 6 FPB1
+ SG_ BP_ENC_POS_M : 32|16@1- (1,0) [-32768|32767] ""  MCPU
+ SG_ BP_DIRECTION_GET_M : 24|8@1+ (1,0) [0|0] ""  MCPU
+ SG_ BP_POSITION_ACT_GET_M : 16|8@1+ (1,0) [0|0] ""  MCPU
+ SG_ BP_RPH_ACT_GET_M : 0|16@1+ (1,0) [0|0] ""  MCPU
+
+BO_ 59 FPB_1_Q3: 8 FPB1
+ SG_ BP_INVALID_RPH_DIR_M : 56|8@1+ (1,0) [0|0] ""  MCPU
+ SG_ BP_MAX_CURRENT_SET : 48|8@1+ (1,0) [0|0] ""  MCPU
+ SG_ BP_DIRECTION_SET_M : 40|8@1+ (1,0) [0|0] ""  MCPU
+ SG_ BP_POSITION_SET_M : 32|8@1+ (1,0) [0|0] ""  MCPU
+ SG_ BP_RPH_SET_M : 16|16@1+ (1,0) [0|0] ""  MCPU
+ SG_ BP_HALT_MOTOR_M : 8|8@1+ (1,0) [0|0] ""  MCPU
+ SG_ BP_RELEASE_MOTOR_M : 0|8@1+ (1,0) [0|0] ""  MCPU
+
+BO_ 96 HSP_I0: 7 MCPU
+ SG_ HSP_MAX_CURRENT_SET_M : 48|8@1+ (1,0) [0|0] ""  HSP
+ SG_ HSP_DIRECTION_SET_M : 40|8@1+ (1,0) [0|0] ""  HSP
+ SG_ HSP_RPH_SET_M : 24|16@1+ (1,0) [0|0] ""  HSP
+ SG_ HSP_HALT_MOTOR_M : 16|8@1+ (1,0) [0|0] ""  HSP
+ SG_ HSP_MODE_SET_M : 8|8@1+ (1,0) [0|0] ""  HSP
+ SG_ HSP_RELEASE_MOTOR_M : 0|8@1+ (1,0) [0|0] ""  HSP
+
+BO_ 104 HSP_Q0: 2 HSP
+ SG_ HSP_ERROR_CODE_M : 8|8@1+ (1,0) [0|0] ""  MCPU
+ SG_ HSP_STATUS_M : 0|8@1+ (1,0) [0|0] ""  MCPU
+
+BO_ 105 HSP_Q1: 8 HSP
+ SG_ HSP_CALC_RPH_GET_M : 48|16@1+ (1,0) [0|0] ""  MCPU
+ SG_ HSP_PLUNGER_SW_GET_M : 40|8@1+ (1,0) [0|0] ""  MCPU
+ SG_ HSP_FLANGE_SW_GET_M : 32|8@1+ (1,0) [0|0] ""  MCPU
+ SG_ HSP_STALL_GET_M : 24|8@1+ (1,0) [0|0] ""  MCPU
+ SG_ HSP_ROTATION_DIR_GET_M : 16|8@1+ (1,0) [0|0] ""  MCPU
+ SG_ HSP_ABS_POSITION_M : 0|16@1+ (0.0342,0) [0|0] ""  MCPU
+
+BO_ 112 ATB_1_I0: 7 MCPU
+ SG_ ADU_LATCH_PWM_SET : 48|8@1+ (1,0) [0|0] ""  ATB1
+ SG_ ADU_IR_LED_PWM_SET_M : 40|8@1+ (1,0) [0|0] ""  ATB1
+ SG_ ADU_PUMP_DIR_SET_M : 32|8@1+ (1,0) [0|0] ""  ATB1
+ SG_ ADU_PUMP_PWM_SET_M : 16|16@1+ (1,0) [0|0] ""  ATB1
+ SG_ ADU_HALT_MOTOR_M : 8|8@1+ (1,0) [0|0] ""  ATB1
+ SG_ ADU_RELEASE_MOTOR_M : 0|8@1+ (1,0) [0|0] ""  ATB1
+
+BO_ 120 ATB_1_Q0: 3 ATB1
+ SG_ ATB_ERROR_CODE_M : 16|8@1+ (1,0) [0|0] ""  MCPU
+ SG_ ATB_STATUS_M : 8|8@1+ (1,0) [0|0] ""  MCPU
+ SG_ ATB_ADDRESS_M : 0|8@1+ (1,0) [0|0] ""  MCPU
+
+BO_ 121 ATB_1_Q1: 4 ATB1
+ SG_ ADU_IR_TEMP_1_M : 0|32@1- (0.1,0) [-2147483648|2147483647] "degC"  MCPU
+
+BO_ 122 ATB_1_Q2: 6 ATB1
+ SG_ ADU_LEVEL_ADC_M : 32|16@1+ (1,0) [0|0] ""  MCPU
+ SG_ ADU_PRESSURE_M : 16|16@1+ (1,0) [0|0] ""  MCPU
+ SG_ ADU_CHAMBER_POS_M : 0|16@1+ (1,0) [0|0] ""  MCPU
+
+BO_ 144 SPB_I0: 2 MCPU
+ SG_ SPB_DATA_MODE_SET_M : 8|8@1+ (1,0) [0|0] ""  SPB
+ SG_ SPB_CMD_M : 0|8@1+ (1,0) [0|0] ""  SPB
+
+BO_ 152 SPB_Q0: 4 SPB
+ SG_ SPB_KEEP_ALIVE_RETURN_M : 24|8@1+ (1,0) [0|0] ""  MCPU
+ SG_ SPB_DATA_MODE_GET_M : 16|8@1+ (1,0) [0|0] ""  MCPU
+ SG_ SPB_ERROR_CODE_M : 8|8@1+ (1,0) [0|0] ""  MCPU
+ SG_ SPB_STATUS_M : 0|8@1+ (1,0) [0|0] ""  MCPU
+
+BO_ 154 SPB_Q2: 8 SPB
+ SG_ FIL_ADC_VAL_M : 40|24@1+ (161,0) [0|0] ""  MCPU
+ SG_ SUB_ADC_VAL_M : 16|24@1+ (161,0) [0|0] ""  MCPU
+ SG_ PD_RET_P_ADC_VAL_M : 0|16@1+ (0.5804,-631.8549) [0|0] ""  MCPU
+
+BO_ 160 BRB_I0: 1 MCPU
+ SG_ VC_CLOSE_CLAMP_M : 0|8@1+ (1,0) [0|0] ""  BRB
+
+BO_ 168 BRB_Q0: 2 BRB
+ SG_ BRB_ERROR_CODE_M : 8|8@1+ (1,0) [0|0] ""  MCPU
+ SG_ BRB_STATUS_M : 0|8@1+ (1,0) [0|0] ""  MCPU
+
+BO_ 170 BRB_Q2: 6 BRB
+ SG_ BLD_CHAMBER_SW_M : 40|8@1+ (1,0) [0|0] ""  MCPU
+ SG_ BLD_BLOOD_LEAK_ADC_M : 24|16@1+ (1,0) [0|0] ""  MCPU
+ SG_ VC_HSS_DIAGNOSTIC_M : 16|8@1+ (1,0) [0|0] ""  MCPU
+ SG_ VC_TUBE_SW_M : 8|8@1+ (1,0) [0|0] ""  MCPU
+ SG_ VC_CLAMP_POSITION_M : 0|8@1+ (1,0) [0|0] ""  MCPU
+
+BO_ 180 HMI_I4: 6 MCPU
+ SG_ THERAPY_M : 0|8@1+ (1,0) [0|255] ""  HMI
+ SG_ ANTICOAGULATION_M : 8|8@1+ (1,0) [0|255] ""  HMI
+ SG_ LINE_SET_M : 16|8@1+ (1,0) [0|255] ""  HMI
+ SG_ FILTER_M : 24|8@1+ (1,0) [0|255] ""  HMI
+ SG_ ADSORBER_M : 32|8@1+ (1,0) [0|255] ""  HMI
+ SG_ CONNECTION_TYPE_M : 40|8@1+ (1,0) [0|255] ""  HMI
+
+BO_ 188 HMI_Q4: 8 HMI
+ SG_ PATIENT_WEIGHT_PROGRAMMED_M : 0|16@1+ (1,0) [0|65535] ""  MCPU
+ SG_ FLUID_LOSS_PLASMA_RATE_PROGMD_M : 16|16@1+ (1,0) [0|65535] ""  MCPU
+ SG_ TOTAL_PLASMA_PROGRAMMED_M : 32|32@1+ (1,0) [0|4294967295] ""  MCPU
+
+BO_ 240 BLUPD_CMD: 8 HMIU
+ SG_ BLUPD_ENCRYPTED_BIN_SIZE : 32|32@1+ (1,0) [0|0] ""  HMIU
+ SG_ BLUPD_INBOUND_DATA_CHUNKS : 16|16@1+ (1,0) [0|0] ""  HMIU
+ SG_ BLUPD_CMD_ID : 8|8@1+ (1,0) [0|0] ""  HMIU
+ SG_ BLUPD_TARGET_ID : 0|8@1+ (1,0) [0|0] ""  HMIU
+
+BO_ 250 BLUPD_STATUS: 7 HMIU
+ SG_ BLUPD_MINOR_VERSION : 48|8@1+ (1,0) [0|0] ""  HMIU
+ SG_ BLUPD_MAJOR_VERSION : 40|8@1+ (1,0) [0|0] ""  HMIU
+ SG_ BLUPD_SIGN_STATUS : 32|8@1+ (1,0) [0|0] ""  HMIU
+ SG_ BLUPD_CRC_STATUS : 24|8@1+ (1,0) [0|0] ""  HMIU
+ SG_ BLUPD_LAST_DATA_INDEX : 16|8@1+ (1,0) [0|0] ""  HMIU
+ SG_ BLUPD_STATUS_CODE : 8|8@1+ (1,0) [0|0] ""  HMIU
+ SG_ BLUPD_TARGET_ID : 0|8@1+ (1,0) [0|0] ""  HMIU
+
+
+
+CM_ BO_ 48 "keep alive";
+CM_ BO_ 50 "@CMD";
+CM_ SG_ 50 BPFP_CMD_M "
+ 1-FPB_1_SELF_TEST_RES: Return the result of the self-test
+ 2-FPB_1_SOFTWARE_VERSION: Return the current installed software version, build nr and CRC sum
+ 3-FPB_1_UPDATE: Go into update mode
+ 5-FPB_1_NORMAL: 
+ 6-FPB_1_SET_ENC_TYPE: Set the encodertype of the Pumps (0: 200, 1: 400, 2: 500, 3: 1000)
+ 7-FPB_1_AUTO_DETECT_ENC: Autodetect the current encoder type
+ 10-FPB_1_GET_HASH: Get FW Hash
+ 85-FPB_1_SW_RESET: Softreset of the MCU
+ 86-FPB_1_SLEEP: Go into deep sleep
+ 87-FPB_1_SYSTEM_TEST: Go into system test mode";
+CM_ BO_ 56 "I'm alive";
+CM_ BO_ 59 "Acknowledge of 0x030
+@RSP";
+CM_ BO_ 96 "keep alive";
+CM_ BO_ 104 "I'm alive";
+CM_ SG_ 105 HSP_ABS_POSITION_M "@IST @CAL";
+CM_ BO_ 112 "keep alive";
+CM_ BO_ 120 "I'm alive";
+CM_ SG_ 121 ADU_IR_TEMP_1_M "@RB @FLOAT";
+CM_ SG_ 122 ADU_PRESSURE_M "@FLOAT";
+CM_ BO_ 144 "keep alive
+@CMD";
+CM_ SG_ 144 SPB_CMD_M "
+ 1-SPB_SELF_TEST_RES: Return the result of the self-test
+ 2-SPB_SOFTWARE_VERSION: Return the current installed software version, build nr and CRC sum
+ 3-SPB_UPDATE: Go into update mode
+ 5-SPB_NORMAL: 
+ 6-SPB_ADC_RESET: Reset ADCs
+ 10-SPB_GET_HASH: Get FW Hash
+ 85-SPB_SW_RESET: Softreset of the MCU
+ 86-SPB_SLEEP: Go into deep sleep
+ 87-SPB_SYSTEM_TEST: Go into system test mode";
+CM_ BO_ 152 "I'm alive";
+CM_ SG_ 154 FIL_ADC_VAL_M "@RB @IST @CAL";
+CM_ SG_ 154 SUB_ADC_VAL_M "@RB @IST @CAL";
+CM_ SG_ 154 PD_RET_P_ADC_VAL_M "@RB @IST @CAL";
+CM_ BO_ 160 "keep alive";
+CM_ BO_ 168 "I'm alive";
+CM_ SG_ 170 BLD_BLOOD_LEAK_ADC_M "@CAL";
+CM_ BO_ 180 "keep alive";
+BA_DEF_ BO_  "GenMsgCycleTime" INT 0 65535;
+BA_DEF_DEF_  "GenMsgCycleTime" 0;
+BA_ "GenMsgCycleTime" BO_ 48 1000;
+BA_ "GenMsgCycleTime" BO_ 56 200;
+BA_ "GenMsgCycleTime" BO_ 57 200;
+BA_ "GenMsgCycleTime" BO_ 96 1000;
+BA_ "GenMsgCycleTime" BO_ 104 1000;
+BA_ "GenMsgCycleTime" BO_ 105 200;
+BA_ "GenMsgCycleTime" BO_ 112 1000;
+BA_ "GenMsgCycleTime" BO_ 120 1000;
+BA_ "GenMsgCycleTime" BO_ 121 200;
+BA_ "GenMsgCycleTime" BO_ 122 200;
+BA_ "GenMsgCycleTime" BO_ 144 1000;
+BA_ "GenMsgCycleTime" BO_ 152 1000;
+BA_ "GenMsgCycleTime" BO_ 154 200;
+BA_ "GenMsgCycleTime" BO_ 160 20;
+BA_ "GenMsgCycleTime" BO_ 168 1000;
+BA_ "GenMsgCycleTime" BO_ 170 200;
+BA_ "GenMsgCycleTime" BO_ 180 1000;
+BA_ "GenMsgCycleTime" BO_ 188 0;
+VAL_ 50 BPFP_CMD_M 1 "FPB_1_SELF_TEST_RES" 2 "FPB_1_SOFTWARE_VERSION" 3 "FPB_1_UPDATE" 5 "FPB_1_NORMAL" 6 "FPB_1_SET_ENC_TYPE" 7 "FPB_1_AUTO_DETECT_ENC" 10 "FPB_1_GET_SW_HASH" 85 "FPB_1_SW_RESET" 86 "FPB_1_SLEEP" 87 "FPB_1_SYSTEM_TEST" ;
+VAL_ 56 BPFP_DOOR_ACT_GET_M 0 "False" 1 "True" ;
+VAL_ 57 BP_DIRECTION_GET_M 0 "False" 1 "True" ;
+VAL_ 57 BP_POSITION_ACT_GET_M 0 "False" 1 "True" ;
+VAL_ 59 BP_DIRECTION_SET_M 0 "False" 1 "True" ;
+VAL_ 59 BP_POSITION_SET_M 0 "False" 1 "True" ;
+VAL_ 59 BP_HALT_MOTOR_M 0 "False" 1 "True" ;
+VAL_ 59 BP_RELEASE_MOTOR_M 0 "False" 1 "True" ;
+VAL_ 96 HSP_DIRECTION_SET_M 0 "False" 1 "True" ;
+VAL_ 96 HSP_HALT_MOTOR_M 0 "False" 1 "True" ;
+VAL_ 96 HSP_RELEASE_MOTOR_M 0 "False" 1 "True" ;
+VAL_ 105 HSP_PLUNGER_SW_GET_M 0 "False" 1 "True" ;
+VAL_ 105 HSP_FLANGE_SW_GET_M 0 "False" 1 "True" ;
+VAL_ 105 HSP_STALL_GET_M 0 "False" 1 "True" ;
+VAL_ 105 HSP_ROTATION_DIR_GET_M 0 "False" 1 "True" ;
+VAL_ 112 ADU_PUMP_DIR_SET_M 0 "False" 1 "True" ;
+VAL_ 112 ADU_HALT_MOTOR_M 0 "False" 1 "True" ;
+VAL_ 112 ADU_RELEASE_MOTOR_M 0 "False" 1 "True" ;
+VAL_ 144 SPB_CMD_M 1 "SPB_SELF_TEST_RES" 2 "SPB_SOFTWARE_VERSION" 3 "SPB_UPDATE" 5 "SPB_NORMAL" 6 "SPB_ADC_RESET" 10 "SPB_GET_SW_HASH" 85 "SPB_SW_RESET" 86 "SPB_SLEEP" 87 "SPB_SYSTEM_TEST" ;
+VAL_ 160 VC_CLOSE_CLAMP_M 0 "False" 1 "True" ;
+VAL_ 170 BLD_CHAMBER_SW_M 0 "False" 1 "True" ;
+VAL_ 170 VC_TUBE_SW_M 0 "False" 1 "True" ;
 

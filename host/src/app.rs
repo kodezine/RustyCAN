@@ -11,7 +11,7 @@ use chrono::{DateTime, Utc};
 use crate::canopen::nmt::NmtState;
 use crate::canopen::pdo::PdoValue;
 use crate::canopen::sdo::{SdoDirection, SdoValue};
-use crate::dbc::types::DbcFrameSignals;
+use crate::dbc::types::{DbcByteOrder, DbcFrameSignals, DbcValueType};
 
 // ─── Type aliases ─────────────────────────────────────────────────────────────
 
@@ -40,6 +40,14 @@ pub struct DbcSignalEntry {
     pub description: Option<String>,
     pub last_seen: Instant,
     pub count: u64,
+    // Encoding metadata (populated from DbcSignalDef on first decode).
+    pub start_bit: u64,
+    pub bit_size: u64,
+    pub byte_order: DbcByteOrder,
+    pub value_type: DbcValueType,
+    pub factor: f64,
+    pub offset: f64,
+    pub dlc: u8,
 }
 
 // ─── Event types ─────────────────────────────────────────────────────────────
@@ -119,6 +127,10 @@ pub struct AppState {
     ///
     /// Populated when a DBC file is loaded and matching CAN frames are received.
     pub dbc_signals: HashMap<(u32, String), DbcSignalEntry>,
+    /// Most-recently received raw CAN payload per message CAN ID.
+    ///
+    /// Used to construct outbound frames: other signals' bits are preserved.
+    pub last_raw_bytes: HashMap<u32, Vec<u8>>,
     /// Filename stem of the loaded DBC (e.g. `"sample_bus"`), or `None` if no DBC is loaded.
     pub dbc_loaded: Option<String>,
     /// Total CAN frames received.
@@ -150,6 +162,7 @@ impl AppState {
             sdo_log: VecDeque::with_capacity(SDO_LOG_CAP + 1),
             pending_sdos: HashMap::new(),
             dbc_signals: HashMap::new(),
+            last_raw_bytes: HashMap::new(),
             dbc_loaded: None,
             total_frames: 0,
             fps: 0.0,
@@ -263,6 +276,10 @@ pub fn apply_event(state: &mut AppState, ev: CanEvent) {
         CanEvent::RawFrame { .. } => {}
         CanEvent::DbcSignal(frame_signals) => {
             let now = Instant::now();
+            // Store the raw payload so the GUI can use it as a base for writes.
+            state
+                .last_raw_bytes
+                .insert(frame_signals.can_id, frame_signals.raw_data.clone());
             for sig in frame_signals.values {
                 let key = (frame_signals.can_id, sig.signal_name.clone());
                 let entry = state
@@ -278,6 +295,13 @@ pub fn apply_event(state: &mut AppState, ev: CanEvent) {
                         description: None,
                         last_seen: now,
                         count: 0,
+                        start_bit: 0,
+                        bit_size: 0,
+                        byte_order: DbcByteOrder::LittleEndian,
+                        value_type: DbcValueType::Unsigned,
+                        factor: 1.0,
+                        offset: 0.0,
+                        dlc: 8,
                     });
                 entry.raw_int = sig.raw_int;
                 entry.physical = sig.physical;
@@ -285,6 +309,16 @@ pub fn apply_event(state: &mut AppState, ev: CanEvent) {
                 entry.description = sig.description;
                 entry.last_seen = now;
                 entry.count += 1;
+                // Update encoding metadata whenever fresh data arrives.
+                if let Some(def) = sig.encoding_def {
+                    entry.start_bit = def.start_bit;
+                    entry.bit_size = def.bit_size;
+                    entry.byte_order = def.byte_order;
+                    entry.value_type = def.value_type;
+                    entry.factor = def.factor;
+                    entry.offset = def.offset;
+                    entry.dlc = def.dlc;
+                }
             }
         }
     }
