@@ -6,6 +6,9 @@ on:
     tags-ignore: ['**']   # tags are handled exclusively by release.yml
   pull_request:
 
+permissions:
+  contents: read
+
 env:
   CARGO_TERM_COLOR: always
   CARGO_INCREMENTAL: 0          # disable incremental compilation in CI (cache handles reuse)
