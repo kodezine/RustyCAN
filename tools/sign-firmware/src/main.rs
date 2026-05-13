@@ -27,7 +27,7 @@ use std::path::PathBuf;
 use std::process;
 
 use ed25519_dalek::{Signature, Signer, SigningKey, Verifier, VerifyingKey};
-use rand::rngs::OsRng;
+use rand_core::OsRng;
 use sha2::{Digest, Sha512};
 
 // ---------------------------------------------------------------------------

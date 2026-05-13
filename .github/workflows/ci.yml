@@ -41,6 +41,8 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           cache-on-failure: true
+          cache-bin: false          # dtolnay/rust-toolchain manages ~/.cargo/bin; caching it can
+                                    # restore a stale rustup-init stub and break subsequent cargo calls
           key: host-${{ matrix.os }}
 
       # Linux: install GUI + packaging system libraries.
