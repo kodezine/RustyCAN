@@ -176,6 +176,23 @@ enum DfuGuiState {
     Failed(String),
 }
 
+/// State machine for the in-GUI app self-update flow (SOUP025).
+#[derive(Default)]
+enum AppUpdateGuiState {
+    #[default]
+    Idle,
+    /// macOS only: download in progress.
+    Downloading {
+        progress: f32,
+        msg_rx: mpsc::Receiver<crate::updater::DownloadMsg>,
+    },
+    /// macOS only: binary replacement underway; error slot populated on failure.
+    Applying {
+        error: Arc<Mutex<Option<String>>>,
+    },
+    Failed(String),
+}
+
 // ─── Top-level app ────────────────────────────────────────────────────────────
 
 pub struct RustyCanApp {
@@ -186,7 +203,7 @@ pub struct RustyCanApp {
     /// Signed firmware binary path (from `--dfu-update`), threaded into MonitorView.
     dfu_path: Option<PathBuf>,
     /// Latest RustyCAN release on GitHub — populated by a background thread.
-    latest_release: Arc<Mutex<Option<(u8, u8, u8)>>>,
+    app_update: Arc<Mutex<Option<crate::updater::AppUpdateRelease>>>,
 }
 
 #[allow(clippy::large_enum_variant)]
@@ -215,12 +232,13 @@ impl RustyCanApp {
         let sse_server = SseServer::start(http_port);
 
         // Spawn background GitHub releases check (non-blocking; result arrives within a few secs).
-        let latest_release: Arc<Mutex<Option<(u8, u8, u8)>>> = Arc::new(Mutex::new(None));
+        let app_update: Arc<Mutex<Option<crate::updater::AppUpdateRelease>>> =
+            Arc::new(Mutex::new(None));
         {
-            let lr = latest_release.clone();
+            let au = app_update.clone();
             std::thread::spawn(move || {
-                if let Some(ver) = check_github_latest_release() {
-                    *lr.lock().unwrap() = Some(ver);
+                if let Some(release) = crate::updater::check_for_app_update() {
+                    *au.lock().unwrap() = Some(release);
                 }
             });
         }
@@ -232,7 +250,7 @@ impl RustyCanApp {
                     match form.try_connect(
                         sse_server.tx.clone(),
                         dfu_path.clone(),
-                        latest_release.clone(),
+                        app_update.clone(),
                     ) {
                         Ok(monitor) => Screen::Monitor(Box::new(monitor)),
                         Err(msg) => {
@@ -259,7 +277,7 @@ impl RustyCanApp {
             sse_server,
             http_port,
             dfu_path,
-            latest_release,
+            app_update,
         }
     }
 }
@@ -279,7 +297,7 @@ impl eframe::App for RustyCanApp {
                     self.sse_server.tx.clone(),
                     self.http_port,
                     self.dfu_path.clone(),
-                    self.latest_release.clone(),
+                    self.app_update.clone(),
                 ) {
                     next_screen = Some(s);
                 }
@@ -567,7 +585,7 @@ impl ConnectForm {
         &self,
         sse_tx: tokio::sync::broadcast::Sender<String>,
         dfu_path: Option<PathBuf>,
-        latest_release: Arc<Mutex<Option<(u8, u8, u8)>>>,
+        app_update: Arc<Mutex<Option<crate::updater::AppUpdateRelease>>>,
     ) -> Result<MonitorView, String> {
         let baud: u32 = self
             .baud
@@ -700,7 +718,9 @@ impl ConnectForm {
             dfu_path,
             dfu_state: DfuGuiState::Idle,
             dfu_msg_rx: None,
-            latest_release,
+            app_update,
+            app_update_state: AppUpdateGuiState::Idle,
+            app_update_deferred: false,
         })
     }
 }
@@ -761,7 +781,7 @@ fn render_connect(
     sse_tx: tokio::sync::broadcast::Sender<String>,
     http_port: u16,
     dfu_path: Option<PathBuf>,
-    latest_release: Arc<Mutex<Option<(u8, u8, u8)>>>,
+    app_update: Arc<Mutex<Option<crate::updater::AppUpdateRelease>>>,
 ) -> Option<Screen> {
     // ── Dongle probe cycle ────────────────────────────────────────────────────
     // 1. Drain any pending probe result.
@@ -856,7 +876,7 @@ fn render_connect(
                 } else if has_dupes {
                     resp.on_disabled_hover_text("Fix duplicate node IDs before connecting");
                 } else if resp.clicked() {
-                    match form.try_connect(sse_tx, dfu_path.clone(), latest_release.clone()) {
+                    match form.try_connect(sse_tx, dfu_path.clone(), app_update.clone()) {
                         Ok(view) => transition = Some(Screen::Monitor(Box::new(view))),
                         Err(e) => form.error = Some(e),
                     }
@@ -1671,8 +1691,12 @@ struct MonitorView {
     dfu_state: DfuGuiState,
     /// Progress messages from the DFU background thread.
     dfu_msg_rx: Option<mpsc::Receiver<DfuMsg>>,
-    /// Latest RustyCAN release on GitHub — polled from the background check.
-    latest_release: Arc<Mutex<Option<(u8, u8, u8)>>>,
+    /// Latest RustyCAN release from the background GitHub check (SOUP025).
+    app_update: Arc<Mutex<Option<crate::updater::AppUpdateRelease>>>,
+    /// State machine for the in-GUI app self-update flow.
+    app_update_state: AppUpdateGuiState,
+    /// True when the user chose Defer this session — suppresses the banner.
+    app_update_deferred: bool,
 }
 
 /// Smart truncation of file paths for display.
@@ -1902,6 +1926,54 @@ fn render_monitor(
                     break;
                 }
             }
+        }
+    }
+
+    // ── Drain app-update download / apply messages (macOS in-place only) ─
+    {
+        let mut latest_progress: Option<f32> = None;
+        let mut done_path: Option<std::path::PathBuf> = None;
+        let mut download_err: Option<String> = None;
+
+        if let AppUpdateGuiState::Downloading { ref msg_rx, .. } = view.app_update_state {
+            while let Ok(msg) = msg_rx.try_recv() {
+                match msg {
+                    crate::updater::DownloadMsg::Progress(p) => latest_progress = Some(p),
+                    crate::updater::DownloadMsg::Done(path) => done_path = Some(path),
+                    crate::updater::DownloadMsg::Err(e) => download_err = Some(e),
+                }
+            }
+        }
+        if let Some(p) = latest_progress {
+            if let AppUpdateGuiState::Downloading {
+                ref mut progress, ..
+            } = view.app_update_state
+            {
+                *progress = p;
+            }
+        }
+        if let Some(path) = done_path {
+            let error_slot: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
+            let slot_clone = error_slot.clone();
+            #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+            std::thread::spawn(move || {
+                if let Err(e) = crate::updater::apply_and_restart(&path) {
+                    *slot_clone.lock().unwrap() = Some(e);
+                }
+            });
+            view.app_update_state = AppUpdateGuiState::Applying { error: error_slot };
+        }
+        if let Some(e) = download_err {
+            view.app_update_state = AppUpdateGuiState::Failed(e);
+        }
+        // Check if apply returned an error.
+        let apply_err = if let AppUpdateGuiState::Applying { ref error } = view.app_update_state {
+            error.lock().ok().and_then(|g| g.clone())
+        } else {
+            None
+        };
+        if let Some(e) = apply_err {
+            view.app_update_state = AppUpdateGuiState::Failed(e);
         }
     }
 
@@ -2163,38 +2235,166 @@ fn render_monitor(
             });
     }
 
-    // ── GitHub release notice (host app update) ───────────────────────────
-    if let Ok(guard) = view.latest_release.try_lock() {
-        if let Some((lr_maj, lr_min, lr_pat)) = *guard {
-            let bundled = crate::bundled_firmware_version();
-            let is_newer =
-                bundled.is_none_or(|(bm, bn, bp)| (lr_maj, lr_min, lr_pat) > (bm, bn, bp));
-            if is_newer {
-                egui::Panel::top("github_release_notice")
-                    .frame(egui::Frame::new().inner_margin(egui::Margin::symmetric(8, 3)))
-                    .show_inside(ui, |ui| {
+    // ── App update banner (SOUP025) ───────────────────────────────────────
+    if !view.app_update_deferred {
+        let release_opt = view.app_update.try_lock().ok().and_then(|g| g.clone());
+        if let Some(release) = release_opt {
+            let ver = release.version_string();
+            let release_url = release.release_url.clone();
+
+            egui::Panel::top("app_update_notice")
+                .frame(egui::Frame::new().inner_margin(egui::Margin::symmetric(8, 3)))
+                .show_inside(ui, |ui| match &view.app_update_state {
+                    AppUpdateGuiState::Idle => {
                         egui::Frame::new()
-                            .fill(Color32::from_rgb(50, 50, 80))
+                            .fill(Color32::from_rgb(40, 50, 80))
                             .corner_radius(4.0)
-                            .inner_margin(egui::Margin::symmetric(8, 3))
+                            .inner_margin(egui::Margin::symmetric(8, 4))
                             .show(ui, |ui| {
                                 ui.horizontal(|ui| {
                                     ui.colored_label(
                                         Color32::from_rgb(180, 210, 255),
-                                        format!(
-                                            "\u{f019} RustyCAN v{lr_maj}.{lr_min}.{lr_pat} available on GitHub"
-                                        ),
+                                        format!("\u{f019} RustyCAN {ver} available"),
                                     );
-                                    ui.hyperlink_to(
-                                        "Release notes",
-                                        format!(
-                                            "https://github.com/kodezine/RustyCAN/releases/tag/v{lr_maj}.{lr_min}.{lr_pat}"
-                                        ),
+                                    ui.separator();
+
+                                    #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+                                    if ui
+                                        .add(
+                                            egui::Button::new(
+                                                egui::RichText::new("Update Now")
+                                                    .color(Color32::WHITE),
+                                            )
+                                            .fill(Color32::from_rgb(34, 120, 200)),
+                                        )
+                                        .on_hover_text(
+                                            "Download and replace the running app, then relaunch",
+                                        )
+                                        .clicked()
+                                    {
+                                        let (tx, rx) =
+                                            mpsc::channel::<crate::updater::DownloadMsg>();
+                                        let dl_release = release.clone();
+                                        std::thread::spawn(move || {
+                                            let tx_progress = tx.clone();
+                                            match crate::updater::download_update(
+                                                &dl_release,
+                                                move |p| {
+                                                    let _ = tx_progress.send(
+                                                        crate::updater::DownloadMsg::Progress(
+                                                            p as f32,
+                                                        ),
+                                                    );
+                                                },
+                                            ) {
+                                                Ok(path) => {
+                                                    let _ = tx.send(
+                                                        crate::updater::DownloadMsg::Done(path),
+                                                    );
+                                                }
+                                                Err(e) => {
+                                                    let _ = tx
+                                                        .send(crate::updater::DownloadMsg::Err(e));
+                                                }
+                                            }
+                                        });
+                                        view.app_update_state = AppUpdateGuiState::Downloading {
+                                            progress: 0.0,
+                                            msg_rx: rx,
+                                        };
+                                    }
+
+                                    #[cfg(not(all(target_os = "macos", target_arch = "aarch64")))]
+                                    if ui
+                                        .add(
+                                            egui::Button::new(
+                                                egui::RichText::new("\u{f0c1} View Release")
+                                                    .color(Color32::WHITE),
+                                            )
+                                            .fill(Color32::from_rgb(34, 120, 200)),
+                                        )
+                                        .on_hover_text(&release_url)
+                                        .clicked()
+                                    {
+                                        crate::updater::open_release_page(&release);
+                                    }
+
+                                    if ui
+                                        .button("Defer")
+                                        .on_hover_text("Dismiss for this session")
+                                        .clicked()
+                                    {
+                                        view.app_update_deferred = true;
+                                    }
+
+                                    ui.separator();
+                                    ui.hyperlink_to("Release notes", &release_url);
+                                });
+                            });
+                    }
+
+                    AppUpdateGuiState::Downloading { progress, .. } => {
+                        let pct = *progress;
+                        egui::Frame::new()
+                            .fill(Color32::from_rgb(30, 60, 100))
+                            .corner_radius(4.0)
+                            .inner_margin(egui::Margin::symmetric(8, 4))
+                            .show(ui, |ui| {
+                                ui.horizontal(|ui| {
+                                    ui.colored_label(
+                                        Color32::from_rgb(180, 210, 255),
+                                        format!("\u{f019} Downloading RustyCAN {ver}…"),
+                                    );
+                                    ui.add(
+                                        egui::ProgressBar::new(pct)
+                                            .desired_width(200.0)
+                                            .text(format!("{:.0}%", pct * 100.0)),
                                     );
                                 });
                             });
-                    });
-            }
+                    }
+
+                    AppUpdateGuiState::Applying { .. } => {
+                        egui::Frame::new()
+                            .fill(Color32::from_rgb(30, 70, 30))
+                            .corner_radius(4.0)
+                            .inner_margin(egui::Margin::symmetric(8, 4))
+                            .show(ui, |ui| {
+                                ui.colored_label(
+                                    Color32::WHITE,
+                                    "\u{f021} Applying update, restarting\u{2026}",
+                                );
+                            });
+                    }
+
+                    AppUpdateGuiState::Failed(msg) => {
+                        let msg = msg.clone();
+                        egui::Frame::new()
+                            .fill(Color32::from_rgb(140, 30, 30))
+                            .corner_radius(4.0)
+                            .inner_margin(egui::Margin::symmetric(8, 4))
+                            .show(ui, |ui| {
+                                ui.horizontal(|ui| {
+                                    ui.colored_label(
+                                        Color32::WHITE,
+                                        format!("\u{f06a} Update failed: {msg}"),
+                                    );
+                                    if ui
+                                        .small_button(
+                                            egui::RichText::new("\u{f021}").color(Color32::WHITE),
+                                        )
+                                        .on_hover_text("Retry")
+                                        .clicked()
+                                    {
+                                        view.app_update_state = AppUpdateGuiState::Idle;
+                                    }
+                                    if ui.small_button("Defer").clicked() {
+                                        view.app_update_deferred = true;
+                                    }
+                                });
+                            });
+                    }
+                });
         }
     }
 
@@ -3821,38 +4021,6 @@ fn sdo_section(ui: &mut egui::Ui, state: &AppState) {
                     }
                 });
         });
-}
-
-// ─── Public entry point ───────────────────────────────────────────────────────
-
-// ─── GitHub release check ─────────────────────────────────────────────────────
-
-/// Parse a SemVer git tag like `v1.2.3` or `v1.2.3-5-gabcdef` into `(u8, u8, u8)`.
-fn parse_semver_tag(tag: &str) -> Option<(u8, u8, u8)> {
-    let s = tag.trim().trim_start_matches('v');
-    let base = s.split('-').next()?;
-    let mut parts = base.splitn(3, '.');
-    let maj: u8 = parts.next()?.parse().ok()?;
-    let min: u8 = parts.next()?.parse().ok()?;
-    let pat: u8 = parts.next()?.parse().ok()?;
-    Some((maj, min, pat))
-}
-
-/// Query the GitHub Releases API for the latest RustyCAN release.
-///
-/// Spawned in a background thread; returns `None` on any network or parse error.
-fn check_github_latest_release() -> Option<(u8, u8, u8)> {
-    let resp = ureq::get("https://api.github.com/repos/kodezine/RustyCAN/releases/latest")
-        .set(
-            "User-Agent",
-            concat!("RustyCAN/", env!("CARGO_PKG_VERSION")),
-        )
-        .set("Accept", "application/vnd.github+json")
-        .call()
-        .ok()?;
-    let body: serde_json::Value = resp.into_json().ok()?;
-    let tag = body["tag_name"].as_str()?;
-    parse_semver_tag(tag)
 }
 
 // ─── Entry point ──────────────────────────────────────────────────────────────

@@ -39,3 +39,4 @@ pub mod http_server;
 pub mod logger;
 pub mod session;
 pub mod tui;
+pub mod updater;
