@@ -97,14 +97,13 @@ static USB_CONFIGURED: Signal<_, bool>  // fires on USB enumeration / disconnect
   - **Buffered FD variant**: `Can::buffered_fd::<TX, RX>()` returns `BufferedCanFd`; splits to `BufferedFdCanSender` / `BufferedFdCanReceiver` — not needed (existing code uses `split()` + manual join)
   - **Classic path unchanged**: `CanRx::read() -> Result<Envelope, BusError>`, `CanTx::write(&Frame) -> Option<Frame>` still present; FD mode FDCAN hardware accepts both classic and FD frames on RX simultaneously
 
-- [ ] **Phase 1** — `kcan-protocol` crate
+- [x] **Phase 1** — `kcan-protocol` crate
   - Files: [`kcan-protocol/src/control.rs`](../kcan-protocol/src/control.rs)
-  - [ ] Add `KCanBtConst::H743_32MHZ` (same values as `H753_64MHZ`; `clock_hz = 32_000_000`)
-  - [ ] Add `KCanBitTiming::for_fd_data_bitrate(clock_hz: u32, data_bitrate: u32) -> Option<Self>`
-    - 32 MHz clock: 500k → BRP=4/TSEG1=11/TSEG2=4/SJW=4; 1M → BRP=2; 2M → BRP=1 (same TSEG)
-    - Data-phase BRP is capped at 32 (5-bit field vs nominal 512)
-  - [ ] Extend `KCanMode`: rename `_reserved[0]` → `fd_flags: u8`; update `from_bytes`/`to_bytes`/`bus_on()`
-  - [ ] Add `KCanFdConfig { nominal_baud: u32, fd_timing: Option<KCanBitTiming>, iso: bool }`
+  - [x] Add `KCanBtConst::H743_32MHZ` and `H753_32MHZ`; deprecated `H753_64MHZ` (misnomer)
+  - [x] Add `KCanBitTiming::for_fd_data_bitrate(clock_hz, data_bitrate) -> Option<Self>` — BRP cap 31, 16 TQ (TSEG1=11/TSEG2=4/SJW=4)
+  - [x] Added `KCanModeFdFlags { FD_ENABLED=0x01, NON_ISO=0x02 }`
+  - [x] Extended `KCanMode`: `_reserved[u8;3]` → `fd_flags: u8, _reserved: [u8;2]`; added `bus_on_fd()`; updated `to_bytes`/`from_bytes`
+  - [x] Added `KCanFdConfig { nominal_baud: u32, fd_timing: Option<KCanBitTiming>, iso: bool, mode_flags: u8 }`
 
 - [ ] **Phase 2** — Firmware deferred FDCAN init (H743)
   - Files: [`firmware/dongle-h743/src/main.rs`](../firmware/dongle-h743/src/main.rs), [`firmware/dongle-h743/src/can_task.rs`](../firmware/dongle-h743/src/can_task.rs), [`firmware/dongle-h743/src/usb_task.rs`](../firmware/dongle-h743/src/usb_task.rs)

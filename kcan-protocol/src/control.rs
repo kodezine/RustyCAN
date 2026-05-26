@@ -153,6 +153,32 @@ impl KCanBitTiming {
             sjw: 1,
         })
     }
+
+    /// Compute CAN FD **data-phase** bit timing for a given data bitrate.
+    ///
+    /// Uses fixed TSEG1=11, TSEG2=4, SJW=4 (16 TQ per bit).  These values
+    /// satisfy the FDCAN data-phase hardware limits (TSEG1 ≤ 31, TSEG2 ≤ 15,
+    /// SJW ≤ 15) and the data-phase BRP cap of 31.
+    ///
+    /// Returns `None` if the bitrate is not achievable (non-integer BRP, BRP=0,
+    /// or BRP > 31).
+    pub fn for_fd_data_bitrate(clock_hz: u32, data_bitrate: u32) -> Option<Self> {
+        let tq_per_bit: u32 = 16; // 1 + tseg1 + tseg2 = 1 + 11 + 4
+        let brp = clock_hz / (data_bitrate * tq_per_bit);
+        if brp == 0 || brp > 31 {
+            return None;
+        }
+        let actual = clock_hz / (brp * tq_per_bit);
+        if actual != data_bitrate {
+            return None;
+        }
+        Some(Self {
+            brp,
+            tseg1: 11,
+            tseg2: 4,
+            sjw: 4,
+        })
+    }
 }
 
 // ─── Mode (SET_MODE) ─────────────────────────────────────────────────────────
@@ -171,15 +197,39 @@ impl KCanModeFlags {
     pub const BUS_OFF: u8 = 1 << 3;
 }
 
+/// Bitfield flags for the `fd_flags` byte of [`KCanMode`] (byte 1).
+pub struct KCanModeFdFlags;
+
+impl KCanModeFdFlags {
+    /// Enable CAN FD mode with bit-rate switching (BRS).  If clear, the
+    /// firmware operates in classic CAN mode regardless of any previously
+    /// configured FD data-phase timing.
+    pub const FD_ENABLED: u8 = 1 << 0;
+    /// Use non-ISO CAN FD framing (Bosch original, CCCR.NISO=1).
+    /// When clear, ISO 11898-1:2015 framing is used.
+    pub const NON_ISO: u8 = 1 << 1;
+}
+
 /// 4-byte payload sent with `SET_MODE`.
+///
+/// Wire layout:
+/// ```text
+/// byte 0  flags    (KCanModeFlags)
+/// byte 1  fd_flags (KCanModeFdFlags) — zero on classic-CAN hosts, ignored by classic firmware
+/// byte 2  reserved
+/// byte 3  reserved
+/// ```
 #[repr(C, packed)]
 #[derive(Clone, Copy, Debug)]
 pub struct KCanMode {
     pub flags: u8,
-    _reserved: [u8; 3],
+    /// CAN FD flags. Older firmware treats this as reserved (zero) and ignores it.
+    pub fd_flags: u8,
+    _reserved: [u8; 2],
 }
 
 impl KCanMode {
+    /// Classic CAN bus-on.  `fd_flags` is zero (backward compatible).
     pub fn bus_on(listen_only: bool, loopback: bool) -> Self {
         let mut flags = KCanModeFlags::BUS_ON;
         if listen_only {
@@ -190,25 +240,44 @@ impl KCanMode {
         }
         Self {
             flags,
-            _reserved: [0; 3],
+            fd_flags: 0,
+            _reserved: [0; 2],
+        }
+    }
+
+    /// CAN FD bus-on with explicit FD flags.
+    pub fn bus_on_fd(listen_only: bool, loopback: bool, fd_flags: u8) -> Self {
+        let mut flags = KCanModeFlags::BUS_ON;
+        if listen_only {
+            flags |= KCanModeFlags::LISTEN_ONLY;
+        }
+        if loopback {
+            flags |= KCanModeFlags::LOOPBACK;
+        }
+        Self {
+            flags,
+            fd_flags,
+            _reserved: [0; 2],
         }
     }
 
     pub fn bus_off() -> Self {
         Self {
             flags: KCanModeFlags::BUS_OFF,
-            _reserved: [0; 3],
+            fd_flags: 0,
+            _reserved: [0; 2],
         }
     }
 
     pub fn to_bytes(&self) -> [u8; 4] {
-        [self.flags, 0, 0, 0]
+        [self.flags, self.fd_flags, 0, 0]
     }
 
     pub fn from_bytes(b: &[u8; 4]) -> Self {
         Self {
             flags: b[0],
-            _reserved: [0; 3],
+            fd_flags: b[1],
+            _reserved: [0; 2],
         }
     }
 }
@@ -284,7 +353,24 @@ pub struct KCanBtConst {
 }
 
 impl KCanBtConst {
+    /// Constants for STM32H743XI with 32 MHz FDCAN kernel clock (PLL2Q = 320 MHz / 10).
+    pub const H743_32MHZ: Self = Self {
+        clock_hz: 32_000_000,
+        brp_min: 1,
+        brp_max: 512,
+        tseg1_min: 2,
+        tseg1_max: 256,
+        tseg2_min: 2,
+        tseg2_max: 128,
+        sjw_max: 128,
+    };
+
     /// Constants for STM32H753ZI with 32 MHz FDCAN kernel clock (PLL2Q = 320 MHz / 10).
+    ///
+    /// # Note
+    /// The name `H753_64MHZ` is a misnomer — the actual clock is 32 MHz.
+    /// Use [`KCanBtConst::H743_32MHZ`] or [`KCanBtConst::H753_32MHZ`] in new code.
+    #[deprecated(note = "Use H753_32MHZ — the clock is 32 MHz, not 64 MHz")]
     pub const H753_64MHZ: Self = Self {
         clock_hz: 32_000_000,
         brp_min: 1,
@@ -309,6 +395,18 @@ impl KCanBtConst {
         b
     }
 
+    /// Constants for STM32H753ZI with 32 MHz FDCAN kernel clock (PLL2Q = 320 MHz / 10).
+    pub const H753_32MHZ: Self = Self {
+        clock_hz: 32_000_000,
+        brp_min: 1,
+        brp_max: 512,
+        tseg1_min: 2,
+        tseg1_max: 256,
+        tseg2_min: 2,
+        tseg2_max: 128,
+        sjw_max: 128,
+    };
+
     pub fn from_bytes(b: &[u8; 32]) -> Self {
         Self {
             clock_hz: u32::from_le_bytes([b[0], b[1], b[2], b[3]]),
@@ -321,4 +419,22 @@ impl KCanBtConst {
             sjw_max: u32::from_le_bytes([b[28], b[29], b[30], b[31]]),
         }
     }
+}
+
+// ─── FD configuration (firmware-internal, EP0 → can_task) ────────────────────
+
+/// CAN FD configuration assembled by the EP0 handler from `SET_BITTIMING`,
+/// `SET_FD_BITTIMING`, and `SET_MODE` and forwarded to `can_task` via a signal.
+///
+/// Not a wire format — no `repr(C)`.  Firmware only.
+#[derive(Clone, Copy, Debug)]
+pub struct KCanFdConfig {
+    /// Nominal (arbitration) baud rate in bits/s.
+    pub nominal_baud: u32,
+    /// Data-phase bit timing, or `None` for classic CAN mode.
+    pub fd_timing: Option<KCanBitTiming>,
+    /// `true` = ISO 11898-1:2015 (CCCR.NISO=0); `false` = non-ISO (CCCR.NISO=1).
+    pub iso: bool,
+    /// Bus mode flags forwarded from `KCanModeFlags` (listen-only, loopback).
+    pub mode_flags: u8,
 }

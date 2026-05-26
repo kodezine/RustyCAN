@@ -104,7 +104,7 @@ impl Handler for KCanEp0Handler {
                 Some(InResponse::Accepted(&buf[..len]))
             }
             r if r == RequestCode::GetBtConst as u8 => {
-                let bytes = KCanBtConst::H753_64MHZ.to_bytes();
+                let bytes = KCanBtConst::H743_32MHZ.to_bytes();
                 let len = bytes.len().min(buf.len());
                 buf[..len].copy_from_slice(&bytes[..len]);
                 info!("EP0 GET_BT_CONST → clock=32 MHz, BRP 1-512");
@@ -132,7 +132,7 @@ impl Handler for KCanEp0Handler {
                         let bt = KCanBitTiming::from_bytes(arr);
                         let tq = 1 + bt.tseg1 + bt.tseg2;
                         if bt.brp > 0 && tq > 0 {
-                            Some(KCanBtConst::H753_64MHZ.clock_hz / (bt.brp * tq) / 1_000)
+                            Some(KCanBtConst::H743_32MHZ.clock_hz / (bt.brp * tq) / 1_000)
                         } else {
                             None
                         }
