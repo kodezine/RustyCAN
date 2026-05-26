@@ -371,6 +371,10 @@ struct ConnectForm {
     original_adapter_kind: Option<AdapterKind>,
     /// Message history (last 5 errors/warnings/notices) for display.
     message_history: Vec<MessageEntry>,
+    /// CAN FD data-phase bitrate (bps). `None` = classic CAN.
+    fd_data_baud: Option<u32>,
+    /// ISO CAN FD mode: `true` = ISO 11898-1:2015, `false` = Bosch non-ISO.
+    iso_mode: bool,
 }
 
 impl Clone for ConnectForm {
@@ -399,6 +403,8 @@ impl Clone for ConnectForm {
             adapter_notice: self.adapter_notice.clone(),
             original_adapter_kind: self.original_adapter_kind.clone(),
             message_history: self.message_history.clone(),
+            fd_data_baud: self.fd_data_baud,
+            iso_mode: self.iso_mode,
         }
     }
 }
@@ -437,6 +443,18 @@ struct PersistedConfig {
     /// Omitting this field uses 7878. The `--http-port` CLI flag overrides it.
     #[serde(default)]
     http_port: Option<u16>,
+    /// CAN FD data-phase bitrate (bps). `null` / absent = classic CAN.
+    /// Supported: 500000, 1000000, 2000000 (KCAN dongle, 32 MHz FDCAN clock).
+    #[serde(default)]
+    fd_data_baud: Option<u32>,
+    /// ISO 11898-1:2015 CAN FD framing. `true` = ISO (default), `false` = Bosch non-ISO.
+    /// Absent field defaults to `true`.
+    #[serde(default = "default_true")]
+    iso_mode: bool,
+}
+
+fn default_true() -> bool {
+    true
 }
 
 impl PersistedConfig {
@@ -524,6 +542,8 @@ impl PersistedConfig {
             adapter_notice: None,
             original_adapter_kind: None,
             message_history: vec![],
+            fd_data_baud: self.fd_data_baud,
+            iso_mode: self.iso_mode,
         }
     }
 }
@@ -542,6 +562,8 @@ impl From<&ConnectForm> for PersistedConfig {
             kcan_serial: form.kcan_serial.clone(),
             dbc_files: form.dbc_files.clone(),
             http_port: None, // not persisted to the app-data config; set via --config file only
+            fd_data_baud: form.fd_data_baud,
+            iso_mode: form.iso_mode,
         }
     }
 }
@@ -574,6 +596,8 @@ impl Default for ConnectForm {
                 adapter_notice: None,
                 original_adapter_kind: None,
                 message_history: vec![],
+                fd_data_baud: None,
+                iso_mode: true,
             }
         }
     }
@@ -654,6 +678,8 @@ impl ConnectForm {
                 .filter(|e| !e.path.trim().is_empty())
                 .map(|e| PathBuf::from(e.path.trim()))
                 .collect(),
+            fd_data_baud: self.fd_data_baud,
+            iso_mode: self.iso_mode,
             sse_tx: Some(sse_tx),
         };
 
@@ -4186,6 +4212,8 @@ pub fn load_session_config(
             .filter(|e| !e.path.trim().is_empty())
             .map(|e| std::path::PathBuf::from(e.path.trim()))
             .collect(),
+        fd_data_baud: config.fd_data_baud,
+        iso_mode: config.iso_mode,
         sse_tx,
     })
 }

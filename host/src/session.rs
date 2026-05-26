@@ -115,6 +115,13 @@ pub struct SessionConfig {
     /// DBC databases and the results emitted as [`CanEvent::DbcSignal`] events.
     /// Empty vector disables DBC decoding entirely.
     pub dbc_paths: Vec<std::path::PathBuf>,
+    /// CAN FD data-phase bitrate in bits/s. `None` = classic CAN (backward-compatible).
+    /// Supported values for the KCAN dongle (32 MHz FDCAN kernel clock):
+    /// `500_000`, `1_000_000`, `2_000_000`.  Ignored for non-KCAN adapters.
+    pub fd_data_baud: Option<u32>,
+    /// ISO 11898-1:2015 CAN FD framing (true = ISO, false = Bosch non-ISO).
+    /// Ignored when `fd_data_baud` is `None`.  Defaults to `true`.
+    pub iso_mode: bool,
     /// Optional SSE broadcast sender from [`crate::http_server::SseServer`].
     ///
     /// When `Some`, every JSONL log entry is also broadcast to all connected
@@ -250,6 +257,8 @@ pub fn start(config: SessionConfig) -> SessionResult {
     let port = config.port.clone();
     let baud = config.baud;
     let listen_only = config.listen_only;
+    let fd_data_baud = config.fd_data_baud;
+    let iso_mode = config.iso_mode;
     let sdo_timeout_ms = config.sdo_timeout_ms;
     let block_initiate_timeout_ms = config.block_initiate_timeout_ms;
     let block_subblock_timeout_ms = config.block_subblock_timeout_ms;
@@ -258,7 +267,14 @@ pub fn start(config: SessionConfig) -> SessionResult {
     let adapter_kind = config.adapter_kind.clone();
 
     thread::spawn(move || {
-        let adapter = match open_adapter(&adapter_kind, &port, baud, listen_only, None, true) {
+        let adapter = match open_adapter(
+            &adapter_kind,
+            &port,
+            baud,
+            listen_only,
+            fd_data_baud,
+            iso_mode,
+        ) {
             Ok(a) => a,
             Err(e) => {
                 // Send the error to the GUI, then exit the thread cleanly.
@@ -314,7 +330,14 @@ pub fn start(config: SessionConfig) -> SessionResult {
                 return;
             }
 
-            match open_adapter(&adapter_kind, &port, baud, listen_only, None, true) {
+            match open_adapter(
+                &adapter_kind,
+                &port,
+                baud,
+                listen_only,
+                fd_data_baud,
+                iso_mode,
+            ) {
                 Ok(new_adapter) => {
                     eprintln!("KCAN: dongle reconnected — resuming session");
                     let _ = tx.send(CanEvent::AdapterReconnected);

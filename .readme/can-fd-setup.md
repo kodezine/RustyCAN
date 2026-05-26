@@ -143,10 +143,14 @@ static USB_CONFIGURED: Signal<_, bool>  // fires on USB enumeration / disconnect
   - [x] `open_adapter()` in `mod.rs` gains same two params and passes them through; PEAK arm ignores them
   - [x] Call sites in `session.rs` (×2) and `bbd/main.rs` updated with `None, true` placeholders (Phase 7 wires real config)
 
-- [ ] **Phase 7** — Session + JSON config
-  - Files: [`host/src/session.rs`](../host/src/session.rs), [`host/config.example.json`](../host/config.example.json), [`host/config.kcan.json`](../host/config.kcan.json), [`host/config.kcan-h743.json`](../host/config.kcan-h743.json)
-  - [ ] `SessionConfig` gains `fd_data_baud: Option<u32>` and `iso_mode: bool` (default `true`)
-  - [ ] Persist to / restore from JSON (keys `"fd_data_baud"`, `"iso_mode"`)
+- [x] **Phase 7** — Session + JSON config
+  - Files: [`host/src/session.rs`](../host/src/session.rs), [`host/src/gui/mod.rs`](../host/src/gui/mod.rs), [`host/config.example.json`](../host/config.example.json), [`host/config.kcan.json`](../host/config.kcan.json), [`host/config.kcan-h743.json`](../host/config.kcan-h743.json)
+  - [x] `SessionConfig` gains `fd_data_baud: Option<u32>` and `iso_mode: bool` (default `true`)
+  - [x] `session.rs` propagates both fields to `open_adapter()` calls (replacing `None, true` placeholders)
+  - [x] `PersistedConfig` gains `fd_data_baud: Option<u32>` + `#[serde(default)]` and `iso_mode: bool` + `#[serde(default = "default_true")]` — backward-compatible with existing config files
+  - [x] `ConnectForm` gains `fd_data_baud: Option<u32>` and `iso_mode: bool` fields (no UI yet — Phase 8)
+  - [x] `into_form()`, `From<&ConnectForm>`, `Default`, `try_connect()`, `load_session_config()` all updated
+  - [x] JSON config files updated with `"fd_data_baud": null, "iso_mode": true`
 
 - [ ] **Phase 8** — GUI FD controls
   - Files: [`host/src/gui/mod.rs`](../host/src/gui/mod.rs)

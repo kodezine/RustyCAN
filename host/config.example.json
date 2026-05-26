@@ -8,6 +8,8 @@
   "listen_only": false,
   "text_log": false,
   "kcan_serial": "",
+  "fd_data_baud": null,
+  "iso_mode": true,
   "nodes": [
     { "id_str": "1", "eds_path": "/path/to/node1.eds" },
     { "id_str": "2", "eds_path": "" }

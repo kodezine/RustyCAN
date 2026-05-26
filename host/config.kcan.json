@@ -8,6 +8,8 @@
   "listen_only": false,
   "text_log": true,
   "kcan_serial": "",
+  "fd_data_baud": null,
+  "iso_mode": true,
   "nodes": [{"id_str": "32", "eds_path": "/Volumes/repo/sohal/baxter/pst7x-distributOR-board-mk3/ao/canopen/eds/ODEditorExports/distributor_board_mk3.eds"}],
   "dbc_files": []
 }
