@@ -43,6 +43,9 @@ pub struct KCanAdapter {
     pub fw_version: (u8, u8, u8),
     name: String,
     tx_seq: u16,
+    /// Actual nominal baud rate in use (may differ from the configured value when
+    /// auto-baud detection is enabled).
+    baud: u32,
 }
 
 impl KCanAdapter {
@@ -54,12 +57,15 @@ impl KCanAdapter {
     ///   (32 MHz → 500 kbps / 1 Mbps / 2 Mbps).  `None` → classic CAN.
     /// * `iso_mode` — when `true` (default), ISO 11898-1:2015 CAN FD framing is used;
     ///   when `false`, Bosch non-ISO framing (CCCR.NISO=1).  Ignored in classic mode.
+    /// * `auto_baud` — when `true`, ignores `baud` and detects the nominal bitrate
+    ///   automatically by trying standard rates in listen-only mode (2 s window each).
     pub fn open(
         serial: Option<&str>,
         baud: u32,
         listen_only: bool,
         fd_data_baud: Option<u32>,
         iso_mode: bool,
+        auto_baud: bool,
     ) -> Result<Self, AdapterError> {
         let dev_info = find_device_info(serial)?;
         let device = dev_info
@@ -137,9 +143,26 @@ impl KCanAdapter {
         }
         let bt_buf: [u8; 32] = bt_data[..32].try_into().unwrap();
         let bt_const = KCanBtConst::from_bytes(&bt_buf);
+        let clock_hz = bt_const.clock_hz;
+
+        // Open bulk IN endpoint early — needed for auto-baud detection.
+        let mut ep_in = iface
+            .endpoint::<Bulk, In>(BULK_IN_EP)
+            .map_err(|e| AdapterError::Io(format!("open bulk-in ep 0x{BULK_IN_EP:02X}: {e}")))?;
+        // Reset data toggle to DATA0 (see full comment below for bulk-out).
+        if let Err(e) = ep_in.clear_halt().wait() {
+            eprintln!("KCAN: clear_halt bulk-in: {e} (ignoring)");
+        }
+
+        // Determine the nominal baud — either from config or auto-detection.
+        let baud = if auto_baud {
+            eprintln!("KCAN: starting auto-baud detection...");
+            auto_detect_baud_inner(&iface, &mut ep_in, &bt_const)?
+        } else {
+            baud
+        };
 
         // SET_BITTIMING.
-        let clock_hz = bt_const.clock_hz;
         let bt = KCanBitTiming::for_bitrate(clock_hz, baud).ok_or_else(|| {
             AdapterError::Protocol(format!("cannot achieve {baud} bps at {clock_hz} Hz"))
         })?;
@@ -190,9 +213,6 @@ impl KCanAdapter {
         let mut ep_out = iface
             .endpoint::<Bulk, Out>(BULK_OUT_EP)
             .map_err(|e| AdapterError::Io(format!("open bulk-out ep 0x{BULK_OUT_EP:02X}: {e}")))?;
-        let mut ep_in = iface
-            .endpoint::<Bulk, In>(BULK_IN_EP)
-            .map_err(|e| AdapterError::Io(format!("open bulk-in ep 0x{BULK_IN_EP:02X}: {e}")))?;
 
         // Reset data toggles on both bulk endpoints.
         //
@@ -201,11 +221,9 @@ impl KCanAdapter {
         // while the host starts at DATA0, causing every bulk IN packet to be
         // silently discarded (NACK loop). CLEAR_FEATURE(ENDPOINT_HALT) resets
         // both host and device toggles to DATA0 via ClearPipeStallBothEnds.
+        // ep_in was already clear_halted above for auto-detect.
         if let Err(e) = ep_out.clear_halt().wait() {
             eprintln!("KCAN: clear_halt bulk-out: {e} (ignoring)");
-        }
-        if let Err(e) = ep_in.clear_halt().wait() {
-            eprintln!("KCAN: clear_halt bulk-in: {e} (ignoring)");
         }
 
         let (frame_tx, frame_rx) = mpsc::channel::<KCanFrame>();
@@ -226,6 +244,7 @@ impl KCanAdapter {
             fw_version: (fw_maj, fw_min, fw_pat),
             name,
             tx_seq: 0,
+            baud,
         })
     }
 
@@ -372,6 +391,109 @@ impl CanAdapter for KCanAdapter {
     fn firmware_version(&self) -> Option<(u8, u8, u8)> {
         Some(self.fw_version)
     }
+
+    fn actual_baud(&self) -> u32 {
+        self.baud
+    }
+}
+
+// ─── Auto-baud detection ──────────────────────────────────────────────────────
+
+/// Try standard CAN bitrates in sequence, returning the first rate at which
+/// valid frames are received within a 2-second window.
+///
+/// The algorithm: for each candidate rate, apply it in listen-only mode and
+/// poll the bulk-IN endpoint using 200 ms read windows (10 polls = 2 s).  If
+/// any valid [`KCanFrame`] is received, that rate is returned.
+///
+/// Rates not achievable with the device's FDCAN kernel clock (e.g. 800 kbps
+/// with a 32 MHz clock) are silently skipped.
+fn auto_detect_baud_inner(
+    iface: &nusb::Interface,
+    ep_in: &mut Endpoint<Bulk, In>,
+    bt_const: &KCanBtConst,
+) -> Result<u32, AdapterError> {
+    const RATES: &[u32] = &[
+        10_000, 20_000, 50_000, 100_000, 125_000, 250_000, 500_000, 800_000, 1_000_000,
+    ];
+    const POLLS_PER_RATE: usize = 10; // 10 × 200 ms = 2 s per rate
+
+    for &rate in RATES {
+        let Some(bt) = KCanBitTiming::for_bitrate(bt_const.clock_hz, rate) else {
+            // This rate is not achievable at the FDCAN kernel clock — skip it.
+            continue;
+        };
+
+        eprintln!("KCAN: auto-baud: trying {rate} bps...");
+
+        // Apply nominal timing.
+        iface
+            .control_out(
+                ctrl_out(RequestCode::SetBitTiming as u8, &bt.to_bytes()),
+                CTRL_TIMEOUT,
+            )
+            .wait()
+            .map_err(|e| AdapterError::Protocol(format!("auto-baud SET_BITTIMING: {e:?}")))?;
+
+        // Bus-on in listen-only mode (no TX / no ACK — safe on any bus).
+        iface
+            .control_out(
+                ctrl_out(
+                    RequestCode::SetMode as u8,
+                    &KCanMode::bus_on(true, false).to_bytes(),
+                ),
+                CTRL_TIMEOUT,
+            )
+            .wait()
+            .map_err(|e| AdapterError::Protocol(format!("auto-baud SET_MODE: {e:?}")))?;
+
+        // Poll the bulk-IN endpoint for valid frames.
+        let mut found = false;
+        let mut frame_buf = Vec::<u8>::new();
+        'poll: for _ in 0..POLLS_PER_RATE {
+            match ep_in
+                .transfer_blocking(Buffer::new(512), Duration::from_millis(200))
+                .into_result()
+            {
+                Ok(data) if !data.is_empty() => {
+                    frame_buf.extend_from_slice(&data);
+                    while frame_buf.len() >= KCAN_FRAME_SIZE {
+                        if let Ok(arr) =
+                            <[u8; KCAN_FRAME_SIZE]>::try_from(&frame_buf[..KCAN_FRAME_SIZE])
+                        {
+                            if KCanFrame::from_bytes(&arr).is_some() {
+                                found = true;
+                                break 'poll;
+                            }
+                        }
+                        frame_buf.drain(..KCAN_FRAME_SIZE);
+                    }
+                }
+                _ => {} // timeout, empty packet, or transient error — keep polling
+            }
+        }
+        frame_buf.clear();
+
+        // Bus-off before moving to the next rate.
+        iface
+            .control_out(
+                ctrl_out(RequestCode::SetMode as u8, &KCanMode::bus_off().to_bytes()),
+                CTRL_TIMEOUT,
+            )
+            .wait()
+            .map_err(|e| AdapterError::Protocol(format!("auto-baud SET_MODE bus-off: {e:?}")))?;
+
+        if found {
+            eprintln!("KCAN: auto-baud detected: {rate} bps");
+            return Ok(rate);
+        }
+    }
+
+    Err(AdapterError::NotFound(
+        "auto-baud: no CAN traffic detected at any standard rate \
+         (10k – 1M bps)"
+            .into(),
+    ))
 }
 
 // ─── Background IO thread ─────────────────────────────────────────────────────

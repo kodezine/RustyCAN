@@ -95,6 +95,9 @@ pub enum CanEvent {
     /// Device firmware version reported by GET_INFO immediately after adapter open.
     /// Carried as `(major, minor, patch)` for display and update-check in the TUI.
     FirmwareVersion(u8, u8, u8),
+    /// Emitted after a successful auto-baud detection pass.
+    /// Carries the detected nominal CAN bitrate in bits/s.
+    AutoBaudDetected(u32),
     /// Signals decoded from a CAN frame against the loaded DBC database.
     DbcSignal(DbcFrameSignals),
     /// Emitted once when the DBC database is loaded successfully.
@@ -144,6 +147,8 @@ pub struct AppState {
     /// Firmware version reported by the connected device, or `None` before the
     /// first GET_INFO response arrives (or for non-KCAN adapters).
     pub device_fw_version: Option<(u8, u8, u8)>,
+    /// Baud rate detected by auto-baud, or `None` if baud was configured manually.
+    pub detected_baud: Option<u32>,
     /// Path of the JSONL log file for display.
     pub log_path: String,
     // Internal FPS tracking.
@@ -169,6 +174,7 @@ impl AppState {
             bus_load: 0.0,
             baud_rate,
             device_fw_version: None,
+            detected_baud: None,
             log_path,
             fps_window_start: Instant::now(),
             fps_window_count: 0,
@@ -268,6 +274,10 @@ pub fn apply_event(state: &mut AppState, ev: CanEvent) {
         | CanEvent::AdapterReconnected => {}
         CanEvent::FirmwareVersion(maj, min, pat) => {
             state.device_fw_version = Some((maj, min, pat));
+        }
+        CanEvent::AutoBaudDetected(baud) => {
+            state.detected_baud = Some(baud);
+            state.baud_rate = baud;
         }
         CanEvent::DbcLoaded(name) => {
             state.dbc_loaded = Some(name);

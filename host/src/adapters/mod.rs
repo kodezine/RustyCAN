@@ -109,6 +109,14 @@ pub trait CanAdapter {
     fn firmware_version(&self) -> Option<(u8, u8, u8)> {
         None
     }
+
+    /// Actual nominal baud rate used after the adapter was opened.
+    ///
+    /// Returns the configured rate for manually-set baud; the detected rate
+    /// after a successful auto-baud pass (KCAN only); 0 for all other adapters.
+    fn actual_baud(&self) -> u32 {
+        0
+    }
 }
 
 // ─── Factory ──────────────────────────────────────────────────────────────────
@@ -124,6 +132,7 @@ pub fn open_adapter(
     listen_only: bool,
     fd_data_baud: Option<u32>,
     iso_mode: bool,
+    auto_baud: bool,
 ) -> Result<Box<dyn CanAdapter>, AdapterError> {
     match kind {
         AdapterKind::Peak => {
@@ -166,6 +175,7 @@ pub fn open_adapter(
                 listen_only,
                 fd_data_baud,
                 iso_mode,
+                auto_baud,
             )?;
             Ok(Box::new(adapter))
         }

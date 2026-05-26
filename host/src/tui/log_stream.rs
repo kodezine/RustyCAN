@@ -164,5 +164,6 @@ fn format_event(event: &CanEvent) -> Option<String> {
         }
         CanEvent::AdapterReconnected => Some("ADAPTER RECONNECTED — session resumed".into()),
         CanEvent::FirmwareVersion(maj, min, pat) => Some(format!("FW VERSION  v{maj}.{min}.{pat}")),
+        CanEvent::AutoBaudDetected(baud) => Some(format!("AUTO-BAUD DETECTED  {baud} bps")),
     }
 }

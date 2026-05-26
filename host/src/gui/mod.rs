@@ -375,6 +375,8 @@ struct ConnectForm {
     fd_data_baud: Option<u32>,
     /// ISO CAN FD mode: `true` = ISO 11898-1:2015, `false` = Bosch non-ISO.
     iso_mode: bool,
+    /// Auto-detect the nominal baud rate (KCAN only).
+    auto_baud: bool,
 }
 
 impl Clone for ConnectForm {
@@ -405,6 +407,7 @@ impl Clone for ConnectForm {
             message_history: self.message_history.clone(),
             fd_data_baud: self.fd_data_baud,
             iso_mode: self.iso_mode,
+            auto_baud: self.auto_baud,
         }
     }
 }
@@ -451,6 +454,9 @@ struct PersistedConfig {
     /// Absent field defaults to `true`.
     #[serde(default = "default_true")]
     iso_mode: bool,
+    /// Auto-detect nominal baud rate (KCAN only). Absent field defaults to `false`.
+    #[serde(default)]
+    auto_baud: bool,
 }
 
 fn default_true() -> bool {
@@ -544,6 +550,7 @@ impl PersistedConfig {
             message_history: vec![],
             fd_data_baud: self.fd_data_baud,
             iso_mode: self.iso_mode,
+            auto_baud: self.auto_baud,
         }
     }
 }
@@ -564,6 +571,7 @@ impl From<&ConnectForm> for PersistedConfig {
             http_port: None, // not persisted to the app-data config; set via --config file only
             fd_data_baud: form.fd_data_baud,
             iso_mode: form.iso_mode,
+            auto_baud: form.auto_baud,
         }
     }
 }
@@ -598,6 +606,7 @@ impl Default for ConnectForm {
                 message_history: vec![],
                 fd_data_baud: None,
                 iso_mode: true,
+                auto_baud: false,
             }
         }
     }
@@ -611,11 +620,14 @@ impl ConnectForm {
         dfu_path: Option<PathBuf>,
         app_update: Arc<Mutex<Option<crate::updater::AppUpdateRelease>>>,
     ) -> Result<MonitorView, String> {
-        let baud: u32 = self
-            .baud
-            .trim()
-            .parse()
-            .map_err(|_| format!("Invalid baud rate: {:?}", self.baud))?;
+        let baud: u32 = if self.auto_baud {
+            0 // placeholder; actual rate determined by auto-detection in the adapter
+        } else {
+            self.baud
+                .trim()
+                .parse()
+                .map_err(|_| format!("Invalid baud rate: {:?}", self.baud))?
+        };
 
         let sdo_timeout_ms: u64 = self
             .sdo_timeout_str
@@ -680,6 +692,7 @@ impl ConnectForm {
                 .collect(),
             fd_data_baud: self.fd_data_baud,
             iso_mode: self.iso_mode,
+            auto_baud: self.auto_baud,
             sse_tx: Some(sse_tx),
         };
 
@@ -1082,17 +1095,23 @@ fn render_connect(
                                 }
 
                                 ui.label("Baud rate (bps):");
-                                egui::ComboBox::from_id_salt("baud_combo")
-                                    .selected_text(format_bps(&form.baud))
-                                    .show_ui(ui, |ui| {
-                                        for &b in BAUD_OPTIONS {
-                                            ui.selectable_value(
-                                                &mut form.baud,
-                                                b.to_string(),
-                                                format_bps(b),
-                                            );
-                                        }
-                                    });
+                                ui.add_enabled_ui(!form.auto_baud, |ui| {
+                                    egui::ComboBox::from_id_salt("baud_combo")
+                                        .selected_text(if form.auto_baud {
+                                            "auto".into()
+                                        } else {
+                                            format_bps(&form.baud)
+                                        })
+                                        .show_ui(ui, |ui| {
+                                            for &b in BAUD_OPTIONS {
+                                                ui.selectable_value(
+                                                    &mut form.baud,
+                                                    b.to_string(),
+                                                    format_bps(b),
+                                                );
+                                            }
+                                        });
+                                });
                                 ui.end_row();
 
                                 ui.label("SDO timeout (ms):");
@@ -1204,6 +1223,17 @@ fn render_connect(
                                                 "Unchecked = Bosch non-ISO CAN FD (CCCR.NISO=1)",
                                             );
                                     }
+                                });
+                                ui.end_row();
+
+                                // ── Auto-baud (KCAN only) ─────────────────
+                                ui.label("Auto:");
+                                ui.add_enabled_ui(is_kcan, |ui| {
+                                    ui.checkbox(&mut form.auto_baud, "Auto-detect baud rate")
+                                        .on_hover_text(
+                                            "Probe standard CAN rates (10 k–1 M bps) in listen-only mode.\n\
+                                             The baud field is ignored while this is enabled.",
+                                        );
                                 });
                                 ui.end_row();
                             });
@@ -1958,6 +1988,10 @@ fn render_monitor(
                 break;
             }
             Ok(ev) => {
+                // Handle AutoBaudDetected specially to update the baud display field.
+                if let CanEvent::AutoBaudDetected(baud) = &ev {
+                    view.form.baud = baud.to_string();
+                }
                 let t_secs = SystemTime::now()
                     .duration_since(std::time::UNIX_EPOCH)
                     .unwrap_or_default()
@@ -4188,11 +4222,15 @@ pub fn load_session_config(
     let config = PersistedConfig::load_from(path)
         .ok_or_else(|| format!("Cannot read or parse config file: {}", path.display()))?;
 
-    let baud: u32 = config
-        .baud
-        .trim()
-        .parse()
-        .map_err(|_| format!("Invalid baud rate in config: {:?}", config.baud))?;
+    let baud: u32 = if config.auto_baud {
+        0
+    } else {
+        config
+            .baud
+            .trim()
+            .parse()
+            .map_err(|_| format!("Invalid baud rate in config: {:?}", config.baud))?
+    };
 
     let sdo_timeout_ms: u64 = config
         .sdo_timeout_str
@@ -4253,6 +4291,7 @@ pub fn load_session_config(
             .collect(),
         fd_data_baud: config.fd_data_baud,
         iso_mode: config.iso_mode,
+        auto_baud: config.auto_baud,
         sse_tx,
     })
 }

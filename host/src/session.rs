@@ -122,6 +122,9 @@ pub struct SessionConfig {
     /// ISO 11898-1:2015 CAN FD framing (true = ISO, false = Bosch non-ISO).
     /// Ignored when `fd_data_baud` is `None`.  Defaults to `true`.
     pub iso_mode: bool,
+    /// When `true`, skip the manually-configured `baud` and auto-detect the
+    /// nominal CAN rate by probing standard rates in listen-only mode (KCAN only).
+    pub auto_baud: bool,
     /// Optional SSE broadcast sender from [`crate::http_server::SseServer`].
     ///
     /// When `Some`, every JSONL log entry is also broadcast to all connected
@@ -259,6 +262,7 @@ pub fn start(config: SessionConfig) -> SessionResult {
     let listen_only = config.listen_only;
     let fd_data_baud = config.fd_data_baud;
     let iso_mode = config.iso_mode;
+    let auto_baud = config.auto_baud;
     let sdo_timeout_ms = config.sdo_timeout_ms;
     let block_initiate_timeout_ms = config.block_initiate_timeout_ms;
     let block_subblock_timeout_ms = config.block_subblock_timeout_ms;
@@ -274,6 +278,7 @@ pub fn start(config: SessionConfig) -> SessionResult {
             listen_only,
             fd_data_baud,
             iso_mode,
+            auto_baud,
         ) {
             Ok(a) => a,
             Err(e) => {
@@ -287,6 +292,13 @@ pub fn start(config: SessionConfig) -> SessionResult {
         // Emit firmware version for display / update-check in the TUI.
         if let Some((maj, min, pat)) = adapter.firmware_version() {
             let _ = tx.send(CanEvent::FirmwareVersion(maj, min, pat));
+        }
+        // Emit detected baud so the GUI can update the baud display.
+        if auto_baud {
+            let detected = adapter.actual_baud();
+            if detected > 0 {
+                let _ = tx.send(CanEvent::AutoBaudDetected(detected));
+            }
         }
         // Notify the UI that DBCs were loaded successfully.
         for name in dbc_filenames {
@@ -337,11 +349,19 @@ pub fn start(config: SessionConfig) -> SessionResult {
                 listen_only,
                 fd_data_baud,
                 iso_mode,
+                auto_baud,
             ) {
                 Ok(new_adapter) => {
                     eprintln!("KCAN: dongle reconnected — resuming session");
                     let _ = tx.send(CanEvent::AdapterReconnected);
                     logger.log_adapter_reconnected(Utc::now());
+                    // Emit detected baud after reconnect as well.
+                    if auto_baud {
+                        let detected = new_adapter.actual_baud();
+                        if detected > 0 {
+                            let _ = tx.send(CanEvent::AutoBaudDetected(detected));
+                        }
+                    }
                     backoff_ms = 500; // reset for next potential disconnect
                     let disconnected_again = recv_loop(
                         new_adapter,
