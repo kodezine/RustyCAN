@@ -122,6 +122,8 @@ pub fn open_adapter(
     port: &str,
     baud: u32,
     listen_only: bool,
+    fd_data_baud: Option<u32>,
+    iso_mode: bool,
 ) -> Result<Box<dyn CanAdapter>, AdapterError> {
     match kind {
         AdapterKind::Peak => {
@@ -158,7 +160,13 @@ pub fn open_adapter(
             ))
         }
         AdapterKind::KCan { serial } => {
-            let adapter = kcan::KCanAdapter::open(serial.as_deref(), baud, listen_only)?;
+            let adapter = kcan::KCanAdapter::open(
+                serial.as_deref(),
+                baud,
+                listen_only,
+                fd_data_baud,
+                iso_mode,
+            )?;
             Ok(Box::new(adapter))
         }
     }

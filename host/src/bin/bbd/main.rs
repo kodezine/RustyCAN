@@ -313,7 +313,7 @@ fn main() {
     println!("--------------------------------------------------------------------");
 
     // ── Open adapter ──────────────────────────────────────────────────────────
-    let adapter = match open_adapter(&adapter_kind, &cli.port, cli.baud, false) {
+    let adapter = match open_adapter(&adapter_kind, &cli.port, cli.baud, false, None, true) {
         Ok(a) => {
             println!("Adapter opened: {}", a.name());
             a

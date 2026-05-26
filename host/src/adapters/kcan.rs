@@ -12,7 +12,9 @@ use nusb::{DeviceInfo, Endpoint, MaybeFuture};
 
 use host_can::frame::CanFrame;
 
-use kcan_protocol::control::{KCanBitTiming, KCanBtConst, KCanDeviceInfo, KCanMode, RequestCode};
+use kcan_protocol::control::{
+    KCanBitTiming, KCanBtConst, KCanDeviceInfo, KCanMode, KCanModeFdFlags, RequestCode,
+};
 use kcan_protocol::frame::{FrameFlags, FrameType, KCanFrame, KCAN_FRAME_SIZE};
 
 use super::{AdapterError, CanAdapter, ReceivedFrame};
@@ -44,7 +46,21 @@ pub struct KCanAdapter {
 }
 
 impl KCanAdapter {
-    pub fn open(serial: Option<&str>, baud: u32, listen_only: bool) -> Result<Self, AdapterError> {
+    /// Open the KCAN dongle adapter.
+    ///
+    /// * `fd_data_baud` — when `Some`, enables CAN FD with bit-rate switching
+    ///   (BRS) at the given data-phase bitrate (e.g. `Some(2_000_000)` for 2 Mbit/s).
+    ///   Must be one of the bitrates achievable at the FDCAN kernel clock
+    ///   (32 MHz → 500 kbps / 1 Mbps / 2 Mbps).  `None` → classic CAN.
+    /// * `iso_mode` — when `true` (default), ISO 11898-1:2015 CAN FD framing is used;
+    ///   when `false`, Bosch non-ISO framing (CCCR.NISO=1).  Ignored in classic mode.
+    pub fn open(
+        serial: Option<&str>,
+        baud: u32,
+        listen_only: bool,
+        fd_data_baud: Option<u32>,
+        iso_mode: bool,
+    ) -> Result<Self, AdapterError> {
         let dev_info = find_device_info(serial)?;
         let device = dev_info
             .open()
@@ -135,8 +151,33 @@ impl KCanAdapter {
             .wait()
             .map_err(|e| AdapterError::Protocol(format!("SET_BITTIMING: {e:?}")))?;
 
+        // SET_FD_BITTIMING — only when CAN FD is requested.
+        if let Some(fd_baud) = fd_data_baud {
+            let fd_bt = KCanBitTiming::for_fd_data_bitrate(clock_hz, fd_baud).ok_or_else(|| {
+                AdapterError::Protocol(format!(
+                    "cannot achieve FD data bitrate {fd_baud} bps at {clock_hz} Hz \
+                         (supported: 500000, 1000000, 2000000)"
+                ))
+            })?;
+            iface
+                .control_out(
+                    ctrl_out(RequestCode::SetFdBitTiming as u8, &fd_bt.to_bytes()),
+                    CTRL_TIMEOUT,
+                )
+                .wait()
+                .map_err(|e| AdapterError::Protocol(format!("SET_FD_BITTIMING: {e:?}")))?;
+        }
+
         // SET_MODE — bus on.
-        let mode = KCanMode::bus_on(listen_only, false);
+        let mode = if fd_data_baud.is_some() {
+            let mut fd_flags = KCanModeFdFlags::FD_ENABLED;
+            if !iso_mode {
+                fd_flags |= KCanModeFdFlags::NON_ISO;
+            }
+            KCanMode::bus_on_fd(listen_only, false, fd_flags)
+        } else {
+            KCanMode::bus_on(listen_only, false)
+        };
         iface
             .control_out(
                 ctrl_out(RequestCode::SetMode as u8, &mode.to_bytes()),

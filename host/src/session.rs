@@ -258,7 +258,7 @@ pub fn start(config: SessionConfig) -> SessionResult {
     let adapter_kind = config.adapter_kind.clone();
 
     thread::spawn(move || {
-        let adapter = match open_adapter(&adapter_kind, &port, baud, listen_only) {
+        let adapter = match open_adapter(&adapter_kind, &port, baud, listen_only, None, true) {
             Ok(a) => a,
             Err(e) => {
                 // Send the error to the GUI, then exit the thread cleanly.
@@ -314,7 +314,7 @@ pub fn start(config: SessionConfig) -> SessionResult {
                 return;
             }
 
-            match open_adapter(&adapter_kind, &port, baud, listen_only) {
+            match open_adapter(&adapter_kind, &port, baud, listen_only, None, true) {
                 Ok(new_adapter) => {
                     eprintln!("KCAN: dongle reconnected — resuming session");
                     let _ = tx.send(CanEvent::AdapterReconnected);

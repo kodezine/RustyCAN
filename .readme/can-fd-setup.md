@@ -135,12 +135,13 @@ static USB_CONFIGURED: Signal<_, bool>  // fires on USB enumeration / disconnect
   - [x] `can_task.rs`: signature changed from `Can<'static>` to `CanConfigurator<'static>`; awaits `CAN_CONFIG.receive()`; applies optional `DataBitTiming`; replaced `select()` loop with `join()` (RX/TX concurrent, no TX starvation); added FD RX/TX frame handling and helpers
   - [x] `main.rs`: removed `set_bitrate()`/`into_normal_mode()` pre-init; passes `can1_cfg`/`can2_cfg` (as `CanConfigurator`) to both `can_task` spawns
 
-- [ ] **Phase 6** — Host adapter FD params
-  - Files: [`host/src/adapters/kcan.rs`](../host/src/adapters/kcan.rs)
-  - [ ] `KCanAdapter::open()` gains `fd_data_baud: Option<u32>`, `iso_mode: bool` params
-  - [ ] After `SET_BITTIMING`: if FD, compute data timing via `KCanBitTiming::for_fd_data_bitrate()` → send `SET_FD_BITTIMING`
-  - [ ] `SET_MODE` payload: populate `fd_flags` byte (`FD_ENABLED` + optionally `NON_ISO`)
-  - [ ] PEAK adapter: no changes — new params silently ignored in `open_adapter()` dispatch
+- [x] **Phase 6** — Host adapter FD params
+  - Files: [`host/src/adapters/kcan.rs`](../host/src/adapters/kcan.rs), [`host/src/adapters/mod.rs`](../host/src/adapters/mod.rs)
+  - [x] `KCanAdapter::open()` gains `fd_data_baud: Option<u32>`, `iso_mode: bool` params
+  - [x] After `SET_BITTIMING`: if FD, compute `KCanBitTiming::for_fd_data_bitrate()` → send `SET_FD_BITTIMING`; error if bitrate not achievable
+  - [x] `SET_MODE` payload: `KCanMode::bus_on_fd()` with `FD_ENABLED` + optionally `NON_ISO` when FD; classic path unchanged
+  - [x] `open_adapter()` in `mod.rs` gains same two params and passes them through; PEAK arm ignores them
+  - [x] Call sites in `session.rs` (×2) and `bbd/main.rs` updated with `None, true` placeholders (Phase 7 wires real config)
 
 - [ ] **Phase 7** — Session + JSON config
   - Files: [`host/src/session.rs`](../host/src/session.rs), [`host/config.example.json`](../host/config.example.json), [`host/config.kcan.json`](../host/config.kcan.json), [`host/config.kcan-h743.json`](../host/config.kcan-h743.json)
