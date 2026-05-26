@@ -19,6 +19,7 @@ use embassy_sync::signal::Signal;
 use embassy_usb::driver::EndpointError;
 use embassy_usb::UsbDevice;
 
+use kcan_protocol::control::KCanFdConfig;
 use kcan_protocol::frame::{KCanFrame, KCAN_FRAME_SIZE};
 
 use crate::dfu_app::MARK_BOOTED;
@@ -44,6 +45,12 @@ pub static BULK_RESTART: Signal<CriticalSectionRawMutex, ()> = Signal::new();
 /// The can_task reads this before every TX and silently drops the frame when set.
 /// Reset to false on SET_MODE bus-off (host closed the port).
 pub static LISTEN_ONLY: AtomicBool = AtomicBool::new(false);
+
+/// Sent by the SET_MODE(BUS_ON) EP0 handler with the full bus configuration.
+/// Capacity 2 — one slot per FDCAN channel; ep0_handler sends two copies so
+/// both `can_task` instances (pool_size=2) each receive an independent copy.
+pub static CAN_CONFIG: embassy_sync::channel::Channel<CriticalSectionRawMutex, KCanFdConfig, 2> =
+    embassy_sync::channel::Channel::new();
 
 #[embassy_executor::task]
 pub async fn usb_device_task(

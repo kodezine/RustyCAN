@@ -189,29 +189,12 @@ async fn main(spawner: Spawner) {
     let led_err = Output::new(p.PB14, Level::Low, Speed::Low);
 
     // ── FDCAN1: channel 0 — SN65HVD230 module 1 (PD0/PD1) ───────────────────
-    let mut can1_cfg = can::CanConfigurator::new(p.FDCAN1, p.PD0, p.PD1, Irqs);
-    can1_cfg.set_bitrate(250_000);
-    #[cfg(not(feature = "loopback"))]
-    let can = {
-        let c = can1_cfg.into_normal_mode();
-        info!("FDCAN1: normal mode, 250 kbps (PLL2Q = 32 MHz)");
-        c
-    };
-    #[cfg(feature = "loopback")]
-    let can = {
-        let c = can1_cfg.into_internal_loopback_mode();
-        info!("FDCAN1: INTERNAL LOOPBACK mode, 250 kbps — Phase 2 self-test");
-        c
-    };
+    // Bitrate and FD timing are deferred — can_task awaits CAN_CONFIG from the
+    // EP0 SET_MODE(BUS_ON) handler before calling into_normal_mode().
+    let can1_cfg = can::CanConfigurator::new(p.FDCAN1, p.PD0, p.PD1, Irqs);
 
     // ── FDCAN2: channel 1 — SN65HVD230 module 2 (PB5/PB6) ────────────────────
-    let mut can2_cfg = can::CanConfigurator::new(p.FDCAN2, p.PB5, p.PB6, Irqs);
-    can2_cfg.set_bitrate(250_000);
-    let can2 = {
-        let c = can2_cfg.into_normal_mode();
-        info!("FDCAN2: normal mode, 250 kbps (channel 1)");
-        c
-    };
+    let can2_cfg = can::CanConfigurator::new(p.FDCAN2, p.PB5, p.PB6, Irqs);
 
     // ── USB OTG FS ───────────────────────────────────────────────────────────
     // ep_out_buffer must be 'static for the driver lifetime.
@@ -311,7 +294,7 @@ async fn main(spawner: Spawner) {
     spawner.spawn(dfu_app::dfu_app_task(p.FLASH).ok().unwrap());
     spawner.spawn(
         can_task::can_task(
-            can,
+            can1_cfg,
             0,
             &CAN_TO_USB,
             &USB_TO_CAN,
@@ -323,7 +306,7 @@ async fn main(spawner: Spawner) {
     );
     spawner.spawn(
         can_task::can_task(
-            can2,
+            can2_cfg,
             1,
             &CAN_TO_USB,
             &USB_TO_CAN2,

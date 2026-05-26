@@ -128,9 +128,12 @@ static USB_CONFIGURED: Signal<_, bool>  // fires on USB enumeration / disconnect
   - [x] Added `kcan_to_fd_frame()`: builds `FdFrame` with `Header::new_fd(id, dlc, rtr, brs)`
   - [x] Import fix: `embassy_stm32::can::config` (not `::can::fd::config` — `fd` is private)
 
-- [ ] **Phase 5** — dongle-h753 mirror *(parallel with 2–4)*
-  - Files: [`firmware/dongle-h753/src/main.rs`](../firmware/dongle-h753/src/main.rs), [`firmware/dongle-h753/src/ep0_handler.rs`](../firmware/dongle-h753/src/ep0_handler.rs), [`firmware/dongle-h753/src/can_task.rs`](../firmware/dongle-h753/src/can_task.rs)
-  - Same changes as Phases 2–4; key difference: dual FDCAN channels (both `can1_cfg` + `can2_cfg` get FD config)
+- [x] **Phase 5** — dongle-h753 mirror *(parallel with 2–4)*
+  - Files: [`firmware/dongle-h753/src/main.rs`](../firmware/dongle-h753/src/main.rs), [`firmware/dongle-h753/src/ep0_handler.rs`](../firmware/dongle-h753/src/ep0_handler.rs), [`firmware/dongle-h753/src/can_task.rs`](../firmware/dongle-h753/src/can_task.rs), [`firmware/dongle-h753/src/usb_task.rs`](../firmware/dongle-h753/src/usb_task.rs)
+  - [x] `usb_task.rs`: added `CAN_CONFIG: Channel<_, KCanFdConfig, 2>` (capacity 2, one slot per FDCAN channel)
+  - [x] `ep0_handler.rs`: added `PENDING_NOMINAL_BT` + `PENDING_FD_BT` statics; `SET_BITTIMING` stores timing; added `SET_FD_BITTIMING (0x03)` handler; `SET_MODE BUS_ON` assembles `KCanFdConfig` and `try_send`s TWO copies (one per channel)
+  - [x] `can_task.rs`: signature changed from `Can<'static>` to `CanConfigurator<'static>`; awaits `CAN_CONFIG.receive()`; applies optional `DataBitTiming`; replaced `select()` loop with `join()` (RX/TX concurrent, no TX starvation); added FD RX/TX frame handling and helpers
+  - [x] `main.rs`: removed `set_bitrate()`/`into_normal_mode()` pre-init; passes `can1_cfg`/`can2_cfg` (as `CanConfigurator`) to both `can_task` spawns
 
 - [ ] **Phase 6** — Host adapter FD params
   - Files: [`host/src/adapters/kcan.rs`](../host/src/adapters/kcan.rs)

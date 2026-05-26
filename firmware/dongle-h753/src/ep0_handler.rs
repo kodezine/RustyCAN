@@ -20,7 +20,10 @@
 use embassy_usb::control::{InResponse, OutResponse, Recipient, Request, RequestType};
 use embassy_usb::Handler;
 
-use kcan_protocol::control::{KCanBtConst, KCanDeviceInfo, KCanMode, KCanModeFlags, RequestCode};
+use kcan_protocol::control::{
+    KCanBitTiming, KCanBtConst, KCanDeviceInfo, KCanFdConfig, KCanMode, KCanModeFdFlags,
+    KCanModeFlags, RequestCode,
+};
 
 use defmt::*;
 
@@ -28,6 +31,17 @@ use defmt::*;
 mod version {
     include!(concat!(env!("OUT_DIR"), "/version_consts.rs"));
 }
+
+// ─── Pending bit-timing storage ───────────────────────────────────────────────
+use core::cell::Cell;
+use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
+use embassy_sync::blocking_mutex::Mutex;
+
+static PENDING_NOMINAL_BT: Mutex<CriticalSectionRawMutex, Cell<Option<KCanBitTiming>>> =
+    Mutex::new(Cell::new(None));
+
+static PENDING_FD_BT: Mutex<CriticalSectionRawMutex, Cell<Option<KCanBitTiming>>> =
+    Mutex::new(Cell::new(None));
 
 /// EP0 vendor handler: responds to GET_INFO / GET_BT_CONST and ACKs
 /// SET_BITTIMING / SET_MODE.  Also signals USB connection state.
@@ -90,52 +104,101 @@ impl Handler for KCanEp0Handler {
 
         match req.request {
             r if r == RequestCode::SetBitTiming as u8 => {
-                // ACK the host's timing parameters; firmware always runs at
-                // 250 kbps (configured at init) and the host will compute
-                // the same BRP=8 from our 32 MHz clock constant.
-                info!("EP0 SET_BITTIMING accepted (250 kbps fixed)");
+                if let Some(bt) = _data
+                    .get(..16)
+                    .and_then(|s| <&[u8; 16]>::try_from(s).ok())
+                    .map(KCanBitTiming::from_bytes)
+                {
+                    let (brp, tseg1, tseg2) = (bt.brp, bt.tseg1, bt.tseg2);
+                    let tq = 1 + tseg1 + tseg2;
+                    if brp > 0 && tq > 0 {
+                        let kbps = KCanBtConst::H753_32MHZ.clock_hz / (brp * tq) / 1_000;
+                        info!("EP0 SET_BITTIMING → {} kbps", kbps);
+                    }
+                    PENDING_NOMINAL_BT.lock(|c| c.set(Some(bt)));
+                } else {
+                    info!("EP0 SET_BITTIMING accepted");
+                }
+                Some(OutResponse::Accepted)
+            }
+            r if r == RequestCode::SetFdBitTiming as u8 => {
+                if let Some(bt) = _data
+                    .get(..16)
+                    .and_then(|s| <&[u8; 16]>::try_from(s).ok())
+                    .map(KCanBitTiming::from_bytes)
+                {
+                    let (brp, tseg1, tseg2, sjw) = (bt.brp, bt.tseg1, bt.tseg2, bt.sjw);
+                    info!(
+                        "EP0 SET_FD_BITTIMING → BRP={} TSEG1={} TSEG2={} SJW={}",
+                        brp, tseg1, tseg2, sjw
+                    );
+                    PENDING_FD_BT.lock(|c| c.set(Some(bt)));
+                } else {
+                    info!("EP0 SET_FD_BITTIMING: invalid payload");
+                }
                 Some(OutResponse::Accepted)
             }
             r if r == RequestCode::SetMode as u8 => {
-                // Parse the mode payload to distinguish bus-on vs bus-off and
-                // extract the listen-only flag.
-                let flags = if _data.len() >= 4 {
+                let (flags, fd_flags) = if _data.len() >= 4 {
                     let arr: [u8; 4] = _data[..4].try_into().unwrap();
-                    KCanMode::from_bytes(&arr).flags
+                    let m = KCanMode::from_bytes(&arr);
+                    (m.flags, m.fd_flags)
                 } else if !_data.is_empty() {
-                    _data[0]
+                    (_data[0], 0u8)
                 } else {
-                    0
+                    (0u8, 0u8)
                 };
 
                 if flags & KCanModeFlags::BUS_OFF != 0 {
-                    // Host app closed — clear listen-only state.
                     info!("EP0 SET_MODE bus-off (app closed)");
                     crate::usb_task::LISTEN_ONLY
                         .store(false, core::sync::atomic::Ordering::Relaxed);
                 } else {
-                    // BUS_ON — store the listen-only flag so the can_task can
-                    // gate TX frames accordingly.  This is the only place the
-                    // flag changes; it is reset on bus-off (above) and on USB
-                    // disconnect (configured(false) does not clear it, but the
-                    // can_task will not run TX while USB is unconfigured).
                     let listen_only = flags & KCanModeFlags::LISTEN_ONLY != 0;
                     crate::usb_task::LISTEN_ONLY
                         .store(listen_only, core::sync::atomic::Ordering::Relaxed);
-                    if listen_only {
-                        info!("EP0 SET_MODE bus-on (listen-only)");
+
+                    let nominal_baud = PENDING_NOMINAL_BT
+                        .lock(|c| c.get())
+                        .and_then(|bt| {
+                            let tq = 1 + bt.tseg1 + bt.tseg2;
+                            if bt.brp > 0 && tq > 0 {
+                                Some(KCanBtConst::H753_32MHZ.clock_hz / (bt.brp * tq))
+                            } else {
+                                None
+                            }
+                        })
+                        .unwrap_or(250_000);
+
+                    let fd_enabled = fd_flags & KCanModeFdFlags::FD_ENABLED != 0;
+                    let fd_timing = if fd_enabled {
+                        PENDING_FD_BT.lock(|c| c.get())
                     } else {
-                        info!("EP0 SET_MODE bus-on");
+                        None
+                    };
+                    let iso = fd_flags & KCanModeFdFlags::NON_ISO == 0;
+
+                    let cfg = KCanFdConfig {
+                        nominal_baud,
+                        fd_timing,
+                        iso,
+                        mode_flags: flags,
+                    };
+                    // Send one copy per FDCAN channel (pool_size = 2).
+                    let _ = crate::usb_task::CAN_CONFIG.try_send(cfg);
+                    let _ = crate::usb_task::CAN_CONFIG.try_send(cfg);
+
+                    if listen_only {
+                        info!(
+                            "EP0 SET_MODE bus-on (listen-only, {} bps, fd={})",
+                            nominal_baud, fd_enabled
+                        );
+                    } else {
+                        info!(
+                            "EP0 SET_MODE bus-on ({} bps, fd={})",
+                            nominal_baud, fd_enabled
+                        );
                     }
-                    // Signal the IO task that a new host session is starting.
-                    // SET_MODE is sent by the host on every open() call.  We only
-                    // fire BULK_RESTART here — USB_CONFIGURED is gated exclusively
-                    // by the physical configured() callback (SET_CONFIGURATION).
-                    // Signalling USB_CONFIGURED from SET_MODE caused a deadlock:
-                    // the outer USB_CONFIGURED.wait() consumed the signal, then
-                    // BULK_RESTART immediately re-fired it within the same select
-                    // iteration, leaving USB_CONFIGURED empty after BULK_RESTART
-                    // handling so the outer loop would block forever.
                     crate::usb_task::BULK_RESTART.signal(());
                 }
                 Some(OutResponse::Accepted)
