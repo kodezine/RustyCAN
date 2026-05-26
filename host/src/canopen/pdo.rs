@@ -70,22 +70,33 @@ pub struct PdoDecoder {
 impl PdoDecoder {
     /// Build a `PdoDecoder` from an EDS object dictionary for `node_id`.
     ///
-    /// Reads TPDO communication parameters (0x1800–0x1803) and mapping
-    /// objects (0x1A00–0x1A03). RPDO entries (0x1400/0x1600) are
-    /// similarly processed.
+    /// Reads TPDO communication parameters (0x1800–0x19FF) and mapping
+    /// objects (0x1A00–0x1BFF). RPDO entries (0x1400–0x15FF / 0x1600–0x17FF)
+    /// are similarly processed.  Supports extended PDO counts beyond 4 (CiA 301
+    /// + XDD `nrOfEntries` sub-object determines the upper bound).
     pub fn from_od(node_id: u8, od: &ObjectDictionary) -> Self {
         let mut mappings = HashMap::new();
 
         // Process both TPDO (0x1800/0x1A00) and RPDO (0x1400/0x1600).
-        let pdo_ranges: &[(u16, u16)] = &[
-            (0x1800, 0x1A00), // TPDO
-            (0x1400, 0x1600), // RPDO
+        // Full CiA 301 range: up to 512 PDOs per direction.
+        let pdo_ranges: &[(u16, u16, u16)] = &[
+            (0x1800, 0x1A00, 0x19FF), // TPDO comm / TPDO map / last comm index
+            (0x1400, 0x1600, 0x15FF), // RPDO comm / RPDO map / last comm index
         ];
 
-        for &(comm_base, map_base) in pdo_ranges {
-            for pdo_num in 0..4u16 {
+        for &(comm_base, map_base, comm_end) in pdo_ranges {
+            let max_pdo_num = comm_end - comm_base + 1;
+            for pdo_num in 0..max_pdo_num {
                 let comm_idx = comm_base + pdo_num;
                 let map_idx = map_base + pdo_num;
+
+                // Stop the scan when neither the comm nor the map object exists in
+                // the OD — avoids iterating all 512 slots for short EDS files.
+                let has_comm = od.get(&(comm_idx, 0)).is_some() || od.get(&(comm_idx, 1)).is_some();
+                let has_map = od.get(&(map_idx, 0)).is_some();
+                if !has_comm && !has_map {
+                    break;
+                }
 
                 // Determine COB-ID.  Subindex 1 of the comm params holds the
                 // 32-bit COB-ID; the MSB (bit 31) is the "invalid/disabled" flag.
@@ -168,6 +179,8 @@ impl PdoDecoder {
     /// Decode a PDO data payload for the given COB-ID.
     ///
     /// Returns `None` if COB-ID is not in the mapping table.
+    /// Payload length is not capped at 8 bytes — CAN FD payloads up to 64 bytes
+    /// are supported via [`fd_dlc_to_bytes`].
     pub fn decode(&self, cob_id: u16, data: &[u8]) -> Option<Vec<PdoValue>> {
         let (_, signals) = self.mappings.get(&cob_id)?;
         let values = signals
@@ -183,6 +196,24 @@ impl PdoDecoder {
     /// Return the EDS-derived 1-based PDO number for a given COB-ID, if known.
     pub fn pdo_num_for_cob_id(&self, cob_id: u16) -> Option<u8> {
         self.mappings.get(&cob_id).map(|(pdo_num, _)| *pdo_num)
+    }
+}
+
+/// Convert a CAN FD DLC value to the actual byte count.
+///
+/// DLC 0–8 map 1:1 (classic CAN compatible).  DLC 9–15 use the extended
+/// CAN FD length table defined in ISO 11898-1:2015.
+pub fn fd_dlc_to_bytes(dlc: u8) -> usize {
+    match dlc {
+        0..=8 => dlc as usize,
+        9 => 12,
+        10 => 16,
+        11 => 20,
+        12 => 24,
+        13 => 32,
+        14 => 48,
+        15 => 64,
+        _ => 64, // Values above 15 are not valid DLC; clamp to 64.
     }
 }
 
