@@ -477,6 +477,65 @@ impl EventLogger {
         self.log(entry);
         self.write_text_line(&ts_str, "RAW_FRAME", &cob_id_str, raw);
     }
+
+    /// Log a CANopen USDO (CiA 602) transfer event.
+    pub fn log_usdo(
+        &mut self,
+        ts: DateTime<Utc>,
+        ev: &crate::canopen::usdo::UsdoEvent,
+        raw: &[u8],
+        cob_id: u16,
+    ) {
+        let ts_str = ts.to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
+        let cob_id_str = format!("0x{cob_id:03X}");
+        let direction = if ev.is_request { "request" } else { "response" };
+        let rw = if ev.is_read { "read" } else { "write" };
+        let entry = json!({
+            "ts": ts_str,
+            "type": "usdo",
+            "cob_id": cob_id_str,
+            "source_node": ev.node_id,
+            "node_id": ev.node_id,
+            "direction": direction,
+            "rw": rw,
+            "index": format!("0x{:04X}", ev.index),
+            "subindex": ev.subindex,
+            "data": bytes_to_hex(&ev.data),
+            "abort_code": ev.abort_code.map(|c| format!("0x{c:08X}")),
+            "raw": bytes_to_hex(raw),
+        });
+        self.log(entry);
+        self.write_text_line(&ts_str, "USDO", &cob_id_str, raw);
+    }
+
+    /// Log a CANopen Emergency (EMCY) event.
+    pub fn log_emcy(
+        &mut self,
+        ts: DateTime<Utc>,
+        ev: &crate::canopen::emcy::EmcyEvent,
+        raw: &[u8],
+        cob_id: u16,
+    ) {
+        let ts_str = ts.to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
+        let cob_id_str = format!("0x{cob_id:03X}");
+        let description = crate::canopen::emcy::describe_error_code(ev.error_code);
+        let reg_str = crate::canopen::emcy::describe_error_register(ev.error_register);
+        let entry = json!({
+            "ts": ts_str,
+            "type": "emcy",
+            "cob_id": cob_id_str,
+            "source_node": ev.node_id,
+            "node_id": ev.node_id,
+            "error_code": format!("0x{:04X}", ev.error_code),
+            "description": description,
+            "error_register": format!("0x{:02X}", ev.error_register),
+            "error_register_bits": reg_str,
+            "vendor_data": bytes_to_hex(&ev.vendor_data),
+            "raw": bytes_to_hex(raw),
+        });
+        self.log(entry);
+        self.write_text_line(&ts_str, "EMCY", &cob_id_str, raw);
+    }
 }
 
 impl Drop for EventLogger {

@@ -15,7 +15,9 @@ use crate::adapters::{open_adapter, probe_adapter_kind, AdapterKind};
 
 use crate::app::{CanEvent, SdoLogEntry};
 use crate::canopen::{
-    self, classify_frame, extract_cob_id,
+    self, classify_frame,
+    emcy::decode_emcy,
+    extract_cob_id,
     nmt::{decode_heartbeat, decode_nmt_command, encode_nmt_command, NmtCommand},
     pdo::PdoDecoder,
     sdo::{
@@ -30,6 +32,7 @@ use crate::canopen::{
         encode_upload_request, encode_upload_segment_ack, interpret_value,
         is_download_initiate_ack, is_download_segment_ack, SdoDirection, SdoTransferMode,
     },
+    usdo::decode_usdo,
     FrameType,
 };
 use crate::dbc::{self, DbcDatabase};
@@ -1998,6 +2001,28 @@ fn recv_loop(
                     .is_err()
                 {
                     return false;
+                }
+            }
+
+            // ── Emergency (EMCY) ──────────────────────────────────────────
+            FrameType::Emergency(node_id) => {
+                if let Some(ev) = decode_emcy(node_id, data) {
+                    logger.log_emcy(ts, &ev, data, cob_id);
+                    logged = true;
+                    if tx.send(CanEvent::Emcy(ev)).is_err() {
+                        return false;
+                    }
+                }
+            }
+
+            // ── USDO ──────────────────────────────────────────────────────
+            FrameType::UsdoRequest | FrameType::UsdoResponse => {
+                if let Some(ev) = decode_usdo(cob_id, data) {
+                    logger.log_usdo(ts, &ev, data, cob_id);
+                    logged = true;
+                    if tx.send(CanEvent::Usdo(ev)).is_err() {
+                        return false;
+                    }
                 }
             }
 

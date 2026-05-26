@@ -8,9 +8,11 @@ use std::time::{Duration, Instant};
 
 use chrono::{DateTime, Utc};
 
+use crate::canopen::emcy::EmcyEvent;
 use crate::canopen::nmt::NmtState;
 use crate::canopen::pdo::PdoValue;
 use crate::canopen::sdo::{SdoDirection, SdoValue};
+use crate::canopen::usdo::UsdoEvent;
 use crate::dbc::types::{DbcByteOrder, DbcFrameSignals, DbcValueType};
 
 // ─── Type aliases ─────────────────────────────────────────────────────────────
@@ -112,6 +114,10 @@ pub enum CanEvent {
         /// Source CAN channel: 0 = FDCAN1, 1 = FDCAN2.
         port: u8,
     },
+    /// A decoded CANopen Emergency (EMCY) event.
+    Emcy(EmcyEvent),
+    /// A decoded USDO transfer event.
+    Usdo(UsdoEvent),
 }
 
 // ─── Application state ───────────────────────────────────────────────────────
@@ -124,6 +130,12 @@ pub struct AppState {
     pub pdo_values: HashMap<(u8, u16), PdoEntry>,
     /// Ring buffer of recent SDO events.
     pub sdo_log: VecDeque<SdoLogEntry>,
+    /// Ring buffer of recent EMCY events, newest last.
+    ///
+    /// All nodes share a single log capped at [`EMCY_LOG_CAP`] entries.
+    pub emcy_log: VecDeque<EmcyEvent>,
+    /// Ring buffer of recent USDO transfer events, newest last.
+    pub usdo_log: VecDeque<UsdoEvent>,
     /// In-flight SDO transfers initiated by the master: node_id → (index, subindex, direction).
     pub pending_sdos: HashMap<u8, (u16, u8, SdoDirection)>,
     /// Live DBC signal values: (can_id, signal_name) → entry.
@@ -157,6 +169,8 @@ pub struct AppState {
 }
 
 const SDO_LOG_CAP: usize = 50;
+const EMCY_LOG_CAP: usize = 20;
+const USDO_LOG_CAP: usize = 50;
 const FPS_WINDOW_SECS: f64 = 2.0;
 
 impl AppState {
@@ -165,6 +179,8 @@ impl AppState {
             node_map: HashMap::new(),
             pdo_values: HashMap::new(),
             sdo_log: VecDeque::with_capacity(SDO_LOG_CAP + 1),
+            emcy_log: VecDeque::with_capacity(EMCY_LOG_CAP + 1),
+            usdo_log: VecDeque::with_capacity(USDO_LOG_CAP + 1),
             pending_sdos: HashMap::new(),
             dbc_signals: HashMap::new(),
             last_raw_bytes: HashMap::new(),
@@ -221,6 +237,20 @@ impl AppState {
             self.sdo_log.pop_front();
         }
         self.sdo_log.push_back(entry);
+    }
+
+    pub fn push_emcy(&mut self, event: EmcyEvent) {
+        if self.emcy_log.len() >= EMCY_LOG_CAP {
+            self.emcy_log.pop_front();
+        }
+        self.emcy_log.push_back(event);
+    }
+
+    pub fn push_usdo(&mut self, event: UsdoEvent) {
+        if self.usdo_log.len() >= USDO_LOG_CAP {
+            self.usdo_log.pop_front();
+        }
+        self.usdo_log.push_back(event);
     }
 
     pub fn update_pdo(&mut self, node_id: u8, cob_id: u16, values: Vec<PdoValue>) {
@@ -284,6 +314,12 @@ pub fn apply_event(state: &mut AppState, ev: CanEvent) {
         }
         // Raw frames not decoded by DBC or CANopen — nothing to record in state.
         CanEvent::RawFrame { .. } => {}
+        CanEvent::Emcy(ev) => {
+            state.push_emcy(ev);
+        }
+        CanEvent::Usdo(ev) => {
+            state.push_usdo(ev);
+        }
         CanEvent::DbcSignal(frame_signals) => {
             let now = Instant::now();
             // Store the raw payload so the GUI can use it as a base for writes.

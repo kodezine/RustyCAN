@@ -2,6 +2,7 @@ pub mod emcy;
 pub mod nmt;
 pub mod pdo;
 pub mod sdo;
+pub mod usdo;
 
 use embedded_can::Id;
 use host_can::frame::CanFrame;
@@ -25,6 +26,10 @@ pub enum FrameType {
     SdoRequest(u8),
     /// NMT heartbeat / bootup message (COB-ID 0x700–0x77F).
     Heartbeat(u8),
+    /// USDO client-to-server frame (COB-ID 0x7E5).
+    UsdoRequest,
+    /// USDO server-to-client frame (COB-ID 0x7E9).
+    UsdoResponse,
     /// COB-ID not mapped to a known CANopen service.
     Unknown(u16),
 }
@@ -59,6 +64,8 @@ pub fn classify_frame(cob_id: u16) -> FrameType {
         0x580..=0x5FF => FrameType::SdoResponse(node),
         0x600..=0x67F => FrameType::SdoRequest(node),
         0x700..=0x77F => FrameType::Heartbeat(node),
+        usdo::USDO_COB_CLIENT => FrameType::UsdoRequest,
+        usdo::USDO_COB_SERVER => FrameType::UsdoResponse,
         other => FrameType::Unknown(other),
     }
 }

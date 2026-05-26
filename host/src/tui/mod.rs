@@ -732,6 +732,17 @@ fn event_to_log_line(event: &CanEvent) -> Option<String> {
         CanEvent::AdapterReconnected => Some("ADAPTER RECONNECTED — session resumed".into()),
         CanEvent::FirmwareVersion(maj, min, pat) => Some(format!("FW VERSION  v{maj}.{min}.{pat}")),
         CanEvent::AutoBaudDetected(baud) => Some(format!("AUTO-BAUD DETECTED  {baud} bps")),
+        CanEvent::Emcy(ev) => Some(format!(
+            "EMCY N{:02} code=0x{:04X} reg=0x{:02X}",
+            ev.node_id, ev.error_code, ev.error_register
+        )),
+        CanEvent::Usdo(ev) => Some(format!(
+            "USDO N{:02} {:04X}h.{:02X} {}",
+            ev.node_id,
+            ev.index,
+            ev.subindex,
+            if ev.is_read { "R" } else { "W" }
+        )),
     }
 }
 

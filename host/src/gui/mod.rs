@@ -124,7 +124,9 @@ mod icons {
     pub const SDO_HEADER: &str = "\u{f0f6}"; // file-text
     pub const SDO_BROWSER: &str = "\u{f002}"; // search
     pub const DBC_HEADER: &str = "\u{f1c9}"; // file-code-o
-                                             // NMT states
+    pub const EMCY_HEADER: &str = "\u{f0e7}"; // bolt / lightning
+    pub const USDO_HEADER: &str = "\u{f362}"; // exchange / transfer
+                                              // NMT states
     pub const STATE_OP: &str = "\u{f058}"; // check-circle
     pub const STATE_PREOP: &str = "\u{f017}"; // clock
     pub const STATE_STOP: &str = "\u{f057}"; // times-circle
@@ -2598,6 +2600,10 @@ fn render_monitor(
                 &mut view.sdo_browser,
             );
             ui.add_space(4.0);
+            emcy_section(ui, &view.state);
+            ui.add_space(4.0);
+            usdo_section(ui, &view.state);
+            ui.add_space(4.0);
             sdo_section(ui, &view.state);
         });
     });
@@ -4087,12 +4093,130 @@ fn sdo_value_ui(ui: &mut egui::Ui, val: &SdoValue) {
     }
 }
 
+// ─── EMCY section ─────────────────────────────────────────────────────────────
+
+fn emcy_section(ui: &mut egui::Ui, state: &AppState) {
+    let title = format!(
+        "{} EMCY Log  (last {})",
+        icons::EMCY_HEADER,
+        state.emcy_log.len()
+    );
+    egui::CollapsingHeader::new(egui::RichText::new(title).strong())
+        .default_open(false)
+        .show(ui, |ui| {
+            if state.emcy_log.is_empty() {
+                ui.label(
+                    egui::RichText::new("No EMCY frames received.")
+                        .color(egui::Color32::from_gray(140))
+                        .italics(),
+                );
+                return;
+            }
+            ui.label(
+                egui::RichText::new(
+                    "\u{24d8} Node guarding not implemented \u{2014} heartbeat protocol only.",
+                )
+                .small()
+                .color(egui::Color32::from_gray(140)),
+            );
+            ui.add_space(2.0);
+            egui::ScrollArea::vertical()
+                .id_salt("emcy_scroll")
+                .max_height(200.0)
+                .stick_to_bottom(true)
+                .show(ui, |ui| {
+                    for ev in &state.emcy_log {
+                        ui.horizontal(|ui| {
+                            ui.strong(format!("N{:02}", ev.node_id));
+                            ui.colored_label(
+                                egui::Color32::from_rgb(220, 80, 80),
+                                format!("{:04X}h", ev.error_code),
+                            );
+                            ui.label(crate::canopen::emcy::describe_error_code(ev.error_code));
+                            let reg_bits =
+                                crate::canopen::emcy::describe_error_register(ev.error_register);
+                            ui.label(format!("reg=0x{:02X} [{}]", ev.error_register, reg_bits));
+                            if !ev.vendor_data.is_empty() {
+                                let hex: String = ev
+                                    .vendor_data
+                                    .iter()
+                                    .map(|b| format!("{b:02X}"))
+                                    .collect::<Vec<_>>()
+                                    .join(" ");
+                                ui.monospace(hex);
+                            }
+                        });
+                    }
+                });
+        });
+}
+
+// ─── USDO Log section ─────────────────────────────────────────────────────────
+
+fn usdo_section(ui: &mut egui::Ui, state: &AppState) {
+    let title = format!(
+        "{} USDO Log  (last {})",
+        icons::USDO_HEADER,
+        state.usdo_log.len()
+    );
+    egui::CollapsingHeader::new(egui::RichText::new(title).strong())
+        .default_open(false)
+        .show(ui, |ui| {
+            if state.usdo_log.is_empty() {
+                ui.label(
+                    egui::RichText::new("No USDO frames received.")
+                        .color(egui::Color32::from_gray(140))
+                        .italics(),
+                );
+                return;
+            }
+            egui::ScrollArea::vertical()
+                .id_salt("usdo_scroll")
+                .max_height(250.0)
+                .stick_to_bottom(true)
+                .show(ui, |ui| {
+                    for ev in &state.usdo_log {
+                        ui.horizontal(|ui| {
+                            let dir_label = if ev.is_request {
+                                "\u{f0ab}"
+                            } else {
+                                "\u{f0aa}"
+                            };
+                            let rw_label = if ev.is_read { "R" } else { "W" };
+                            ui.strong(format!("N{:02}", ev.node_id));
+                            ui.label(format!(
+                                "{} {} {:04X}h.{:02X}",
+                                dir_label, rw_label, ev.index, ev.subindex
+                            ));
+                            if let Some(abort) = ev.abort_code {
+                                ui.colored_label(
+                                    egui::Color32::from_rgb(220, 80, 80),
+                                    format!("ABORT 0x{abort:08X}"),
+                                );
+                            } else if !ev.data.is_empty() {
+                                let hex: String = ev
+                                    .data
+                                    .iter()
+                                    .map(|b| format!("{b:02X}"))
+                                    .collect::<Vec<_>>()
+                                    .join(" ");
+                                ui.monospace(hex);
+                            }
+                        });
+                    }
+                });
+        });
+}
+
+// ─── SDO Log section ──────────────────────────────────────────────────────────
+
 fn sdo_section(ui: &mut egui::Ui, state: &AppState) {
     let title = format!(
         "{} SDO Log  (last {})",
         icons::SDO_HEADER,
         state.sdo_log.len()
     );
+
     egui::CollapsingHeader::new(egui::RichText::new(title).strong())
         .default_open(true)
         .show(ui, |ui| {
