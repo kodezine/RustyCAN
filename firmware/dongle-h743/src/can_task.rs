@@ -19,7 +19,7 @@
 
 use core::sync::atomic::Ordering;
 use embassy_stm32::can::frame::Frame;
-use embassy_stm32::can::Can;
+use embassy_stm32::can::CanConfigurator;
 use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 use embassy_sync::channel::Channel;
 use embassy_time::{with_timeout, Duration, Instant};
@@ -31,18 +31,46 @@ use defmt::*;
 
 #[embassy_executor::task]
 pub async fn can_task(
-    can: Can<'static>,
+    can_cfg: CanConfigurator<'static>,
     can_to_usb: &'static Channel<CriticalSectionRawMutex, KCanFrame, 32>,
     usb_to_can: &'static Channel<CriticalSectionRawMutex, KCanFrame, 32>,
 ) {
-    let (mut tx, mut rx, _) = can.split();
+    // ── Wait for host to configure baud rate and mode ─────────────────────────
+    // The EP0 handler (Phase 3) signals CAN_CONFIG on SET_MODE(BUS_ON).
+    // Until Phase 3 lands, main() pre-signals a 250 kbps classic-CAN default.
+    let cfg = crate::usb_task::CAN_CONFIG.wait().await;
 
-    info!("FDCAN1 started at 250 kbps");
-    lcd_terminal::boot_log!(
-        crate::display_task::LOG_CHANNEL,
-        "FDCAN1 ready (TJA1044 CN3 DB9, 250 kbps)",
-        lcd_terminal::BootStatus::Ok
-    );
+    let mut configurator = can_cfg;
+    configurator.set_bitrate(cfg.nominal_baud);
+    // FD data-phase configuration is wired in Phase 4.
+
+    #[cfg(not(feature = "loopback"))]
+    let can = {
+        let c = configurator.into_normal_mode();
+        info!("FDCAN1: normal mode, {} kbps", cfg.nominal_baud / 1_000);
+        lcd_terminal::boot_log!(
+            crate::display_task::LOG_CHANNEL,
+            "FDCAN1 ready (TJA1044 CN3 DB9)",
+            lcd_terminal::BootStatus::Ok
+        );
+        c
+    };
+    #[cfg(feature = "loopback")]
+    let can = {
+        let c = configurator.into_internal_loopback_mode();
+        info!(
+            "FDCAN1: INTERNAL LOOPBACK mode, {} kbps",
+            cfg.nominal_baud / 1_000
+        );
+        lcd_terminal::boot_log!(
+            crate::display_task::LOG_CHANNEL,
+            "FDCAN1 ready (LOOPBACK mode)",
+            lcd_terminal::BootStatus::Ok
+        );
+        c
+    };
+
+    let (mut tx, mut rx, _) = can.split();
 
     // ── Phase 2 loopback self-test ────────────────────────────────────────────
     // Sends a known test frame and expects it back immediately via internal

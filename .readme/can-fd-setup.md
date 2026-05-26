@@ -105,11 +105,11 @@ static USB_CONFIGURED: Signal<_, bool>  // fires on USB enumeration / disconnect
   - [x] Extended `KCanMode`: `_reserved[u8;3]` → `fd_flags: u8, _reserved: [u8;2]`; added `bus_on_fd()`; updated `to_bytes`/`from_bytes`
   - [x] Added `KCanFdConfig { nominal_baud: u32, fd_timing: Option<KCanBitTiming>, iso: bool, mode_flags: u8 }`
 
-- [ ] **Phase 2** — Firmware deferred FDCAN init (H743)
+- [x] **Phase 2** — Firmware deferred FDCAN init (H743)
   - Files: [`firmware/dongle-h743/src/main.rs`](../firmware/dongle-h743/src/main.rs), [`firmware/dongle-h743/src/can_task.rs`](../firmware/dongle-h743/src/can_task.rs), [`firmware/dongle-h743/src/usb_task.rs`](../firmware/dongle-h743/src/usb_task.rs)
-  - [ ] Add `static CAN_CONFIG: Signal<CriticalSectionRawMutex, KCanFdConfig>` in `usb_task.rs`
-  - [ ] `main()`: build `can1_cfg` (`CanConfigurator`) but do **not** call `into_normal_mode()` — pass to `can_task`
-  - [ ] `can_task` signature: takes `CanConfigurator<'static, FDCAN1>` instead of `Can<'static, FDCAN1>`. Body: `let cfg = CAN_CONFIG.wait().await` → apply baud + optional FD → start bus → split and run loops
+  - [x] Added `static CAN_CONFIG: Signal<CriticalSectionRawMutex, KCanFdConfig>` in `usb_task.rs`
+  - [x] `main()`: builds `can1_cfg` (`CanConfigurator`) but does NOT call `into_normal_mode()` — passes to `can_task`; pre-signals 250k default (removed in Phase 3)
+  - [x] `can_task`: signature now takes `CanConfigurator<'static>`; awaits `CAN_CONFIG.wait()` → applies baud → starts bus → splits and runs RX/TX loops
 
 - [ ] **Phase 3** — EP0 handler: wire timing to FDCAN (H743)
   - Files: [`firmware/dongle-h743/src/ep0_handler.rs`](../firmware/dongle-h743/src/ep0_handler.rs)

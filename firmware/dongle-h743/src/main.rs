@@ -235,20 +235,10 @@ async fn main(spawner: Spawner) {
     let led_usb = Output::new(p.PA4, Level::Low, Speed::Low);
 
     // ── FDCAN1: channel 0 — on-board TJA1044 → CN3 DB9 (PA11/PA12) ──────────
-    let mut can1_cfg = can::CanConfigurator::new(p.FDCAN1, p.PA11, p.PA12, Irqs);
-    can1_cfg.set_bitrate(250_000);
-    #[cfg(not(feature = "loopback"))]
-    let can = {
-        let c = can1_cfg.into_normal_mode();
-        info!("FDCAN1: normal mode, 250 kbps (PLL2Q = 32 MHz) — CN3 DB9");
-        c
-    };
-    #[cfg(feature = "loopback")]
-    let can = {
-        let c = can1_cfg.into_internal_loopback_mode();
-        info!("FDCAN1: INTERNAL LOOPBACK mode, 250 kbps — Phase 2 self-test");
-        c
-    };
+    // NOTE: FDCAN is NOT started here. can_task awaits CAN_CONFIG (signalled by
+    // the EP0 SET_MODE handler in Phase 3) before calling into_normal_mode().
+    // The pre-signal below keeps the firmware functional until Phase 3 lands.
+    let can1_cfg = can::CanConfigurator::new(p.FDCAN1, p.PA11, p.PA12, Irqs);
 
     // ── USB OTG HS — CN14 ULPI (USB3320C-EZK) ────────────────────────────────
     {
@@ -384,8 +374,19 @@ async fn main(spawner: Spawner) {
             .ok()
             .unwrap(),
     );
+
+    // Phase 2 fallback: pre-signal 250 kbps classic CAN so the firmware starts
+    // even before the host sends SET_MODE(BUS_ON).  Phase 3 removes this and
+    // the EP0 handler drives CAN_CONFIG instead.
+    usb_task::CAN_CONFIG.signal(kcan_protocol::control::KCanFdConfig {
+        nominal_baud: 250_000,
+        fd_timing: None,
+        iso: true,
+        mode_flags: 0,
+    });
+
     spawner.spawn(
-        can_task::can_task(can, &CAN_TO_USB, &USB_TO_CAN)
+        can_task::can_task(can1_cfg, &CAN_TO_USB, &USB_TO_CAN)
             .ok()
             .unwrap(),
     );
