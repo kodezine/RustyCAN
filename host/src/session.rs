@@ -35,6 +35,7 @@ use crate::canopen::{
 use crate::dbc::{self, DbcDatabase};
 use crate::eds::{parse_eds, types::ObjectDictionary};
 use crate::logger::EventLogger;
+use crate::xdd::parse_xdd;
 
 // ─── Constants ─────────────────────────────────────────────────────────────────
 
@@ -174,7 +175,7 @@ pub fn start(config: SessionConfig) -> SessionResult {
                     .map(|n| n.to_string_lossy().into_owned())
                     .unwrap_or_else(|| format!("node{node_id}.eds"));
 
-                let od = parse_eds(eds_path)
+                let od = parse_od_file(eds_path)
                     .map_err(|e| format!("Failed to load EDS {}: {e}", eds_path.display()))?;
 
                 node_labels.push((*node_id, label));
@@ -2102,4 +2103,18 @@ fn raw_pdo_signals(data: &[u8]) -> Vec<crate::canopen::pdo::PdoValue> {
             value: PdoRawValue::Bytes(vec![*b]),
         })
         .collect()
+}
+
+/// Load an object dictionary from an EDS (.eds) or XDD (.xdd/.xml) file,
+/// dispatching to the appropriate parser based on the file extension.
+fn parse_od_file(path: &std::path::Path) -> std::io::Result<ObjectDictionary> {
+    match path
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(|e| e.to_ascii_lowercase())
+        .as_deref()
+    {
+        Some("xdd") | Some("xml") => parse_xdd(path),
+        _ => parse_eds(path),
+    }
 }

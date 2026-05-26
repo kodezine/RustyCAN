@@ -40,3 +40,4 @@ pub mod logger;
 pub mod session;
 pub mod tui;
 pub mod updater;
+pub mod xdd;

@@ -41,6 +41,8 @@ crossterm = "0.29"
 ctrlc = "3"
 # DBC file support
 can-dbc = "9"
+# XDD (CiA 311) device description file parser
+roxmltree = "0.20"
 # Live HTTP/SSE server — streams JSONL events to http://localhost:7878/
 axum = { version = "0.8", default-features = false, features = ["http1", "json", "tokio"] }
 tokio = { version = "1", features = ["rt-multi-thread", "net", "sync", "macros"] }

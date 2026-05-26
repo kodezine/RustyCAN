@@ -83,6 +83,20 @@ use crate::canopen::sdo::{
 };
 use crate::eds;
 use crate::http_server::SseServer;
+
+/// Load an object dictionary from a file, dispatching by extension.
+/// `.xdd` and `.xml` use the XDD parser; everything else uses the EDS parser.
+fn parse_od_file(path: &std::path::Path) -> std::io::Result<crate::eds::types::ObjectDictionary> {
+    match path
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(|e| e.to_ascii_lowercase())
+        .as_deref()
+    {
+        Some("xdd") | Some("xml") => crate::xdd::parse_xdd(path),
+        _ => crate::eds::parse_eds(path),
+    }
+}
 use crate::session::{self, CanCommand, SessionConfig};
 
 mod plot_view;
@@ -731,7 +745,7 @@ impl ConnectForm {
                 } else {
                     std::path::PathBuf::from(e.eds_path.trim())
                 };
-                let od = eds::parse_eds(&path).ok()?;
+                let od = parse_od_file(&path).ok()?;
                 Some((id, od))
             })
             .collect();
@@ -1344,8 +1358,8 @@ fn render_connect(
                                                 .clicked()
                                             {
                                                 if let Some(path) = FileDialog::new()
-                                                    .add_filter("EDS", &["eds", "EDS"])
-                                                    .set_title("Select EDS file")
+                                                    .add_filter("EDS / XDD", &["eds", "EDS", "xdd", "XDD", "xml", "XML"])
+                                                    .set_title("Select EDS / XDD file")
                                                     .pick_file()
                                                 {
                                                     // Auto-populate node ID from [DeviceComissioning] NodeId if present.
