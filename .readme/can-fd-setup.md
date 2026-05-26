@@ -119,13 +119,14 @@ static USB_CONFIGURED: Signal<_, bool>  // fires on USB enumeration / disconnect
   - [x] `SET_MODE` BUS_ON: reads `fd_flags` byte; assembles `KCanFdConfig` → signals `CAN_CONFIG`
   - [x] Removed Phase 2 pre-signal from `main.rs` — firmware now waits for real EP0 host sequence
 
-- [ ] **Phase 4** — `can_task.rs` FD frame encode/decode (H743)
+- [x] **Phase 4** — `can_task.rs` FD frame encode/decode (H743)
   - Files: [`firmware/dongle-h743/src/can_task.rs`](../firmware/dongle-h743/src/can_task.rs)
-  - [ ] After `CAN_CONFIG.wait()`: branch on `cfg.fd_timing` — classic `into_normal_mode()` vs FD path
-  - [ ] Replace `classic_to_kcan()` → `frame_to_kcan()` — handles both `Frame` and `FdFrame`; sets FD/BRS/ESI flags; copies up to 64 bytes
-  - [ ] Replace `kcan_to_frame()` → `kcan_to_any_frame()` — builds `FdFrame` when `kf.flags & FD != 0`; else classic `Frame`
-  - [ ] RX loop: handle both `Frame` and `FdFrame` envelope types from embassy
-  - [ ] TX loop: call appropriate `tx.write()` / `tx.write_fd()` based on frame type
+  - [x] On `CAN_CONFIG.wait()`: if `fd_timing` is `Some` → builds `DataBitTiming`, sets `FrameTransmissionConfig::AllowFdCanAndBRS`, sets `non_iso_mode(!iso)`
+  - [x] RX loop: FD mode uses `rx.read_fd()` (handles both classic and FD frames); classic mode uses `rx.read()`
+  - [x] Added `fd_frame_to_kcan()`: maps `Header` fields to `FrameFlags::FD/BRS/EFF/RTR`; full 64-byte payload copy
+  - [x] TX loop: checks `kf.flags & FD` → calls `tx.write_fd(&FdFrame)` or `tx.write(&Frame)`
+  - [x] Added `kcan_to_fd_frame()`: builds `FdFrame` with `Header::new_fd(id, dlc, rtr, brs)`
+  - [x] Import fix: `embassy_stm32::can::config` (not `::can::fd::config` — `fd` is private)
 
 - [ ] **Phase 5** — dongle-h753 mirror *(parallel with 2–4)*
   - Files: [`firmware/dongle-h753/src/main.rs`](../firmware/dongle-h753/src/main.rs), [`firmware/dongle-h753/src/ep0_handler.rs`](../firmware/dongle-h753/src/ep0_handler.rs), [`firmware/dongle-h753/src/can_task.rs`](../firmware/dongle-h753/src/can_task.rs)

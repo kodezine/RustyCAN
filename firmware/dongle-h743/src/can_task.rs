@@ -18,7 +18,8 @@
 //! loop can freely drain the FDCAN FIFO, and vice-versa.
 
 use core::sync::atomic::Ordering;
-use embassy_stm32::can::frame::Frame;
+use embassy_stm32::can::config::{DataBitTiming, FrameTransmissionConfig};
+use embassy_stm32::can::frame::{FdFrame, Frame, Header};
 use embassy_stm32::can::CanConfigurator;
 use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 use embassy_sync::channel::Channel;
@@ -42,7 +43,24 @@ pub async fn can_task(
 
     let mut configurator = can_cfg;
     configurator.set_bitrate(cfg.nominal_baud);
-    // FD data-phase configuration is wired in Phase 4.
+
+    // Apply FD data-phase configuration if requested.
+    if let Some(fd_bt) = cfg.fd_timing {
+        use core::num::{NonZeroU16, NonZeroU8};
+        let data_timing = DataBitTiming {
+            transceiver_delay_compensation: false,
+            prescaler: NonZeroU16::new(fd_bt.brp as u16).unwrap_or(NonZeroU16::MIN),
+            seg1: NonZeroU8::new(fd_bt.tseg1 as u8).unwrap_or(NonZeroU8::MIN),
+            seg2: NonZeroU8::new(fd_bt.tseg2 as u8).unwrap_or(NonZeroU8::MIN),
+            sync_jump_width: NonZeroU8::new(fd_bt.sjw as u8).unwrap_or(NonZeroU8::MIN),
+        };
+        let fdcan_cfg = configurator
+            .config()
+            .set_data_bit_timing(data_timing)
+            .set_frame_transmit(FrameTransmissionConfig::AllowFdCanAndBRS)
+            .set_non_iso_mode(!cfg.iso);
+        configurator.set_config(fdcan_cfg);
+    }
 
     #[cfg(not(feature = "loopback"))]
     let can = {
@@ -102,6 +120,7 @@ pub async fn can_task(
 
     let mut rx_seq: u16 = 0;
     let mut echo_seq: u16 = 0;
+    let fd_mode = cfg.fd_timing.is_some();
 
     // Run CAN RX and TX paths as independent concurrent loops.
     // CanRx and CanTx are separate types returned by Can::split() — using them
@@ -116,31 +135,42 @@ pub async fn can_task(
         // ── RX: FDCAN1 → USB Bulk IN ─────────────────────────────────────────
         async {
             loop {
-                match rx.read().await {
-                    Ok(envelope) => {
-                        // Use the ISR-captured RXTS timestamp (10 MHz tick rate → 100 ns resolution).
-                        // FDCAN hardware latches RXTS into the Rx FIFO element at frame SOF;
-                        // embassy reads it in the ISR and converts to an Instant.
-                        let (frame, rx_ts) = envelope.parts();
-                        let ts_100ns = (rx_ts.as_nanos() / 100) as u32;
-                        let header = frame.header();
-                        let id_val = match header.id() {
-                            Id::Standard(id) => id.as_raw() as u32,
-                            Id::Extended(id) => id.as_raw(),
-                        };
-                        // Track unique standard IDs and frame count for LCD stats.
-                        if let Id::Standard(sid) = header.id() {
+                // In FD mode, read_fd() handles both classic and FD frames.
+                // In classic mode, read() is used (no FD flags in Header).
+                let result = if fd_mode {
+                    rx.read_fd().await.map(|e| {
+                        let (frame, ts) = e.parts();
+                        let h = frame.header();
+                        let ts_100ns = (ts.as_nanos() / 100) as u32;
+                        let kf = fd_frame_to_kcan(h, frame.data(), ts_100ns, rx_seq);
+                        (kf, *h.id())
+                    })
+                } else {
+                    rx.read().await.map(|e| {
+                        let (frame, ts) = e.parts();
+                        let h = frame.header();
+                        let ts_100ns = (ts.as_nanos() / 100) as u32;
+                        let kf = classic_to_kcan(&frame, ts_100ns, rx_seq);
+                        (kf, *h.id())
+                    })
+                };
+
+                match result {
+                    Ok((mut kf, id)) => {
+                        if let Id::Standard(sid) = id {
                             let raw = sid.as_raw() as usize;
                             crate::display_task::SEEN_IDS[raw >> 5]
                                 .fetch_or(1u32 << (raw & 31), Ordering::Relaxed);
                         }
                         crate::display_task::RX_FRAME_COUNTER.fetch_add(1, Ordering::Relaxed);
-                        trace!("FDCAN RX [ID={:#010x}, DLC={}]", id_val, header.len());
-                        let mut kf = classic_to_kcan(&frame, ts_100ns, rx_seq);
+                        trace!(
+                            "FDCAN RX [ID={:#010x}, DLC={}, FD={}]",
+                            kf.can_id,
+                            kf.dlc,
+                            kf.flags & FrameFlags::FD != 0
+                        );
                         kf.channel = 0;
                         rx_seq = rx_seq.wrapping_add(1);
-                        // Under periodic-echo there is no USB host draining the
-                        // channel; silently drop to avoid log spam.
                         #[cfg(not(feature = "periodic-echo"))]
                         if can_to_usb.try_send(kf).is_err() {
                             trace!("can_to_usb channel full — RX frame dropped");
@@ -163,37 +193,57 @@ pub async fn can_task(
                     trace!("FDCAN TX suppressed (listen-only mode)");
                     continue;
                 }
-                match kcan_to_frame(&kf) {
-                    Some(frame) => {
-                        trace!("FDCAN TX [ID={:#010x}, DLC={}]", kf.can_id, kf.dlc);
-                        // write() blocks until TX FIFO has space; guard with a timeout
-                        // so a Bus-Off state doesn't permanently stall this task.
-                        if with_timeout(Duration::from_millis(200), tx.write(&frame))
-                            .await
-                            .is_err()
-                        {
-                            warn!("FDCAN1 TX timeout — possible Bus-Off, skipping frame");
-                            continue;
+                let is_fd = kf.flags & FrameFlags::FD != 0;
+                trace!(
+                    "FDCAN TX [ID={:#010x}, DLC={}, FD={}]",
+                    kf.can_id,
+                    kf.dlc,
+                    is_fd
+                );
+                let tx_ok = if is_fd && fd_mode {
+                    match kcan_to_fd_frame(&kf) {
+                        Some(frame) => {
+                            with_timeout(Duration::from_millis(200), tx.write_fd(&frame))
+                                .await
+                                .is_ok()
                         }
-                        let ts_100ns = (Instant::now().as_nanos() / 100) as u32;
-                        let echo = KCanFrame::new_tx_echo(
-                            kf.can_id,
-                            kf.flags,
-                            kf.dlc,
-                            &kf.data[..kf.dlc as usize],
-                            ts_100ns,
-                            echo_seq,
-                        );
-                        echo_seq = echo_seq.wrapping_add(1);
-                        let _ = can_to_usb.try_send(echo);
+                        None => {
+                            warn!(
+                                "FDCAN1 TX: bad FD frame — can_id={:#010x} dlc={}",
+                                kf.can_id, kf.dlc
+                            );
+                            false
+                        }
                     }
-                    None => {
-                        warn!(
-                            "FDCAN1 TX: bad frame — can_id={:#010x} flags={:#04x} dlc={}",
-                            kf.can_id, kf.flags, kf.dlc
-                        );
+                } else {
+                    match kcan_to_frame(&kf) {
+                        Some(frame) => with_timeout(Duration::from_millis(200), tx.write(&frame))
+                            .await
+                            .is_ok(),
+                        None => {
+                            warn!(
+                                "FDCAN1 TX: bad classic frame — can_id={:#010x} dlc={}",
+                                kf.can_id, kf.dlc
+                            );
+                            false
+                        }
                     }
+                };
+                if !tx_ok {
+                    warn!("FDCAN1 TX timeout or error — possible Bus-Off, skipping frame");
+                    continue;
                 }
+                let ts_100ns = (Instant::now().as_nanos() / 100) as u32;
+                let echo = KCanFrame::new_tx_echo(
+                    kf.can_id,
+                    kf.flags,
+                    kf.dlc,
+                    &kf.data[..kf.dlc as usize],
+                    ts_100ns,
+                    echo_seq,
+                );
+                echo_seq = echo_seq.wrapping_add(1);
+                let _ = can_to_usb.try_send(echo);
             }
         },
     )
@@ -202,6 +252,7 @@ pub async fn can_task(
 
 // ─── Frame conversion helpers ─────────────────────────────────────────────────
 
+/// Convert a classic CAN `Frame` to a `KCanFrame`.
 fn classic_to_kcan(frame: &Frame, timestamp_100ns: u32, seq: u16) -> KCanFrame {
     let header = frame.header();
     let (id_val, mut flags) = match header.id() {
@@ -216,6 +267,27 @@ fn classic_to_kcan(frame: &Frame, timestamp_100ns: u32, seq: u16) -> KCanFrame {
     KCanFrame::new_data(id_val, flags, dlc, data, timestamp_100ns, seq)
 }
 
+/// Convert an FD-mode receive header + data to a `KCanFrame`.
+/// Works for both classic CAN frames and CAN FD frames received in FD mode.
+fn fd_frame_to_kcan(header: &Header, data: &[u8], timestamp_100ns: u32, seq: u16) -> KCanFrame {
+    let (id_val, mut flags) = match header.id() {
+        Id::Standard(id) => (id.as_raw() as u32, 0u8),
+        Id::Extended(id) => (id.as_raw(), FrameFlags::EFF),
+    };
+    if header.rtr() {
+        flags |= FrameFlags::RTR;
+    }
+    if header.fdcan() {
+        flags |= FrameFlags::FD;
+    }
+    if header.bit_rate_switching() {
+        flags |= FrameFlags::BRS;
+    }
+    let dlc = header.len();
+    KCanFrame::new_data(id_val, flags, dlc, data, timestamp_100ns, seq)
+}
+
+/// Build a classic CAN `Frame` from a `KCanFrame`.
 fn kcan_to_frame(kf: &KCanFrame) -> Option<Frame> {
     let dlc = kf.dlc as usize;
     let is_eff = kf.flags & FrameFlags::EFF != 0;
@@ -235,4 +307,20 @@ fn kcan_to_frame(kf: &KCanFrame) -> Option<Frame> {
             Frame::new_standard(kf.can_id as u16, data).ok()
         }
     }
+}
+
+/// Build a CAN FD `FdFrame` from a `KCanFrame`.
+fn kcan_to_fd_frame(kf: &KCanFrame) -> Option<FdFrame> {
+    let dlc = kf.dlc as usize;
+    let is_eff = kf.flags & FrameFlags::EFF != 0;
+    let brs = kf.flags & FrameFlags::BRS != 0;
+    let data = &kf.data[..dlc.min(64)];
+
+    let id: embedded_can::Id = if is_eff {
+        ExtendedId::new(kf.can_id & 0x1FFF_FFFF)?.into()
+    } else {
+        StandardId::new(kf.can_id as u16 & 0x7FF)?.into()
+    };
+    let header = Header::new_fd(id, dlc as u8, false, brs);
+    FdFrame::new(header, data).ok()
 }
