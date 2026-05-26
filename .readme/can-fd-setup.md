@@ -111,14 +111,13 @@ static USB_CONFIGURED: Signal<_, bool>  // fires on USB enumeration / disconnect
   - [x] `main()`: builds `can1_cfg` (`CanConfigurator`) but does NOT call `into_normal_mode()` — passes to `can_task`; pre-signals 250k default (removed in Phase 3)
   - [x] `can_task`: signature now takes `CanConfigurator<'static>`; awaits `CAN_CONFIG.wait()` → applies baud → starts bus → splits and runs RX/TX loops
 
-- [ ] **Phase 3** — EP0 handler: wire timing to FDCAN (H743)
-  - Files: [`firmware/dongle-h743/src/ep0_handler.rs`](../firmware/dongle-h743/src/ep0_handler.rs)
-  - [ ] Add `static PENDING_NOMINAL_BT: CriticalSectionMutex<Cell<Option<KCanBitTiming>>>`
-  - [ ] Add `static PENDING_FD_BT: CriticalSectionMutex<Cell<Option<KCanBitTiming>>>`
-  - [ ] `SET_BITTIMING` handler: store in `PENDING_NOMINAL_BT` (was: display-only)
-  - [ ] Add `SET_FD_BITTIMING` (0x03) handler: parse 16-byte payload → store in `PENDING_FD_BT`
-  - [ ] `SET_MODE` on BUS_ON: read `fd_flags` from `_data[1]`; assemble `KCanFdConfig` → signal `CAN_CONFIG`
-  - [ ] `GET_BT_CONST`: change `H753_64MHZ` → `H743_32MHZ`
+- [x] **Phase 3** — EP0 handler: wire timing to FDCAN (H743)
+  - Files: [`firmware/dongle-h743/src/ep0_handler.rs`](../firmware/dongle-h743/src/ep0_handler.rs), [`firmware/dongle-h743/src/main.rs`](../firmware/dongle-h743/src/main.rs)
+  - [x] Added `PENDING_NOMINAL_BT` and `PENDING_FD_BT` statics (`Mutex<CriticalSectionRawMutex, Cell<Option<KCanBitTiming>>>`)
+  - [x] `SET_BITTIMING` handler: stores in `PENDING_NOMINAL_BT` (was: display-only)
+  - [x] Added `SET_FD_BITTIMING` (0x03) handler: parse 16-byte payload → store in `PENDING_FD_BT`
+  - [x] `SET_MODE` BUS_ON: reads `fd_flags` byte; assembles `KCanFdConfig` → signals `CAN_CONFIG`
+  - [x] Removed Phase 2 pre-signal from `main.rs` — firmware now waits for real EP0 host sequence
 
 - [ ] **Phase 4** — `can_task.rs` FD frame encode/decode (H743)
   - Files: [`firmware/dongle-h743/src/can_task.rs`](../firmware/dongle-h743/src/can_task.rs)

@@ -374,17 +374,6 @@ async fn main(spawner: Spawner) {
             .ok()
             .unwrap(),
     );
-
-    // Phase 2 fallback: pre-signal 250 kbps classic CAN so the firmware starts
-    // even before the host sends SET_MODE(BUS_ON).  Phase 3 removes this and
-    // the EP0 handler drives CAN_CONFIG instead.
-    usb_task::CAN_CONFIG.signal(kcan_protocol::control::KCanFdConfig {
-        nominal_baud: 250_000,
-        fd_timing: None,
-        iso: true,
-        mode_flags: 0,
-    });
-
     spawner.spawn(
         can_task::can_task(can1_cfg, &CAN_TO_USB, &USB_TO_CAN)
             .ok()

@@ -21,7 +21,8 @@ use embassy_usb::control::{InResponse, OutResponse, Recipient, Request, RequestT
 use embassy_usb::Handler;
 
 use kcan_protocol::control::{
-    KCanBitTiming, KCanBtConst, KCanDeviceInfo, KCanMode, KCanModeFlags, RequestCode,
+    KCanBitTiming, KCanBtConst, KCanDeviceInfo, KCanFdConfig, KCanMode, KCanModeFdFlags,
+    KCanModeFlags, RequestCode,
 };
 
 use defmt::*;
@@ -30,6 +31,20 @@ use defmt::*;
 mod version {
     include!(concat!(env!("OUT_DIR"), "/version_consts.rs"));
 }
+
+// ─── Pending bit-timing storage ───────────────────────────────────────────────
+// The host sends SET_BITTIMING and (optionally) SET_FD_BITTIMING before
+// SET_MODE(BUS_ON).  We store them here so SET_MODE can assemble the full
+// KCanFdConfig and signal CAN_CONFIG to can_task.
+use core::cell::Cell;
+use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
+use embassy_sync::blocking_mutex::Mutex;
+
+static PENDING_NOMINAL_BT: Mutex<CriticalSectionRawMutex, Cell<Option<KCanBitTiming>>> =
+    Mutex::new(Cell::new(None));
+
+static PENDING_FD_BT: Mutex<CriticalSectionRawMutex, Cell<Option<KCanBitTiming>>> =
+    Mutex::new(Cell::new(None));
 
 /// EP0 vendor handler: responds to GET_INFO / GET_BT_CONST and ACKs
 /// SET_BITTIMING / SET_MODE.  Also signals USB connection state.
@@ -125,36 +140,53 @@ impl Handler for KCanEp0Handler {
                 // Decode the timing payload to derive the actual bitrate and
                 // display it on the LCD stats row.
                 // Formula: bitrate = clock_hz / (BRP × (1 + TSEG1 + TSEG2))
-                if let Some(kbps) = _data
+                if let Some(bt) = _data
                     .get(..16)
                     .and_then(|s| <&[u8; 16]>::try_from(s).ok())
-                    .and_then(|arr| {
-                        let bt = KCanBitTiming::from_bytes(arr);
-                        let tq = 1 + bt.tseg1 + bt.tseg2;
-                        if bt.brp > 0 && tq > 0 {
-                            Some(KCanBtConst::H743_32MHZ.clock_hz / (bt.brp * tq) / 1_000)
-                        } else {
-                            None
-                        }
-                    })
+                    .map(KCanBitTiming::from_bytes)
                 {
-                    crate::display_task::BAUD_KBPS
-                        .store(kbps, core::sync::atomic::Ordering::Relaxed);
-                    info!("EP0 SET_BITTIMING → {} kbps", kbps);
+                    let tq = 1 + bt.tseg1 + bt.tseg2;
+                    if bt.brp > 0 && tq > 0 {
+                        let kbps = KCanBtConst::H743_32MHZ.clock_hz / (bt.brp * tq) / 1_000;
+                        crate::display_task::BAUD_KBPS
+                            .store(kbps, core::sync::atomic::Ordering::Relaxed);
+                        info!("EP0 SET_BITTIMING → {} kbps", kbps);
+                    }
+                    PENDING_NOMINAL_BT.lock(|c| c.set(Some(bt)));
                 } else {
-                    info!("EP0 SET_BITTIMING accepted (250 kbps fixed)");
+                    info!("EP0 SET_BITTIMING accepted (no payload)");
+                }
+                Some(OutResponse::Accepted)
+            }
+            r if r == RequestCode::SetFdBitTiming as u8 => {
+                if let Some(bt) = _data
+                    .get(..16)
+                    .and_then(|s| <&[u8; 16]>::try_from(s).ok())
+                    .map(KCanBitTiming::from_bytes)
+                {
+                    // Copy fields to locals — KCanBitTiming is repr(C, packed)
+                    // and taking references to its fields is UB in safe Rust.
+                    let (brp, tseg1, tseg2, sjw) = (bt.brp, bt.tseg1, bt.tseg2, bt.sjw);
+                    info!(
+                        "EP0 SET_FD_BITTIMING → BRP={} TSEG1={} TSEG2={} SJW={}",
+                        brp, tseg1, tseg2, sjw
+                    );
+                    PENDING_FD_BT.lock(|c| c.set(Some(bt)));
+                } else {
+                    info!("EP0 SET_FD_BITTIMING accepted (no payload)");
                 }
                 Some(OutResponse::Accepted)
             }
             r if r == RequestCode::SetMode as u8 => {
-                // Parse the mode payload to distinguish bus-on vs bus-off.
-                let flags = if _data.len() >= 4 {
+                // Parse the mode payload.
+                let (flags, fd_flags) = if _data.len() >= 4 {
                     let arr: [u8; 4] = _data[..4].try_into().unwrap();
-                    KCanMode::from_bytes(&arr).flags
+                    let m = KCanMode::from_bytes(&arr);
+                    (m.flags, m.fd_flags)
                 } else if !_data.is_empty() {
-                    _data[0]
+                    (_data[0], 0u8)
                 } else {
-                    0
+                    (0u8, 0u8)
                 };
 
                 if flags & KCanModeFlags::BUS_OFF != 0 {
@@ -174,8 +206,40 @@ impl Handler for KCanEp0Handler {
                     let listen_only = flags & KCanModeFlags::LISTEN_ONLY != 0;
                     crate::usb_task::LISTEN_ONLY
                         .store(listen_only, core::sync::atomic::Ordering::Relaxed);
+
+                    // Assemble CAN_CONFIG from previously stored bit-timing values.
+                    let nominal_baud = PENDING_NOMINAL_BT
+                        .lock(|c| c.get())
+                        .and_then(|bt| {
+                            let tq = 1 + bt.tseg1 + bt.tseg2;
+                            if bt.brp > 0 && tq > 0 {
+                                Some(KCanBtConst::H743_32MHZ.clock_hz / (bt.brp * tq))
+                            } else {
+                                None
+                            }
+                        })
+                        .unwrap_or(250_000);
+
+                    let fd_enabled = fd_flags & KCanModeFdFlags::FD_ENABLED != 0;
+                    let fd_timing = if fd_enabled {
+                        PENDING_FD_BT.lock(|c| c.get())
+                    } else {
+                        None
+                    };
+                    let iso = fd_flags & KCanModeFdFlags::NON_ISO == 0;
+
+                    crate::usb_task::CAN_CONFIG.signal(KCanFdConfig {
+                        nominal_baud,
+                        fd_timing,
+                        iso,
+                        mode_flags: flags,
+                    });
+
                     if listen_only {
-                        info!("EP0 SET_MODE bus-on (listen-only)");
+                        info!(
+                            "EP0 SET_MODE bus-on (listen-only, {} bps, fd={})",
+                            nominal_baud, fd_enabled
+                        );
                         lcd_terminal::boot_log!(
                             crate::display_task::LOG_CHANNEL,
                             "RustyCAN app opened CAN port (listen-only)",
@@ -184,7 +248,10 @@ impl Handler for KCanEp0Handler {
                         crate::display_task::USB_STATUS
                             .signal(crate::display_task::UsbDisplayStatus::AppConnectedListenOnly);
                     } else {
-                        info!("EP0 SET_MODE bus-on");
+                        info!(
+                            "EP0 SET_MODE bus-on ({} bps, fd={})",
+                            nominal_baud, fd_enabled
+                        );
                         lcd_terminal::boot_log!(
                             crate::display_task::LOG_CHANNEL,
                             "RustyCAN app opened CAN port",
