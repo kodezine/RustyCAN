@@ -174,6 +174,15 @@ impl KCanAdapter {
             .wait()
             .map_err(|e| AdapterError::Protocol(format!("SET_BITTIMING: {e:?}")))?;
 
+        // Auto-detect FD data rate — scan for BRS frames after nominal baud is set.
+        // Only runs when auto_baud is true AND the user has CAN FD enabled.
+        let fd_data_baud = if auto_baud && fd_data_baud.is_some() {
+            let detected = auto_detect_fd_baud_inner(&iface, &mut ep_in, &bt_const);
+            detected.or(fd_data_baud)
+        } else {
+            fd_data_baud
+        };
+
         // SET_FD_BITTIMING — only when CAN FD is requested.
         if let Some(fd_baud) = fd_data_baud {
             let fd_bt = KCanBitTiming::for_fd_data_bitrate(clock_hz, fd_baud).ok_or_else(|| {
@@ -494,6 +503,106 @@ fn auto_detect_baud_inner(
          (10k – 1M bps)"
             .into(),
     ))
+}
+
+/// Scan CAN FD data-phase rates in descending order and return the highest at
+/// which BRS frames are observed within a 2-second window.
+///
+/// Called only when `auto_baud` is `true` and the user has CAN FD enabled.
+/// The nominal baud must already have been applied via `SET_BITTIMING` before
+/// calling this function; it is **not** re-applied here.
+///
+/// Returns `Some(rate)` when at least one BRS frame is seen, `None` if no BRS
+/// traffic is observed at any FD rate (bus is probably classic CAN only).
+fn auto_detect_fd_baud_inner(
+    iface: &nusb::Interface,
+    ep_in: &mut Endpoint<Bulk, In>,
+    bt_const: &KCanBtConst,
+) -> Option<u32> {
+    // Scan highest-to-lowest so the first hit is the preferred maximum rate.
+    const FD_RATES: &[u32] = &[2_000_000, 1_000_000, 500_000];
+    const POLLS_PER_RATE: usize = 10; // 10 × 200 ms = 2 s per rate
+
+    for &rate in FD_RATES {
+        let Some(fd_bt) = KCanBitTiming::for_fd_data_bitrate(bt_const.clock_hz, rate) else {
+            continue;
+        };
+
+        eprintln!("KCAN: auto-baud FD: trying {rate} bps data phase...");
+
+        // SET_FD_BITTIMING for this candidate rate.
+        if iface
+            .control_out(
+                ctrl_out(RequestCode::SetFdBitTiming as u8, &fd_bt.to_bytes()),
+                CTRL_TIMEOUT,
+            )
+            .wait()
+            .is_err()
+        {
+            continue;
+        }
+
+        // Bus-on in FD listen-only mode.
+        let mode = KCanMode::bus_on_fd(
+            true, // listen-only — safe on any bus
+            false,
+            KCanModeFdFlags::FD_ENABLED,
+        );
+        if iface
+            .control_out(
+                ctrl_out(RequestCode::SetMode as u8, &mode.to_bytes()),
+                CTRL_TIMEOUT,
+            )
+            .wait()
+            .is_err()
+        {
+            continue;
+        }
+
+        let mut found = false;
+        let mut frame_buf = Vec::<u8>::new();
+        'poll: for _ in 0..POLLS_PER_RATE {
+            match ep_in
+                .transfer_blocking(Buffer::new(512), Duration::from_millis(200))
+                .into_result()
+            {
+                Ok(data) if !data.is_empty() => {
+                    frame_buf.extend_from_slice(&data);
+                    while frame_buf.len() >= KCAN_FRAME_SIZE {
+                        if let Ok(arr) =
+                            <[u8; KCAN_FRAME_SIZE]>::try_from(&frame_buf[..KCAN_FRAME_SIZE])
+                        {
+                            if let Some(kf) = KCanFrame::from_bytes(&arr) {
+                                if kf.flags & kcan_protocol::frame::FrameFlags::BRS != 0 {
+                                    found = true;
+                                    break 'poll;
+                                }
+                            }
+                        }
+                        frame_buf.drain(..KCAN_FRAME_SIZE);
+                    }
+                }
+                _ => {}
+            }
+        }
+        frame_buf.clear();
+
+        // Bus-off before trying next rate.
+        let _ = iface
+            .control_out(
+                ctrl_out(RequestCode::SetMode as u8, &KCanMode::bus_off().to_bytes()),
+                CTRL_TIMEOUT,
+            )
+            .wait();
+
+        if found {
+            eprintln!("KCAN: auto-baud FD detected: {rate} bps data phase");
+            return Some(rate);
+        }
+    }
+
+    eprintln!("KCAN: auto-baud FD: no BRS frames detected — using configured FD rate");
+    None
 }
 
 // ─── Background IO thread ─────────────────────────────────────────────────────
