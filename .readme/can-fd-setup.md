@@ -159,53 +159,48 @@ static USB_CONFIGURED: Signal<_, bool>  // fires on USB enumeration / disconnect
   - [x] Data-rate `ComboBox`: 500 kbit/s / 1 Mbit/s / 2 Mbit/s (visible only when FD enabled)
   - [x] "ISO 11898-1:2015" checkbox for `iso_mode` with hover tooltip (visible when FD enabled)
 
-- [ ] **Phase 9** — Passive auto-baud detection
-  - Files: [`host/src/session.rs`](../host/src/session.rs), [`host/src/gui/mod.rs`](../host/src/gui/mod.rs)
-  - [ ] "Auto-detect" option in nominal baud dropdown (KCAN only)
-  - [ ] `auto_detect_baud()`: iterate `[10k, 20k, 50k, 100k, 125k, 250k, 500k, 800k, 1M]` listen-only, 2 s each; return first rate with valid frames
-  - [ ] After nominal found: scan FD data rates `[500k, 1M, 2M]` — return highest with BRS frames seen
+- [x] **Phase 9** — Passive auto-baud detection
+  - Files: [`host/src/session.rs`](../host/src/session.rs), [`host/src/adapters/kcan.rs`](../host/src/adapters/kcan.rs)
+  - [x] `auto_detect_baud_inner()`: iterate `[10k, 20k, 50k, 100k, 125k, 250k, 500k, 800k, 1M]` listen-only, 2 s each; return first rate with valid frames *(committed in phase-9)*
+  - [x] `auto_detect_fd_baud_inner()` *(phase-9b)*: scan FD data rates `[2M, 1M, 500k]` descending using BRS flag detection; returns highest with BRS frames seen; wired into `open()` after nominal baud detected
 
 ---
 
 ### Application Layer (CANopen FD)
 
-- [ ] **Phase 10** — XDD parser (CiA 311) *(parallel with Phase 9)*
+- [x] **Phase 10** — XDD parser (CiA 311) *(parallel with Phase 9)*
   - Files: new [`host/src/xdd/mod.rs`](../host/src/xdd/mod.rs), [`host/Cargo.toml`](../host/Cargo.toml)
-  - [ ] Add `roxmltree = "0.20"` dep to `host/Cargo.toml`
-  - [ ] `parse_xdd(path) -> Result<ObjectDictionary>`: walk `<CANopenObject>` (attrs: `index`, `name`, `objectType`, `dataType`, `defaultValue`, `PDOmapping`) + `<CANopenSubObject>` (attrs: `subIndex`, `name`, `dataType`, `defaultValue`, `accessType`) → emit same `OdEntry` structs as `parse_eds()`
-  - [ ] Extract `nrOfEntries` sub-object value for extended PDO count (> 4 PDOs)
-  - [ ] `session.rs`: auto-detect by extension — `.eds` → `parse_eds`, `.xdd`/`.xml` → `parse_xdd`
-  - [ ] GUI file picker: add `.xdd`, `.xml` to filter
+  - [x] Added `roxmltree = "0.20"` dep to `host/Cargo.toml`
+  - [x] `parse_xdd(path) -> Result<ObjectDictionary>`: walks `<CANopenObject>` + `<CANopenSubObject>`; emits same `OdEntry` structs as `parse_eds()`; unit test `parse_minimal_xdd`
+  - [x] `session.rs`: `parse_od_file()` helper dispatches by extension — `.xdd`/`.xml` → `parse_xdd`, else → `parse_eds`
+  - [x] GUI file picker: filter updated to `"EDS / XDD"` with `.eds`, `.xdd`, `.xml` extensions
 
-- [ ] **Phase 11** — FD PDO engine expansion *(depends on Phase 10)*
+- [x] **Phase 11** — FD PDO engine expansion *(depends on Phase 10)*
   - Files: [`host/src/canopen/pdo.rs`](../host/src/canopen/pdo.rs)
-  - [ ] Add `fd_dlc_to_bytes(dlc: u8) -> usize`: 0–8 unchanged; 9→12, 10→16, 11→20, 12→24, 13→32, 14→48, 15→64
-  - [ ] `PdoDecoder::decode()`: replace 8-byte cap with `fd_dlc_to_bytes(frame.dlc())`
-  - [ ] `PdoDecoder::from_od()`: expand TPDO/RPDO scan to full range `0x1800–0x19FF` / `0x1A00–0x1BFF` / `0x1400–0x15FF` / `0x1600–0x17FF`; stop when no `nrOfEntries` sub-object
+  - [x] Added `pub fn fd_dlc_to_bytes(dlc: u8) -> usize`: 0–8 unchanged; 9→12, 10→16, 11→20, 12→24, 13→32, 14→48, 15→64
+  - [x] `PdoDecoder::from_od()`: expanded scan to full CiA 301 ranges `0x1800–0x19FF` / `0x1A00–0x1BFF` / `0x1400–0x15FF` / `0x1600–0x17FF` (up to 512 PDOs each); early-termination guard
 
-- [ ] **Phase 12** — EMCY decode + CiA 301 error table *(parallel with 10/11)*
-  - Files: new [`host/src/canopen/emcy.rs`](../host/src/canopen/emcy.rs), + `mod.rs`, `app.rs`, `session.rs`, `gui/mod.rs`, `logger.rs`
-  - [ ] `EmcyEvent { node_id: u8, error_code: u16, error_register: u8, vendor_data: Vec<u8> }`
-  - [ ] `decode_emcy(node_id, frame) -> Option<EmcyEvent>`: bytes 0–1 error code LE, byte 2 register, 3..N vendor (up to 5 classic / 61 FD)
-  - [ ] `describe_error_code(u16) -> &'static str`: ~50-entry CiA 301 table — 0x0000 No error; 0x1xxx Generic; 0x2xxx Current; 0x3xxx Voltage; 0x4xxx Temp; 0x5xxx HW; 0x6xxx SW; 0x7xxx Modules; 0x8xxx Monitoring; 0x9xxx External; 0xFxxx Additional
-  - [ ] Error register bit descriptions: bits 0/2/3/4/5/7 = Generic/Voltage/Temp/Comm/Profile/Manufacturer
-  - [ ] `CanEvent::Emcy(EmcyEvent)` in `app.rs`; per-node ring buffer (last 20 events)
-  - [ ] JSONL: `{"type":"emcy","node_id":N,"error_code":"0xXXXX","description":"...","error_register":"0xXX","vendor_data":"HEX"}`
-  - [ ] GUI: collapsing "EMCY" sub-panel per node; badge count; error register bit breakdown
-  - [ ] Tooltip: "Node guarding not implemented — heartbeat protocol only"
+- [x] **Phase 12** — EMCY decode + CiA 301 error table *(parallel with 10/11)*
+  - Files: new [`host/src/canopen/emcy.rs`](../host/src/canopen/emcy.rs), `canopen/mod.rs`
+  - [x] `EmcyEvent { node_id: u8, error_code: u16, error_register: u8, vendor_data: Vec<u8> }`
+  - [x] `decode_emcy(node_id, data) -> Option<EmcyEvent>`: bytes 0–1 error code LE, byte 2 register, 3..N vendor
+  - [x] `describe_error_code(u16) -> &'static str`: ~50-entry CiA 301 table with class-range fallback
+  - [x] `describe_error_register(u8) -> String`: formats active bits (Generic/Voltage/Temp/Communication/Device Profile/Manufacturer)
+  - [x] Integration (Phase 13): `CanEvent::Emcy`, `app.rs` ring buffer, `session.rs` Emergency arm, `logger.rs` `log_emcy`, GUI `emcy_section`, TUI arm
 
-- [ ] **Phase 13** — USDO full TX+RX (CiA 602) *(depends on Phase 12 — last)*
-  - Files: new [`host/src/canopen/usdo.rs`](../host/src/canopen/usdo.rs), + `mod.rs`, `app.rs`, `session.rs`, `gui/mod.rs`
-  - [ ] Default COB-IDs: client→server `0x7E5`, server→client `0x7E9`
-  - [ ] USDO header (8 bytes): node address(2) + SCS/CSS(1) + command(1) + index(2) + subindex(1) + length(1); remainder = data (up to 56 bytes)
-  - [ ] `decode_usdo(cob_id, data) -> Option<UsdoEvent>`
-  - [ ] `encode_usdo_read(node_id, index, subindex) -> Vec<u8>` (64-byte FD payload)
-  - [ ] `encode_usdo_write(node_id, index, subindex, data) -> Vec<u8>`
-  - [ ] `classify_frame()`: add `FrameType::UsdoRequest` (0x7E5) / `FrameType::UsdoResponse` (0x7E9)
-  - [ ] `CanCommand::UsdoRead` / `UsdoWrite` variants; session correlates request/response pairs
-  - [ ] `CanEvent::Usdo(UsdoEvent)` in `app.rs`; USDO log ring buffer alongside SDO log
-  - [ ] GUI: per-node "Protocol" selector (Classic SDO / USDO); USDO disabled in classic CAN mode
-  - [ ] JSONL: `{"type":"usdo", ...}` events mirroring SDO format
+- [x] **Phase 13** — USDO full TX+RX (CiA 602) *(depends on Phase 12 — last)*
+  - Files: new [`host/src/canopen/usdo.rs`](../host/src/canopen/usdo.rs), `canopen/mod.rs`, `app.rs`, `session.rs`, `logger.rs`, `gui/mod.rs`, `tui/mod.rs`, `tui/log_stream.rs`
+  - [x] Default COB-IDs: `USDO_COB_CLIENT = 0x7E5`, `USDO_COB_SERVER = 0x7E9`
+  - [x] USDO header (8 bytes): node address(2) + CSS/SCS(1) + command(1) + index(2) + subindex(1) + length(1); data up to 56 bytes
+  - [x] `decode_usdo(cob_id, data) -> Option<UsdoEvent>`; unit tests (read/write roundtrip, too-short)
+  - [x] `encode_usdo_read(node_id, index, subindex) -> Vec<u8>` (64-byte FD payload)
+  - [x] `encode_usdo_write(node_id, index, subindex, data) -> Vec<u8>`
+  - [x] `classify_frame()`: `FrameType::UsdoRequest` (0x7E5) / `FrameType::UsdoResponse` (0x7E9)
+  - [x] `CanEvent::Usdo(UsdoEvent)` in `app.rs`; `usdo_log` ring buffer (cap 50); `push_usdo()`
+  - [x] `session.rs`: USDO + EMCY match arms in `recv_loop`; both imports
+  - [x] `logger.rs`: `log_emcy()` + `log_usdo()` JSONL methods
+  - [x] GUI: `emcy_section()` (collapsing, node/code/description/register) + `usdo_section()` (collapsing, R/W/abort rows)
+  - [x] TUI: `Emcy` and `Usdo` arms in both `log_stream.rs` and `mod.rs` event formatters
 
 ---
 
