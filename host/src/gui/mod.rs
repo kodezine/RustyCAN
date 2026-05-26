@@ -1167,6 +1167,45 @@ fn render_connect(
                                 ui.label("Logging:");
                                 ui.checkbox(&mut form.text_log, "Also write plain-text .log file");
                                 ui.end_row();
+
+                                // ── CAN FD (KCAN only) ────────────────────
+                                let is_kcan = matches!(form.adapter_kind, AdapterKind::KCan { .. });
+                                ui.label("CAN FD:");
+                                ui.add_enabled_ui(is_kcan, |ui| {
+                                    let mut fd_enabled = form.fd_data_baud.is_some();
+                                    if ui.checkbox(&mut fd_enabled, "Enable FD + BRS").changed() {
+                                        form.fd_data_baud =
+                                            if fd_enabled { Some(2_000_000) } else { None };
+                                    }
+                                    if form.fd_data_baud.is_some() {
+                                        ui.add_space(8.0);
+                                        egui::ComboBox::from_id_salt("fd_data_baud")
+                                            .selected_text(match form.fd_data_baud {
+                                                Some(500_000) => "500 kbit/s",
+                                                Some(1_000_000) => "1 Mbit/s",
+                                                _ => "2 Mbit/s",
+                                            })
+                                            .show_ui(ui, |ui| {
+                                                for (label, val) in [
+                                                    ("500 kbit/s", 500_000u32),
+                                                    ("1 Mbit/s", 1_000_000),
+                                                    ("2 Mbit/s", 2_000_000),
+                                                ] {
+                                                    ui.selectable_value(
+                                                        &mut form.fd_data_baud,
+                                                        Some(val),
+                                                        label,
+                                                    );
+                                                }
+                                            });
+                                        ui.add_space(8.0);
+                                        ui.checkbox(&mut form.iso_mode, "ISO 11898-1:2015")
+                                            .on_hover_text(
+                                                "Unchecked = Bosch non-ISO CAN FD (CCCR.NISO=1)",
+                                            );
+                                    }
+                                });
+                                ui.end_row();
                             });
                     }); // close Connection CollapsingHeader
                 }); // close Connection Frame

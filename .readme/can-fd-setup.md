@@ -152,11 +152,12 @@ static USB_CONFIGURED: Signal<_, bool>  // fires on USB enumeration / disconnect
   - [x] `into_form()`, `From<&ConnectForm>`, `Default`, `try_connect()`, `load_session_config()` all updated
   - [x] JSON config files updated with `"fd_data_baud": null, "iso_mode": true`
 
-- [ ] **Phase 8** — GUI FD controls
+- [x] **Phase 8** — GUI FD controls
   - Files: [`host/src/gui/mod.rs`](../host/src/gui/mod.rs)
-  - [ ] Connect form (KCAN only): "CAN FD" checkbox; "Data rate" dropdown (500k / 1M / 2M); "ISO CAN FD" checkbox
-  - [ ] Dropdown + ISO checkbox hidden when `!fd_enabled` or PEAK adapter selected
-  - [ ] Persist `fd_enabled`, `fd_data_baud`, `iso_mode` in config JSON
+  - [x] "CAN FD:" row in the Connection settings grid (KCAN-only via `add_enabled_ui`)
+  - [x] "Enable FD + BRS" checkbox toggles `fd_data_baud` (`None` ↔ `Some(2_000_000)`)
+  - [x] Data-rate `ComboBox`: 500 kbit/s / 1 Mbit/s / 2 Mbit/s (visible only when FD enabled)
+  - [x] "ISO 11898-1:2015" checkbox for `iso_mode` with hover tooltip (visible when FD enabled)
 
 - [ ] **Phase 9** — Passive auto-baud detection
   - Files: [`host/src/session.rs`](../host/src/session.rs), [`host/src/gui/mod.rs`](../host/src/gui/mod.rs)
