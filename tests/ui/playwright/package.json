@@ -1,0 +1,13 @@
+{
+  "name": "rustycan-web-ui-tests",
+  "version": "1.0.0",
+  "description": "Playwright end-to-end tests for the RustyCAN web dashboard (http://localhost:7878)",
+  "scripts": {
+    "test": "playwright test",
+    "test:headed": "playwright test --headed",
+    "test:report": "playwright show-report"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.45.0"
+  }
+}

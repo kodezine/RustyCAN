@@ -40,6 +40,9 @@ const INDEX_HTML: &str = include_str!("../assets/index.html");
 /// The app icon PNG, served at `/logo.png` for the browser dashboard.
 const LOGO_PNG: &[u8] = include_bytes!("../assets/RustyCAN.iconset/icon_256x256.png");
 
+/// MesloLGS NF font — same typeface used by the egui GUI title.
+const MESLO_FONT: &[u8] = include_bytes!("../assets/MesloLGSNF-Regular.ttf");
+
 // ─── Broadcast channel capacity ───────────────────────────────────────────────
 
 /// Number of events buffered per subscriber before oldest are dropped.
@@ -73,6 +76,25 @@ impl SseServer {
         let (tx, _) = broadcast::channel(BROADCAST_CAPACITY);
         let tx_clone = tx.clone();
 
+        // ── Graceful takeover: shut down any existing instance on this port ──
+        // If another RustyCAN is already running, send it /shutdown so it exits
+        // and frees the port before this instance tries to bind.
+        // The X-RustyCAN-Shutdown header is required by the handler so that a
+        // browser page cannot trigger a cross-origin shutdown via a simple GET
+        // (non-simple headers force a CORS pre-flight, which the server does
+        // not allow, so the browser blocks such requests).
+        let old_instance_found = ureq::AgentBuilder::new()
+            .timeout(std::time::Duration::from_millis(300))
+            .build()
+            .get(&format!("http://127.0.0.1:{port}/shutdown"))
+            .set("X-RustyCAN-Shutdown", "1")
+            .call()
+            .is_ok();
+        if old_instance_found {
+            // Give the old process time to call ExitProcess and release the port.
+            std::thread::sleep(std::time::Duration::from_millis(600));
+        }
+
         std::thread::Builder::new()
             .name("rustycan-http".into())
             .spawn(move || {
@@ -88,7 +110,9 @@ impl SseServer {
                     let app = Router::new()
                         .route("/", get(serve_index))
                         .route("/logo.png", get(serve_logo))
-                        .route("/events", get(move || sse_handler(tx_clone.clone())));
+                        .route("/font/meslo.ttf", get(serve_font))
+                        .route("/events", get(move || sse_handler(tx_clone.clone())))
+                        .route("/shutdown", get(handle_shutdown));
 
                     match tokio::net::TcpListener::bind(addr).await {
                         Ok(listener) => {
@@ -124,6 +148,17 @@ async fn serve_logo() -> impl IntoResponse {
     ([(header::CONTENT_TYPE, "image/png")], LOGO_PNG)
 }
 
+/// Serve the MesloLGS NF font — used by the dashboard title to match the GUI.
+async fn serve_font() -> impl IntoResponse {
+    (
+        [
+            (header::CONTENT_TYPE, "font/ttf"),
+            (header::CACHE_CONTROL, "public, max-age=31536000, immutable"),
+        ],
+        MESLO_FONT,
+    )
+}
+
 /// SSE handler — subscribes a new client to the broadcast channel and streams
 /// every event as a `data: <json>\n\n` SSE message.
 ///
@@ -142,4 +177,33 @@ async fn sse_handler(
     });
 
     Sse::new(stream).keep_alive(KeepAlive::default())
+}
+
+/// Shut down this process after sending the HTTP response.
+///
+/// Called by a newly-started RustyCAN instance to take over the port.
+/// A background thread exits the process ~100 ms after this handler returns,
+/// giving axum enough time to flush the response to the caller.
+///
+/// # Security
+///
+/// The `X-RustyCAN-Shutdown: 1` header is **required**.  Without it the
+/// handler returns 403.  Custom headers are not "simple" under the CORS
+/// specification, so any cross-origin browser request must first send a
+/// pre-flight OPTIONS — which this server does not permit — ensuring that
+/// a malicious webpage cannot trigger a shutdown via a bare fetch/XHR.
+async fn handle_shutdown(headers: axum::http::HeaderMap) -> impl IntoResponse {
+    if headers
+        .get("x-rustycan-shutdown")
+        .and_then(|v| v.to_str().ok())
+        != Some("1")
+    {
+        return (axum::http::StatusCode::FORBIDDEN, "forbidden").into_response();
+    }
+    std::thread::spawn(|| {
+        std::thread::sleep(std::time::Duration::from_millis(100));
+        eprintln!("[rustycan] Shutting down: new instance is taking over.");
+        std::process::exit(0);
+    });
+    (axum::http::StatusCode::OK, "shutting down").into_response()
 }

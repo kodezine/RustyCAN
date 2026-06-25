@@ -27,7 +27,11 @@ use super::TuiMode;
 /// NMT state.  Nodes are sorted by ID for stable ordering.
 pub fn render_nmt_panel(f: &mut Frame, state: &AppState, area: Rect) {
     let block = Block::default()
-        .title(" NMT Status ")
+        .title(Line::from(vec![
+            Span::raw(" Rusty"),
+            Span::styled("CAN", Style::default().fg(Color::Cyan)),
+            Span::raw(" · NMT Status "),
+        ]))
         .borders(Borders::ALL)
         .border_style(Style::default().fg(Color::Cyan));
 
@@ -370,4 +374,129 @@ pub fn render_command_bar(
 
     let paragraph = Paragraph::new(line).style(Style::default().bg(Color::Reset));
     f.render_widget(paragraph, area);
+}
+
+// ─── Unit tests ───────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::app::{apply_event, AppState, CanEvent};
+    use crate::canopen::nmt::NmtState;
+    use crate::canopen::pdo::{PdoRawValue, PdoValue};
+    use ratatui::backend::TestBackend;
+    use ratatui::Terminal;
+
+    /// Render `draw` into a `w×h` TestBackend and return the flat text content.
+    fn buf_text<F: FnOnce(&mut Frame)>(w: u16, h: u16, draw: F) -> String {
+        let mut terminal = Terminal::new(TestBackend::new(w, h)).unwrap();
+        terminal.draw(|f| draw(f)).unwrap();
+        terminal
+            .backend()
+            .buffer()
+            .content
+            .iter()
+            .map(|c| c.symbol().to_string())
+            .collect()
+    }
+
+    // ── NMT panel ─────────────────────────────────────────────────────────────
+
+    #[test]
+    fn nmt_panel_shows_node_rows() {
+        let mut state = AppState::new("test.jsonl".into(), 250_000);
+        state.init_nodes(&[(1, "Drive".into()), (2, "IO".into())]);
+        let text = buf_text(80, 10, |f| {
+            let area = f.area();
+            render_nmt_panel(f, &state, area);
+        });
+        assert!(text.contains("Drive"), "buffer missing 'Drive': {text:?}");
+        assert!(text.contains("IO"), "buffer missing 'IO': {text:?}");
+    }
+
+    #[test]
+    fn nmt_panel_operational_is_green() {
+        let mut state = AppState::new("test.jsonl".into(), 250_000);
+        state.init_nodes(&[(1, "Motor".into())]);
+        apply_event(
+            &mut state,
+            CanEvent::Nmt {
+                node_id: 1,
+                state: NmtState::Operational,
+            },
+        );
+        let mut terminal = Terminal::new(TestBackend::new(80, 10)).unwrap();
+        terminal
+            .draw(|f| {
+                let area = f.area();
+                render_nmt_panel(f, &state, area);
+            })
+            .unwrap();
+        let buf = terminal.backend().buffer();
+        let text: String = buf.content.iter().map(|c| c.symbol().to_string()).collect();
+        assert!(
+            text.contains("OPERATIONAL"),
+            "buffer should show OPERATIONAL"
+        );
+        let has_green = buf.content.iter().any(|c| c.fg == Color::Green);
+        assert!(has_green, "OPERATIONAL state should render in green");
+    }
+
+    // ── PDO panel ─────────────────────────────────────────────────────────────
+
+    #[test]
+    fn pdo_panel_shows_signals() {
+        let mut state = AppState::new("test.jsonl".into(), 250_000);
+        state.init_nodes(&[(1, "Drive".into())]);
+        state.update_pdo(
+            1,
+            0x181,
+            vec![PdoValue {
+                signal_name: "Velocity".into(),
+                value: PdoRawValue::Integer(1234),
+            }],
+        );
+        let text = buf_text(80, 12, |f| {
+            let area = f.area();
+            render_pdo_panel(f, &state, area);
+        });
+        assert!(
+            text.contains("Velocity"),
+            "buffer missing PDO signal 'Velocity'"
+        );
+        assert!(text.contains("1234"), "buffer missing PDO value '1234'");
+    }
+
+    // ── Stats bar ─────────────────────────────────────────────────────────────
+
+    #[test]
+    fn stats_bar_shows_fps_and_load() {
+        let mut state = AppState::new("test.jsonl".into(), 250_000);
+        state.fps = 30.0;
+        state.bus_load = 45.0;
+        let text = buf_text(80, 1, |f| {
+            let area = f.area();
+            render_stats_bar(f, &state, area);
+        });
+        assert!(text.contains("30"), "buffer should show fps=30: {text:?}");
+        assert!(
+            text.contains("45"),
+            "buffer should show bus_load=45: {text:?}"
+        );
+    }
+
+    // ── Event log panel ───────────────────────────────────────────────────────
+
+    #[test]
+    fn log_panel_shows_entries() {
+        let mut log: VecDeque<String> = VecDeque::new();
+        log.push_back("[12:00:00.000] NMT node 1 → OPERATIONAL".into());
+        log.push_back("[12:00:01.000] SDO READ 1000:00".into());
+        let text = buf_text(80, 8, |f| {
+            let area = f.area();
+            render_log_panel(f, &log, area);
+        });
+        assert!(text.contains("NMT"), "buffer missing NMT log entry");
+        assert!(text.contains("SDO"), "buffer missing SDO log entry");
+    }
 }

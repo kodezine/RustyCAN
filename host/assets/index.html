@@ -60,6 +60,15 @@
       }
     }
 
+    /* ── MesloLGS NF — matches egui GUI font ── */
+    @font-face {
+      font-family: 'MesloNF';
+      src: url('/font/meslo.ttf') format('truetype');
+      font-weight: normal;
+      font-style: normal;
+      font-display: swap;
+    }
+
     /* ── Reset & base ── */
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
@@ -94,8 +103,9 @@
     }
 
     .logo-title {
-      font-size: 0.9rem;
-      font-weight: 600;
+      font-family: 'MesloNF', ui-monospace, "SF Mono", monospace;
+      font-size: 1.25rem;
+      font-weight: 700;
       color: var(--text);
       letter-spacing: -0.01em;
     }
@@ -149,9 +159,16 @@
       display: flex;
       flex-direction: column;
       gap: 16px;
-      max-width: 1400px;
       width: 100%;
-      margin: 0 auto;
+      min-height: 0;
+    }
+
+    /* Event log card fills remaining vertical space */
+    main > .card:last-child {
+      flex: 1;
+      min-height: 0;
+      display: flex;
+      flex-direction: column;
     }
 
     /* ── Section card ── */
@@ -312,7 +329,8 @@
     #event-log {
       font-family: ui-monospace, "SF Mono", "Cascadia Code", "Fira Mono", monospace;
       overflow-y: auto;
-      max-height: 480px;
+      flex: 1;
+      min-height: 0;
     }
 
     .log-entry {
@@ -374,7 +392,13 @@
   <div class="divider"></div>
   <div class="conn-badge">
     <div class="conn-dot" id="conn-dot"></div>
+    <span style="font-size:0.65rem;font-weight:500;color:var(--text3);text-transform:uppercase;letter-spacing:0.05em;">Stream</span>
     <span id="conn-label">Connecting…</span>
+  </div>
+  <div class="conn-badge">
+    <div class="conn-dot" id="adapter-dot"></div>
+    <span style="font-size:0.65rem;font-weight:500;color:var(--text3);text-transform:uppercase;letter-spacing:0.05em;">Adapter</span>
+    <span id="adapter-label">No session</span>
   </div>
   <div class="header-stats">
     <div>NMT <strong id="s-nmt">0</strong></div>
@@ -448,6 +472,7 @@ const MAX_LOG = 200;
 let   totalLogRows = 0;
 let   activeFilter = 'ALL';
 let   paused = false;
+const pauseBuffer = [];   // events received while paused; flushed on resume
 let   retryDelay = 1000;     // ms, for exponential back-off
 let   es = null;
 
@@ -472,10 +497,29 @@ function fmtTime(isoStr) {
 
 function setConn(state) {
   connDot.className = 'conn-dot ' + state;
-  const labels = { connected: 'Connected', reconnecting: 'Reconnecting…', disconnected: 'Disconnected' };
+  const labels = { connected: 'Live', reconnecting: 'Reconnecting…', disconnected: 'Offline' };
   connLabel.textContent = labels[state] || state;
   footerSt.textContent = `http://localhost:7878/events — ${labels[state] || state}`;
 }
+
+const adapterDot   = document.getElementById('adapter-dot');
+const adapterLabel = document.getElementById('adapter-label');
+
+let adapterState = 'disconnected';
+
+function setAdapter(state) {
+
+  adapterState = state;
+  const map = {
+    disconnected: { cls: 'disconnected', label: 'Disconnected' },
+    ready:        { cls: 'reconnecting', label: 'Ready' },
+    capturing:    { cls: 'connected',    label: 'Capturing' },
+  };
+  const s = map[state] || map.disconnected;
+  adapterDot.className = 'conn-dot ' + s.cls;
+  adapterLabel.textContent = s.label;
+}
+setAdapter('disconnected'); // initialise dot colour and label on page load
 
 // ── NMT grid ──────────────────────────────────────────────────────────────────
 function stateClass(state) {
@@ -500,6 +544,11 @@ function updateNodeCard(id, label, state) {
     card.className = 'node-card';
     card.id = `node-${id}`;
     nmtGrid.appendChild(card);
+
+    // Keep cards sorted in ascending node-ID order.
+    const allCards = Array.from(nmtGrid.querySelectorAll('.node-card'));
+    allCards.sort((a, b) => parseInt(a.id.slice(5)) - parseInt(b.id.slice(5)));
+    allCards.forEach(c => nmtGrid.appendChild(c));
   }
 
   card.innerHTML = `
@@ -640,8 +689,22 @@ function processEvent(ev) {
     updateNodeCard(ev.node, null, ev.state);
   }
 
-  // Push to log (unless paused)
-  if (!paused) {
+  // Track CAN adapter connection state (Wireshark-style 3 states)
+  if (ev.type === 'session_start')         setAdapter('ready');
+  if (ev.type === 'ADAPTER_DISCONNECTED')  setAdapter('disconnected');
+  if (ev.type === 'ADAPTER_RECONNECTED')   setAdapter('ready');
+
+  // Advance Ready → Capturing on the first real data frame
+  if (adapterState === 'ready') {
+    const isData = ev.type?.startsWith('NMT') || ev.type?.startsWith('SDO') ||
+                   ev.type === 'PDO' || ev.type === 'DBC_SIGNAL' || ev.type === 'RAW_FRAME';
+    if (isData) setAdapter('capturing');
+  }
+
+  // Buffer events while paused; flush on resume so nothing is lost.
+  if (paused) {
+    pauseBuffer.push(ev);
+  } else {
     pushLogRow(ev);
   }
 }
@@ -691,6 +754,11 @@ pauseBtn.addEventListener('click', () => {
   paused = !paused;
   pauseBtn.textContent = paused ? '▶ Resume' : '⏸ Pause';
   pauseBtn.classList.toggle('paused', paused);
+  if (!paused) {
+    // Flush events that arrived while paused.
+    for (const buffered of pauseBuffer) pushLogRow(buffered);
+    pauseBuffer.length = 0;
+  }
 });
 </script>
 </body>

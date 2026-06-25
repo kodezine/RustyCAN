@@ -32,18 +32,20 @@ impl CanAdapter for PeakAdapter {
             Err(e) => {
                 let msg = e.to_string();
                 let lower = msg.to_lowercase();
-                // host-can signals timeout via a specific error string.
-                // The PCAN library also returns "Unable to receive message"
-                // (PCAN_ERROR_QRCVEMPTY) when no frame arrived within the
-                // requested window — treat that as a clean timeout too.
-                // Also handle "timed out" (macOS PCAN driver wording).
-                if lower.contains("timeout")
-                    || lower.contains("timed out")
-                    || lower.contains("unable to receive message")
-                {
+                // host-can returns "The read operation timed out" (ReadTimeout)
+                // when PCAN_ERROR_QRCVEMPTY persists until the timeout window
+                // expires.  Treat that as a clean no-frame timeout.
+                if lower.contains("timed out") || lower.contains("timeout") {
                     Err(AdapterError::Timeout)
                 } else {
-                    Err(AdapterError::Io(msg))
+                    // Any other error — including "Unable to receive message"
+                    // (ReadFailed), which host-can returns when CAN_Read yields
+                    // any non-OK, non-QRCVEMPTY status such as
+                    // PCAN_ERROR_DISCONNECT on physical USB removal — signals
+                    // that the adapter is gone.  Return Disconnected so the
+                    // session enters the reconnect loop instead of silently
+                    // continuing with stale "Connected" state.
+                    Err(AdapterError::Disconnected)
                 }
             }
         }

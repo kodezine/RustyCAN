@@ -127,6 +127,39 @@ pub fn open_adapter(
         AdapterKind::Peak => {
             #[cfg(not(target_os = "linux"))]
             {
+                // Prevent libPCBUSB.dylib from ever being dlclose'd.
+                //
+                // libPCBUSB 0.13 starts an IOKit CFRunLoop thread (USB plug-in
+                // detection) as soon as the library is loaded via dlopen.  If
+                // libloading subsequently calls dlclose (e.g. because CAN_Initialize
+                // returned an error and the PcanAdapter was never constructed, or
+                // because the PcanAdapter was dropped), that thread's code and its
+                // CFMachPort callback are unmapped.  Any later USB plug/unplug event
+                // fires the stale callback at the now-unmapped address → SIGBUS.
+                //
+                // RTLD_NODELETE (0x80 on macOS) tells dyld to never unmap the
+                // library even when dlclose reduces its refcount to zero.  We set
+                // this flag unconditionally before get_adapter() opens the library
+                // for the first time; subsequent open/close cycles only adjust the
+                // refcount without ever reaching 0.
+                #[cfg(target_os = "macos")]
+                {
+                    use std::sync::Once;
+                    static NODELETE_INIT: Once = Once::new();
+                    NODELETE_INIT.call_once(|| {
+                        let name = b"libPCBUSB.dylib\0";
+                        unsafe {
+                            // RTLD_LAZY (0x01) | RTLD_GLOBAL (0x08) | RTLD_NODELETE (0x80)
+                            let _handle = libc::dlopen(
+                                name.as_ptr() as *const libc::c_char,
+                                0x01 | 0x08 | 0x80,
+                            );
+                            // Intentionally leak _handle: the RTLD_NODELETE flag is
+                            // already stored in dyld's state; dropping the handle
+                            // would just call dlclose once more (harmless but noisy).
+                        }
+                    });
+                }
                 let inner = host_can::adapter::get_adapter(port, baud).map_err(|e| {
                     let detail = e.to_string();
                     // libloading surfaces a "cannot open shared object" / "dlopen" message
@@ -167,12 +200,50 @@ pub fn open_adapter(
 /// Probe whether an adapter is reachable without starting a session.
 ///
 /// Used by the Connect-screen polling loop.
-pub fn probe_adapter_kind(kind: &AdapterKind, port: &str, baud: u32) -> bool {
+///
+/// # PEAK probing strategy
+///
+/// Do NOT use `host_can::adapter::get_adapter()` to probe for PEAK hardware.
+/// That function opens the PCAN channel (CAN_Initialize) and then immediately
+/// drops it (CAN_Uninitialize + dlclose).  The macOS PEAK driver
+/// (libPCBUSB.dylib) starts internal USB callback threads on CAN_Initialize;
+/// dlclose frees the library's text segment while those threads are still
+/// running, producing a SIGSEGV on the next open.
+///
+/// Instead, detect PEAK hardware by scanning USB devices for PEAK System's
+/// vendor ID (0x0C72), which is safe to call repeatedly from any thread.
+pub fn probe_adapter_kind(kind: &AdapterKind, _port: &str, _baud: u32) -> bool {
     match kind {
         AdapterKind::Peak => {
-            #[cfg(not(target_os = "linux"))]
+            #[cfg(target_os = "macos")]
             {
-                host_can::adapter::get_adapter(port, baud).is_ok()
+                // nusb::list_devices() on macOS 26 Tahoe triggers a stack
+                // overflow in libusb's IOKit CFRunLoop thread when a PEAK
+                // adapter is present (libusb + Tahoe + PEAK USB interaction
+                // bug).  Use ioreg via subprocess to avoid touching the USB
+                // device directly from this process.
+                std::process::Command::new("ioreg")
+                    .args(["-p", "IOUSB", "-l", "-w0"])
+                    .output()
+                    .map(|out| {
+                        let stdout = String::from_utf8_lossy(&out.stdout);
+                        // ioreg prints idVendor as a decimal integer.
+                        // PEAK System VID = 0x0C72 = 3186 decimal.
+                        stdout.contains("\"idVendor\" = 3186")
+                    })
+                    .unwrap_or(false)
+            }
+            #[cfg(target_os = "windows")]
+            {
+                // On Windows use nusb to enumerate USB devices and check for
+                // the PEAK System vendor ID (0x0C72 = 3186).  The macOS Tahoe
+                // nusb stack-overflow bug does not affect Windows.
+                use nusb::MaybeFuture as _;
+                const PEAK_VID: u16 = 0x0C72;
+                nusb::list_devices()
+                    .wait()
+                    .map(|mut iter| iter.any(|d| d.vendor_id() == PEAK_VID))
+                    .unwrap_or(false)
             }
             #[cfg(target_os = "linux")]
             false
