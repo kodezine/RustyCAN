@@ -8,6 +8,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use chrono::Utc;
+use dirs;
 use embedded_can::Frame as EmbeddedFrame;
 use host_can::frame::CanFrame;
 
@@ -125,13 +126,15 @@ pub struct SessionConfig {
 
 /// Load EDS files, open the log, spawn the recv thread.
 ///
-/// `(receiver, command_sender, node_labels)` returned by [`start`].
+/// `(receiver, command_sender, node_labels, log_path, startup_notice)` returned by [`start`].
+/// `startup_notice` is `Some(msg)` when the log was redirected (e.g. rsync ACL fallback).
 pub type SessionResult = Result<
     (
         mpsc::Receiver<CanEvent>,
         mpsc::Sender<CanCommand>,
         Vec<(u8, String)>,
-        String, // Actual log file path with timestamp
+        String,         // Actual log file path with timestamp
+        Option<String>, // Startup notice (e.g. log location fallback)
     ),
     String,
 >;
@@ -188,17 +191,57 @@ pub fn start(config: SessionConfig) -> SessionResult {
         .collect();
 
     // ── Open logger ───────────────────────────────────────────────────────────
-    // Compute the timestamped log path before creating the logger
-    let timestamped_log_path =
-        crate::logger::add_timestamp_to_path(std::path::Path::new(&config.log_path));
+    // On Windows the project folder is often an rsync replica from macOS;
+    // rsync -a preserves Unix permissions and MSYS2 maps them to ACLs that
+    // allow reads but deny new file creation.  When the configured (relative)
+    // path fails with PermissionDenied, fall back to the user's home directory
+    // so the session can still start.
+    let abs_display_path = |p: &str| {
+        let tp = crate::logger::add_timestamp_to_path(std::path::Path::new(p));
+        std::env::current_dir().map(|d| d.join(&tp)).unwrap_or(tp)
+    };
+    let (mut logger, effective_log_path, log_fallback_notice): (
+        EventLogger,
+        String,
+        Option<String>,
+    ) = match EventLogger::with_text_log(&config.log_path, config.text_log) {
+        Ok(l) => (l, config.log_path.clone(), None),
+        Err(e)
+            if e.kind() == std::io::ErrorKind::PermissionDenied
+                && std::path::Path::new(&config.log_path).is_relative() =>
+        {
+            let disp = abs_display_path(&config.log_path);
+            let fallback_base = dirs::home_dir().ok_or_else(|| {
+                format!(
+                    "Failed to open log file {}: {e}\nCould not determine home directory for fallback.",
+                    disp.display()
+                )
+            })?;
+            let fallback_path = fallback_base.join(std::path::Path::new(&config.log_path));
+            let fallback_str = fallback_path.to_string_lossy().into_owned();
+            let l = EventLogger::with_text_log(&fallback_str, config.text_log).map_err(|e2| {
+                format!(
+                    "Failed to open log file {}: {e}\nFallback to home dir also failed: {e2}",
+                    disp.display()
+                )
+            })?;
+            let original_dir =
+                std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+            let notice = format!(
+                "Log path changed: {} not writable (rsync ACL). Writing to {} instead.",
+                original_dir.display(),
+                fallback_path.display()
+            );
+            (l, fallback_str, Some(notice))
+        }
+        Err(e) => {
+            let disp = abs_display_path(&config.log_path);
+            return Err(format!("Failed to open log file {}: {e}", disp.display()));
+        }
+    };
 
-    let mut logger =
-        EventLogger::with_text_log(&config.log_path, config.text_log).map_err(|e| {
-            format!(
-                "Failed to open log file {}: {e}",
-                timestamped_log_path.display()
-            )
-        })?;
+    let timestamped_log_path =
+        crate::logger::add_timestamp_to_path(std::path::Path::new(&effective_log_path));
 
     // Attach the SSE broadcast sender if the HTTP server is running.
     if let Some(tx) = config.sse_tx {
@@ -369,7 +412,13 @@ pub fn start(config: SessionConfig) -> SessionResult {
         }
     });
 
-    Ok((rx, cmd_tx, node_labels, actual_log_path))
+    Ok((
+        rx,
+        cmd_tx,
+        node_labels,
+        actual_log_path,
+        log_fallback_notice,
+    ))
 }
 
 // ─── Receive loop ─────────────────────────────────────────────────────────────
@@ -974,8 +1023,10 @@ fn recv_loop(
                             data.get(7).copied().unwrap_or(0),
                         ]);
 
-                        // Check for block transfer not supported (auto-fallback)
-                        if abort_code == 0x05040001 {
+                        // Check for block transfer not supported (auto-fallback).
+                        // 0x05040001 = command specifier not valid; 0x05040000 = SDO timed out
+                        // (some devices send 0x05040000 when they don't support block mode).
+                        if abort_code == 0x05040001 || abort_code == 0x05040000 {
                             // Protocol not supported - check if we can fallback
                             let should_fallback = matches!(
                                 pending.state,

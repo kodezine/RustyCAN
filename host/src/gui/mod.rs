@@ -129,6 +129,16 @@ mod icons {
     pub const INFO: &str = "\u{f05a}"; // info-circle
     pub const DASHBOARD: &str = "\u{f0ac}"; // globe
     pub const PLOT: &str = "\u{f201}"; // line-chart
+
+    // SDO Browser actions / access badges
+    pub const READ_SDO: &str = "\u{f019}"; // fa-download  (read from device)
+    pub const WRITE_SDO: &str = "\u{f093}"; // fa-upload    (write to device)
+    pub const CONFIRM: &str = "\u{f00c}"; // fa-check     (confirm write)
+    pub const CANCEL_EDIT: &str = "\u{f00d}"; // fa-times     (cancel write)
+    pub const LOCK: &str = "\u{f023}"; // fa-lock      (read-only)
+    pub const UNLOCK: &str = "\u{f13e}"; // fa-unlock-alt (read-write)
+    pub const PENCIL: &str = "\u{f040}"; // fa-pencil    (write-only)
+    pub const CYCLIC: &str = "\u{f021}"; // fa-refresh   (cyclic read)
 }
 
 /// Fixed width for every NMT action column — sized so the widest header ("Pre-Op") fits.
@@ -246,18 +256,11 @@ impl RustyCanApp {
         let screen = if let Some(ref path) = config_path {
             match PersistedConfig::load_from(path) {
                 Some(config) => {
-                    let mut form = config.into_form();
-                    match form.try_connect(
-                        sse_server.tx.clone(),
-                        dfu_path.clone(),
-                        app_update.clone(),
-                    ) {
-                        Ok(monitor) => Screen::Monitor(Box::new(monitor)),
-                        Err(msg) => {
-                            form.error = Some(msg);
-                            Screen::Connect(form)
-                        }
-                    }
+                    // Pre-populate the Connect form with the config file settings
+                    // but do NOT auto-connect.  The user presses Connect when ready.
+                    // (Auto-connect is handled by --tui / --log-to-stdout which have
+                    // no interactive button.)
+                    Screen::Connect(config.into_form())
                 }
                 None => {
                     let form = ConnectForm {
@@ -657,7 +660,7 @@ impl ConnectForm {
             sse_tx: Some(sse_tx),
         };
 
-        let (rx, cmd_tx, node_labels, actual_log_path) = session::start(config)?;
+        let (rx, cmd_tx, node_labels, actual_log_path, startup_notice) = session::start(config)?;
 
         // Save configuration to disk for next session
         let persisted = PersistedConfig::from(self);
@@ -671,6 +674,12 @@ impl ConnectForm {
         // Save a clean copy of the form (no error) to restore on disconnect.
         let mut saved_form = self.clone();
         saved_form.error = None;
+        // Surface any startup notice (e.g. log path fallback) on the connect
+        // form so the user sees it when they disconnect.
+        if startup_notice.is_some() {
+            eprintln!("{}", startup_notice.as_deref().unwrap_or(""));
+        }
+        saved_form.adapter_notice = startup_notice;
 
         // Build node_id → full EDS path map for hover tooltips in the monitor.
         let node_eds_paths: std::collections::HashMap<u8, String> = self
@@ -835,7 +844,15 @@ fn render_connect(
                     .corner_radius(6.0),
             );
             ui.vertical(|ui| {
-                ui.strong(egui::RichText::new("RustyCAN").size(24.0));
+                ui.horizontal(|ui| {
+                    ui.style_mut().spacing.item_spacing.x = 0.0;
+                    ui.strong(egui::RichText::new("Rusty").size(24.0));
+                    ui.strong(
+                        egui::RichText::new("CAN")
+                            .size(24.0)
+                            .color(Color32::from_rgb(79, 195, 247)),
+                    );
+                });
                 ui.label(
                     egui::RichText::new(env!("RUSTYCAN_VERSION"))
                         .size(10.0)
@@ -1621,7 +1638,8 @@ struct SdoBrowserPanel {
 
     // EDS pane state
     filter_str: String,
-    selected_od_key: Option<(u16, u8)>,
+    /// Which (index, subindex) row currently has the inline write box expanded.
+    write_open: Option<(u16, u8)>,
     write_value_str: String,
 
     // Raw pane state
@@ -1631,6 +1649,11 @@ struct SdoBrowserPanel {
 
     /// Last encode/validation error from a write attempt.
     last_error: Option<String>,
+
+    /// (node_id, index, subindex) entries enabled for periodic automatic reads.
+    cyclic_reads: std::collections::HashSet<(u8, u16, u8)>,
+    /// When each cyclic entry was last dispatched.
+    cyclic_last_sent: std::collections::HashMap<(u8, u16, u8), std::time::Instant>,
 }
 
 impl Default for SdoBrowserPanel {
@@ -1639,12 +1662,14 @@ impl Default for SdoBrowserPanel {
             selected_node_idx: 0,
             raw_mode: false,
             filter_str: String::new(),
-            selected_od_key: None,
+            write_open: None,
             write_value_str: String::new(),
             raw_index_str: String::new(),
             raw_subindex_str: "0".into(),
             raw_data_str: String::new(),
             last_error: None,
+            cyclic_reads: std::collections::HashSet::new(),
+            cyclic_last_sent: std::collections::HashMap::new(),
         }
     }
 }
@@ -1804,17 +1829,27 @@ fn format_count(n: u64) -> String {
 ///
 /// Visual: `Bus [██████░░░░░░░░░░░░░░] 28.4%`
 /// Colours — blue ≤30 %, yellow 30–70 %, red >70 %.
-fn bus_load_bar(ui: &mut egui::Ui, load: f64) {
-    use egui::text::{LayoutJob, TextFormat};
+/// Block allocation for the bus-load bar.
+///
+/// Separated from [`bus_load_bar`] so the pure arithmetic can be tested
+/// without an egui context.
+pub(crate) struct BusLoadZones {
+    pub blue_n: usize,
+    pub yellow_n: usize,
+    pub red_n: usize,
+    pub empty_n: usize,
+}
 
+/// Compute how many of the 20 bar blocks fall into each colour zone.
+///
+/// Zones: blue ≤ 30 %, yellow 30–70 %, red > 70 %.
+pub(crate) fn bus_load_zones(load: f64) -> BusLoadZones {
     const BLOCKS: usize = 20;
     let filled = ((load / 100.0) * BLOCKS as f64).round() as usize;
     let filled = filled.min(BLOCKS);
-
     // Colour-zone boundaries in blocks (30 % → 6, 70 % → 14)
     let blue_end = ((30.0_f64 / 100.0) * BLOCKS as f64).round() as usize;
     let yellow_end = ((70.0_f64 / 100.0) * BLOCKS as f64).round() as usize;
-
     let blue_n = filled.min(blue_end);
     let yellow_n = if filled > blue_end {
         (filled - blue_end).min(yellow_end - blue_end)
@@ -1823,6 +1858,23 @@ fn bus_load_bar(ui: &mut egui::Ui, load: f64) {
     };
     let red_n = filled.saturating_sub(yellow_end);
     let empty_n = BLOCKS - filled;
+    BusLoadZones {
+        blue_n,
+        yellow_n,
+        red_n,
+        empty_n,
+    }
+}
+
+fn bus_load_bar(ui: &mut egui::Ui, load: f64) {
+    use egui::text::{LayoutJob, TextFormat};
+
+    let BusLoadZones {
+        blue_n,
+        yellow_n,
+        red_n,
+        empty_n,
+    } = bus_load_zones(load);
 
     let font = egui::FontId::monospace(13.0);
     let mk = |color: Color32| TextFormat {
@@ -1989,7 +2041,15 @@ fn render_monitor(
                     .corner_radius(6.0),
             );
             ui.vertical(|ui| {
-                ui.strong(egui::RichText::new("RustyCAN").size(28.0));
+                ui.horizontal(|ui| {
+                    ui.style_mut().spacing.item_spacing.x = 0.0;
+                    ui.strong(egui::RichText::new("Rusty").size(28.0));
+                    ui.strong(
+                        egui::RichText::new("CAN")
+                            .size(28.0)
+                            .color(Color32::from_rgb(79, 195, 247)),
+                    );
+                });
                 ui.label(
                     egui::RichText::new(env!("RUSTYCAN_VERSION"))
                         .size(10.0)
@@ -3406,7 +3466,7 @@ fn sdo_browser_section(
                             .selectable_value(&mut panel.selected_node_idx, i, label_str)
                             .changed()
                         {
-                            panel.selected_od_key = None;
+                            panel.write_open = None;
                             panel.write_value_str.clear();
                             panel.last_error = None;
                         }
@@ -3506,7 +3566,7 @@ fn sdo_browser_section(
                                 node_id: current_id,
                                 index,
                                 subindex,
-                                mode: SdoTransferMode::Auto,
+                                mode: SdoTransferMode::ForcedSegmented,
                             });
                         }
                         Err(e) => panel.last_error = Some(e),
@@ -3553,7 +3613,48 @@ fn sdo_browser_section(
         } else {
             // ── EDS pane ──────────────────────────────────────────────────
             if let Some(od) = node_ods.get(&current_id) {
-                // Filter text box
+                // ── Cyclic read tick ──────────────────────────────────────
+                if !panel.cyclic_reads.is_empty() {
+                    let now = std::time::Instant::now();
+                    let mut earliest_due_ms: u64 = 1000;
+                    let mut sent_one = false;
+                    for &ck in &panel.cyclic_reads {
+                        if ck.0 != current_id {
+                            continue;
+                        }
+                        let elapsed = panel
+                            .cyclic_last_sent
+                            .get(&ck)
+                            .map(|t| now.duration_since(*t).as_millis() as u64)
+                            .unwrap_or(u64::MAX);
+                        if elapsed >= 1000 {
+                            if !sent_one && !is_pending {
+                                panel.cyclic_last_sent.insert(ck, now);
+                                let _ = cmd_tx.send(CanCommand::SdoRead {
+                                    node_id: current_id,
+                                    index: ck.1,
+                                    subindex: ck.2,
+                                    mode: SdoTransferMode::Auto,
+                                });
+                                sent_one = true;
+                                earliest_due_ms = 0;
+                            }
+                        } else {
+                            let remaining = 1000 - elapsed;
+                            if remaining < earliest_due_ms {
+                                earliest_due_ms = remaining;
+                            }
+                        }
+                    }
+                    let repaint_ms = if earliest_due_ms == 0 {
+                        100 // another due entry pending — check soon
+                    } else {
+                        earliest_due_ms.max(100)
+                    };
+                    ui.ctx()
+                        .request_repaint_after(std::time::Duration::from_millis(repaint_ms));
+                }
+                // ──────────────────────────────────────────────────────────
                 ui.horizontal(|ui| {
                     ui.label("Filter:");
                     ui.add(
@@ -3566,7 +3667,6 @@ fn sdo_browser_section(
                     }
                 });
 
-                // Collect and filter entries, then group by index.
                 let filter = panel.filter_str.to_lowercase();
                 let mut entries: Vec<((u16, u8), &crate::eds::types::OdEntry)> = od
                     .iter()
@@ -3582,14 +3682,13 @@ fn sdo_browser_section(
                     .collect();
                 entries.sort_by_key(|(k, _)| *k);
 
-                // Build ordered list of unique indexes.
                 let mut indexes: Vec<u16> = entries.iter().map(|((idx, _), _)| *idx).collect();
                 indexes.dedup();
 
-                // Scrollable tree of index groups → subindex rows.
                 egui::ScrollArea::vertical()
                     .id_salt("sdo_browser_od")
                     .max_height(280.0)
+                    .auto_shrink([false, true])
                     .show(ui, |ui| {
                         for idx in &indexes {
                             let subs: Vec<(u8, &crate::eds::types::OdEntry)> = entries
@@ -3598,8 +3697,6 @@ fn sdo_browser_section(
                                 .map(|((_, s), e)| (*s, *e))
                                 .collect();
 
-                            // Pick a representative name for the group header:
-                            // sub 0 name if it exists, otherwise first sub's name.
                             let group_name = subs
                                 .iter()
                                 .find(|(s, _)| *s == 0)
@@ -3607,233 +3704,424 @@ fn sdo_browser_section(
                                 .map(|(_, e)| e.name.as_str())
                                 .unwrap_or("");
 
-                            // Highlight the header if any sub in this group is selected.
-                            let group_selected = panel
-                                .selected_od_key
-                                .map(|(si, _)| si == *idx)
-                                .unwrap_or(false);
-
-                            // Auto-open when the filter is active or when an entry in
-                            // this group is selected.
-                            let force_open = !filter.is_empty() || group_selected;
+                            let force_open = !filter.is_empty()
+                                || panel.write_open.map(|(si, _)| si == *idx).unwrap_or(false);
 
                             let header_text =
-                                egui::RichText::new(format!("{:04X}h  {}", idx, group_name)).color(
-                                    if group_selected {
-                                        Color32::from_rgb(130, 190, 255)
-                                    } else {
-                                        Color32::GRAY
+                                egui::RichText::new(format!("{:04X}h  {}", idx, group_name))
+                                    .size(13.0)
+                                    .strong()
+                                    .color(Color32::from_gray(160));
+
+                            // Readable sub-indices for group-level buttons
+                            let readable_subs: Vec<u8> = subs
+                                .iter()
+                                .filter(|(_, e)| !matches!(e.access, AccessType::WriteOnly))
+                                .map(|(s, _)| *s)
+                                .collect();
+                            let any_readable = !readable_subs.is_empty();
+                            let all_cyclic = any_readable
+                                && readable_subs
+                                    .iter()
+                                    .all(|s| panel.cyclic_reads.contains(&(current_id, *idx, *s)));
+
+                            ui.add_space(6.0); // visual separation between groups
+                            let cs_id = ui.make_persistent_id(("sdo_idx", idx));
+                            let mut cs_state =
+                                egui::collapsing_header::CollapsingState::load_with_default_open(
+                                    ui.ctx(),
+                                    cs_id,
+                                    false,
+                                );
+                            if force_open {
+                                cs_state.set_open(true);
+                            }
+                            let header_resp = cs_state.show_header(ui, |ui| {
+                                ui.label(header_text);
+                                ui.with_layout(
+                                    egui::Layout::right_to_left(egui::Align::Center),
+                                    |ui| {
+                                        let row_h = ui.spacing().interact_size.y;
+                                        // Match sub-entry columns (r-to-l): scrollbar, write, cyclic, read
+                                        ui.add_space(10.0); // scrollbar
+                                        ui.add_space(26.0); // write col placeholder
+                                        if any_readable {
+                                            // ↻ Cyclic-all (cyclic col, 20px)
+                                            let cyc_col = if all_cyclic {
+                                                Color32::from_rgb(80, 200, 200)
+                                            } else {
+                                                Color32::GRAY
+                                            };
+                                            if ui
+                                                .add(
+                                                    egui::Button::new(
+                                                        egui::RichText::new(icons::CYCLIC)
+                                                            .size(11.0)
+                                                            .color(cyc_col),
+                                                    )
+                                                    .min_size(egui::vec2(20.0, row_h)),
+                                                )
+                                                .on_hover_text(if all_cyclic {
+                                                    "Stop all cyclic reads"
+                                                } else {
+                                                    "Start cyclic reads for all sub-entries"
+                                                })
+                                                .clicked()
+                                            {
+                                                if all_cyclic {
+                                                    for s in &readable_subs {
+                                                        let ck = (current_id, *idx, *s);
+                                                        panel.cyclic_reads.remove(&ck);
+                                                        panel.cyclic_last_sent.remove(&ck);
+                                                    }
+                                                } else {
+                                                    for s in &readable_subs {
+                                                        panel
+                                                            .cyclic_reads
+                                                            .insert((current_id, *idx, *s));
+                                                    }
+                                                }
+                                            }
+                                            // ⬇ Read-all (read col, 26px)
+                                            if ui
+                                                .add_enabled(
+                                                    !is_pending,
+                                                    egui::Button::new(
+                                                        egui::RichText::new(icons::READ_SDO)
+                                                            .size(13.0),
+                                                    )
+                                                    .min_size(egui::vec2(26.0, row_h)),
+                                                )
+                                                .on_hover_text("Read all sub-entries")
+                                                .clicked()
+                                            {
+                                                panel.last_error = None;
+                                                panel.write_open = None;
+                                                for s in &readable_subs {
+                                                    let _ = cmd_tx.send(CanCommand::SdoRead {
+                                                        node_id: current_id,
+                                                        index: *idx,
+                                                        subindex: *s,
+                                                        mode: SdoTransferMode::ForcedSegmented,
+                                                    });
+                                                }
+                                            }
+                                        } else {
+                                            ui.add_space(20.0); // cyclic col placeholder
+                                            ui.add_space(26.0); // read col placeholder
+                                        }
                                     },
                                 );
+                            });
+                            header_resp.body(|ui| {
+                                for (sub, entry) in &subs {
+                                    let key = (*idx, *sub);
+                                    let is_write_open = panel.write_open == Some(key);
+                                    let can_read = !matches!(entry.access, AccessType::WriteOnly);
+                                    let can_write = !matches!(
+                                        entry.access,
+                                        AccessType::ReadOnly | AccessType::Const
+                                    );
 
-                            let mut header =
-                                egui::CollapsingHeader::new(header_text).id_salt(("sdo_idx", idx));
-                            if force_open {
-                                header = header.open(Some(true));
-                            }
-                            header.show(ui, |ui| {
-                                // Calculate column widths to fill available space
-                                let available_width = ui.available_width();
-                                let spacing = 8.0;
-                                let sub_width = 40.0;
-                                let type_width = 100.0;
-                                let access_width = 50.0;
-                                let name_width = (available_width
-                                    - sub_width
-                                    - type_width
-                                    - access_width
-                                    - spacing * 3.0)
-                                    .max(100.0);
-
-                                egui::Grid::new(("sdo_sub_grid", idx))
-                                    .striped(true)
-                                    .spacing([spacing, 3.0])
-                                    .show(ui, |ui| {
-                                        ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Extend);
-
-                                        ui.strong("Sub");
-                                        ui.strong("Name");
-                                        ui.strong("Type");
-                                        ui.strong("Access");
-                                        ui.end_row();
-
-                                        for (sub, entry) in &subs {
-                                            let key = (*idx, *sub);
-                                            let is_selected = panel.selected_od_key == Some(key);
-
-                                            // Apply background highlighting for selected row
-                                            if is_selected {
-                                                let row_rect = ui.available_rect_before_wrap();
-                                                ui.painter().rect_filled(
-                                                    row_rect,
-                                                    0.0,
-                                                    Color32::from_rgba_unmultiplied(
-                                                        130, 190, 255, 30,
-                                                    ),
-                                                );
-                                            }
-
-                                            let row_text = |s: &str| {
-                                                let t = egui::RichText::new(s);
-                                                if is_selected {
-                                                    t.strong()
-                                                        .color(Color32::from_rgb(130, 190, 255))
-                                                } else {
-                                                    t
-                                                }
-                                            };
-
-                                            // Make all cells clickable by wrapping each in selectable_label
-                                            let sub_response = ui
-                                                .add_sized(
-                                                    [sub_width, 0.0],
-                                                    egui::Button::selectable(
-                                                        is_selected,
-                                                        row_text(&format!("{}", sub)),
-                                                    ),
-                                                )
-                                                .on_hover_text(format!(
-                                                    "{:04X}h / sub {:02}  —  {}",
-                                                    idx, sub, entry.name
-                                                ));
-
-                                            let name_response = ui.add_sized(
-                                                [name_width, 0.0],
-                                                egui::Button::selectable(
-                                                    is_selected,
-                                                    row_text(entry.name.as_str()),
-                                                ),
-                                            );
-
-                                            let type_response = ui.add_sized(
-                                                [type_width, 0.0],
-                                                egui::Button::selectable(
-                                                    is_selected,
-                                                    row_text(
-                                                        &format!("{:?}", entry.data_type)
-                                                            .replace("DataType::", ""),
-                                                    ),
-                                                ),
-                                            );
-
-                                            let (acc_str, acc_color) = match &entry.access {
-                                                AccessType::ReadOnly | AccessType::Const => {
-                                                    ("RO", Color32::from_rgb(80, 200, 255))
-                                                }
-                                                AccessType::WriteOnly => {
-                                                    ("WO", Color32::from_rgb(220, 100, 220))
-                                                }
-                                                AccessType::ReadWrite => {
-                                                    ("R/W", Color32::from_rgb(100, 220, 100))
-                                                }
-                                                AccessType::Unknown => ("?", Color32::GRAY),
-                                            };
-                                            let access_response = ui.add_sized(
-                                                [access_width, 0.0],
-                                                egui::Button::selectable(
-                                                    is_selected,
-                                                    egui::RichText::new(acc_str).color(acc_color),
-                                                ),
-                                            );
-
-                                            // Check if any cell was clicked
-                                            if sub_response.clicked()
-                                                || name_response.clicked()
-                                                || type_response.clicked()
-                                                || access_response.clicked()
-                                            {
-                                                if panel.selected_od_key == Some(key) {
-                                                    panel.selected_od_key = None;
-                                                } else {
-                                                    panel.selected_od_key = Some(key);
-                                                    panel.write_value_str.clear();
-                                                    panel.last_error = None;
-                                                }
-                                            }
-
-                                            ui.end_row();
+                                    let (access_icon, acc_color) = match &entry.access {
+                                        AccessType::ReadOnly | AccessType::Const => {
+                                            (icons::LOCK, Color32::from_rgb(80, 160, 220))
                                         }
+                                        AccessType::WriteOnly => {
+                                            (icons::PENCIL, Color32::from_rgb(200, 100, 220))
+                                        }
+                                        AccessType::ReadWrite => {
+                                            (icons::UNLOCK, Color32::from_rgb(100, 200, 100))
+                                        }
+                                        AccessType::Unknown => {
+                                            (icons::STATE_UNK, Color32::from_gray(120))
+                                        }
+                                    };
+
+                                    let type_str =
+                                        format!("{:?}", entry.data_type).replace("DataType::", "");
+
+                                    // ── Cached last-read from SDO log ──────
+                                    let last_read = state.sdo_log.iter().rev().find(|e| {
+                                        e.node_id == current_id
+                                            && e.index == *idx
+                                            && e.subindex == *sub
+                                            && matches!(e.direction, SdoDirection::Read)
                                     });
+                                    let value_text: String = if let Some(lr) = &last_read {
+                                        if let Some(val) = &lr.value {
+                                            sdo_value_compact_str(val)
+                                        } else if let Some(abort) = lr.abort_code {
+                                            format!("ERR 0x{:08X}", abort)
+                                        } else {
+                                            String::new()
+                                        }
+                                    } else {
+                                        String::new()
+                                    };
+                                    let value_hover: Option<String> = last_read
+                                        .as_ref()
+                                        .and_then(|lr| lr.value.as_ref())
+                                        .map(sdo_value_full_str);
+
+                                    let sub_w = 28.0;
+                                    let name_col_w = 150.0;
+                                    let type_col_w = 45.0;
+                                    // Abbreviated type for compact display
+                                    let type_abbr = type_str
+                                        .replace("Unsigned", "U")
+                                        .replace("Integer", "I")
+                                        .replace("Real", "F")
+                                        .replace("VisibleString", "Str")
+                                        .replace("OctetString", "Bytes")
+                                        .replace("Boolean", "Bool");
+
+                                    // ── Entry row: sub | name | type | [value/input · buttons · badge] ──
+                                    let row_h = ui.spacing().interact_size.y;
+                                    ui.horizontal(|ui| {
+                                        // Access badge — leftmost column
+                                        ui.allocate_ui(egui::vec2(20.0, row_h), |ui| {
+                                            ui.add(
+                                                egui::Label::new(
+                                                    egui::RichText::new(access_icon)
+                                                        .size(11.0)
+                                                        .color(acc_color),
+                                                )
+                                                .truncate(),
+                                            );
+                                        })
+                                        .response
+                                        .on_hover_text(
+                                            match &entry.access {
+                                                AccessType::ReadOnly | AccessType::Const => {
+                                                    "Read Only"
+                                                }
+                                                AccessType::WriteOnly => "Write Only",
+                                                AccessType::ReadWrite => "Read / Write",
+                                                AccessType::Unknown => "Unknown",
+                                            },
+                                        );
+
+                                        // Sub number — left-aligned, fixed width
+                                        ui.allocate_ui(egui::vec2(sub_w, row_h), |ui| {
+                                            ui.add(
+                                                egui::Label::new(
+                                                    egui::RichText::new(format!("{}", sub))
+                                                        .small()
+                                                        .color(Color32::from_gray(150)),
+                                                )
+                                                .truncate(),
+                                            );
+                                        });
+
+                                        // Name — left-aligned, fixed width
+                                        ui.allocate_ui(egui::vec2(name_col_w, row_h), |ui| {
+                                            ui.add(
+                                                egui::Label::new(
+                                                    egui::RichText::new(entry.name.as_str())
+                                                        .small(),
+                                                )
+                                                .truncate(),
+                                            );
+                                        })
+                                        .response
+                                        .on_hover_text(
+                                            format!("{:04X}h/{:02X}  {}", idx, sub, entry.name),
+                                        );
+
+                                        // Type — left-aligned, fixed width
+                                        ui.allocate_ui(egui::vec2(type_col_w, row_h), |ui| {
+                                            ui.add(
+                                                egui::Label::new(
+                                                    egui::RichText::new(&type_abbr)
+                                                        .small()
+                                                        .color(Color32::from_gray(140)),
+                                                )
+                                                .truncate(),
+                                            );
+                                        });
+
+                                        // Fixed-column right-to-left grid:
+                                        // [value fills] [⬇/✓ read/confirm] [↻ cyclic] [✏/✗ write/cancel] [10px]
+                                        ui.with_layout(
+                                            egui::Layout::right_to_left(egui::Align::Center),
+                                            |ui| {
+                                                ui.set_max_height(row_h);
+                                                ui.add_space(10.0); // scrollbar (rightmost)
+
+                                                // Write col (26px): cancel / open-write / space
+                                                if is_write_open {
+                                                    if ui
+                                                        .add(
+                                                            egui::Button::new(
+                                                                egui::RichText::new(
+                                                                    icons::CANCEL_EDIT,
+                                                                )
+                                                                .color(Color32::from_gray(160))
+                                                                .size(11.0),
+                                                            )
+                                                            .min_size(egui::vec2(26.0, row_h)),
+                                                        )
+                                                        .on_hover_text("Cancel")
+                                                        .clicked()
+                                                    {
+                                                        panel.write_open = None;
+                                                        panel.write_value_str.clear();
+                                                        panel.last_error = None;
+                                                    }
+                                                } else if can_write {
+                                                    if ui
+                                                        .add(
+                                                            egui::Button::new(
+                                                                egui::RichText::new(
+                                                                    icons::WRITE_SDO,
+                                                                )
+                                                                .size(11.0),
+                                                            )
+                                                            .min_size(egui::vec2(26.0, row_h)),
+                                                        )
+                                                        .on_hover_text("Write to device")
+                                                        .clicked()
+                                                    {
+                                                        panel.write_open = Some(key);
+                                                        panel.write_value_str.clear();
+                                                        panel.last_error = None;
+                                                    }
+                                                } else {
+                                                    ui.add_space(26.0);
+                                                }
+
+                                                // Cyclic col (20px): toggle / space
+                                                if can_read {
+                                                    let ck = (current_id, key.0, key.1);
+                                                    let is_cyclic =
+                                                        panel.cyclic_reads.contains(&ck);
+                                                    let cyc_color = if is_cyclic {
+                                                        Color32::from_rgb(80, 200, 200)
+                                                    } else {
+                                                        Color32::GRAY
+                                                    };
+                                                    let cyc_resp = ui
+                                                        .add(
+                                                            egui::Button::new(
+                                                                egui::RichText::new(icons::CYCLIC)
+                                                                    .size(11.0)
+                                                                    .color(cyc_color),
+                                                            )
+                                                            .min_size(egui::vec2(20.0, row_h)),
+                                                        )
+                                                        .on_hover_text(if is_cyclic {
+                                                            "Stop cyclic read"
+                                                        } else {
+                                                            "Start cyclic read (1 s interval)"
+                                                        });
+                                                    if cyc_resp.clicked() {
+                                                        if is_cyclic {
+                                                            panel.cyclic_reads.remove(&ck);
+                                                            panel.cyclic_last_sent.remove(&ck);
+                                                        } else {
+                                                            panel.cyclic_reads.insert(ck);
+                                                        }
+                                                    }
+                                                } else {
+                                                    ui.add_space(20.0);
+                                                }
+
+                                                // Read col (26px): read / confirm (write-open) / space
+                                                if is_write_open {
+                                                    if ui
+                                                        .add_enabled(
+                                                            !is_pending,
+                                                            egui::Button::new(
+                                                                egui::RichText::new(icons::CONFIRM)
+                                                                    .color(Color32::from_rgb(
+                                                                        80, 200, 80,
+                                                                    ))
+                                                                    .size(11.0),
+                                                            )
+                                                            .min_size(egui::vec2(26.0, row_h)),
+                                                        )
+                                                        .on_hover_text("Send write")
+                                                        .clicked()
+                                                    {
+                                                        match encode_value_for_type(
+                                                            &panel.write_value_str,
+                                                            &entry.data_type,
+                                                        ) {
+                                                            Ok(data) => {
+                                                                panel.last_error = None;
+                                                                panel.write_open = None;
+                                                                let _ =
+                                                                    cmd_tx
+                                                                        .send(CanCommand::SdoWrite {
+                                                                        node_id: current_id,
+                                                                        index: key.0,
+                                                                        subindex: key.1,
+                                                                        data,
+                                                                        mode: SdoTransferMode::Auto,
+                                                                    });
+                                                            }
+                                                            Err(e) => panel.last_error = Some(e),
+                                                        }
+                                                    }
+                                                } else if can_read {
+                                                    let read_btn = egui::Button::new(
+                                                        egui::RichText::new(icons::READ_SDO)
+                                                            .size(13.0),
+                                                    )
+                                                    .min_size(egui::vec2(26.0, row_h));
+                                                    let read_resp = ui
+                                                        .add_enabled(!is_pending, read_btn)
+                                                        .on_hover_text("Read from device")
+                                                        .on_disabled_hover_text(
+                                                            "Waiting for response",
+                                                        );
+                                                    if read_resp.clicked() {
+                                                        panel.last_error = None;
+                                                        panel.write_open = None;
+                                                        let _ = cmd_tx.send(CanCommand::SdoRead {
+                                                            node_id: current_id,
+                                                            index: key.0,
+                                                            subindex: key.1,
+                                                            mode: SdoTransferMode::ForcedSegmented,
+                                                        });
+                                                    }
+                                                } else {
+                                                    ui.add_space(26.0);
+                                                }
+
+                                                // Value area — fills remaining left space
+                                                let fill_w = ui.available_width().max(40.0);
+                                                if is_write_open {
+                                                    ui.add_sized(
+                                                        [fill_w, row_h],
+                                                        egui::TextEdit::singleline(
+                                                            &mut panel.write_value_str,
+                                                        )
+                                                        .hint_text(value_hint_for_type(
+                                                            &entry.data_type,
+                                                        )),
+                                                    );
+                                                } else {
+                                                    let mut vd = value_text.clone();
+                                                    let vr = ui.add_sized(
+                                                        [fill_w, row_h],
+                                                        egui::TextEdit::singleline(&mut vd)
+                                                            .interactive(false)
+                                                            .font(egui::TextStyle::Small)
+                                                            .hint_text("—"),
+                                                    );
+                                                    if let Some(hover) = &value_hover {
+                                                        vr.on_hover_text(hover);
+                                                    }
+                                                }
+                                            },
+                                        );
+                                    });
+                                }
                             });
                         }
                     });
-
-                // Detail + action area for selected entry
-                if let Some(key) = panel.selected_od_key {
-                    if let Some(entry) = od.get(&key) {
-                        ui.separator();
-                        ui.horizontal(|ui| {
-                            ui.strong(&entry.name);
-                            ui.label(format!(
-                                "— {:04X}h/{:02X}  {:?}",
-                                key.0, key.1, entry.data_type
-                            ));
-                        });
-
-                        let can_read = !matches!(entry.access, AccessType::WriteOnly);
-                        let can_write =
-                            !matches!(entry.access, AccessType::ReadOnly | AccessType::Const);
-
-                        ui.horizontal(|ui| {
-                            // Read button
-                            if ui
-                                .add_enabled(
-                                    can_read && !is_pending,
-                                    Button::new("Read").fill(Color32::from_rgb(40, 90, 180)),
-                                )
-                                .on_disabled_hover_text(if is_pending {
-                                    "Waiting for previous response"
-                                } else {
-                                    "Object is write-only"
-                                })
-                                .clicked()
-                            {
-                                panel.last_error = None;
-                                let _ = cmd_tx.send(CanCommand::SdoRead {
-                                    node_id: current_id,
-                                    index: key.0,
-                                    subindex: key.1,
-                                    mode: SdoTransferMode::Auto,
-                                });
-                            }
-
-                            // Write area
-                            if can_write {
-                                let hint = value_hint_for_type(&entry.data_type);
-                                ui.add(
-                                    egui::TextEdit::singleline(&mut panel.write_value_str)
-                                        .desired_width(160.0)
-                                        .hint_text(hint),
-                                );
-                                if ui
-                                    .add_enabled(
-                                        !is_pending,
-                                        Button::new("Write").fill(Color32::from_rgb(120, 45, 130)),
-                                    )
-                                    .on_disabled_hover_text("Waiting for previous response")
-                                    .clicked()
-                                {
-                                    match encode_value_for_type(
-                                        &panel.write_value_str,
-                                        &entry.data_type,
-                                    ) {
-                                        Ok(data) => {
-                                            panel.last_error = None;
-                                            let _ = cmd_tx.send(CanCommand::SdoWrite {
-                                                node_id: current_id,
-                                                index: key.0,
-                                                subindex: key.1,
-                                                data,
-                                                mode: SdoTransferMode::Auto,
-                                            });
-                                        }
-                                        Err(e) => panel.last_error = Some(e),
-                                    }
-                                }
-                            }
-                        });
-                    }
-                }
             }
         }
     });
@@ -3882,6 +4170,65 @@ fn parse_raw_index_sub(index_str: &str, sub_str: &str) -> Result<(u16, u8), Stri
     Ok((index, subindex))
 }
 
+// ─── SDO value helpers ────────────────────────────────────────────────────────
+
+/// Compact single-line SDO value: decoded text for strings, decimal+hex for numbers.
+fn sdo_value_compact_str(val: &SdoValue) -> String {
+    match val {
+        SdoValue::Bool(v) => format!("{}", v),
+        SdoValue::I8(v) => format!("{}", v),
+        SdoValue::I16(v) => format!("{}", v),
+        SdoValue::I32(v) => format!("{}", v),
+        SdoValue::I64(v) => format!("{}", v),
+        SdoValue::U8(v) => format!("{} [0x{:02X}]", v, v),
+        SdoValue::U16(v) => format!("{} [0x{:04X}]", v, v),
+        SdoValue::U32(v) => format!("{} [0x{:08X}]", v, v),
+        SdoValue::U64(v) => format!("{} [0x{:016X}]", v, v),
+        SdoValue::F32(v) => format!("{:.4}", v),
+        SdoValue::F64(v) => format!("{:.6}", v),
+        SdoValue::Bytes(b) => {
+            let is_printable = b.iter().all(|&byte| {
+                byte == 0
+                    || byte == 0x09
+                    || byte == 0x0A
+                    || byte == 0x0D
+                    || (0x20..0x7F).contains(&byte)
+            });
+            if is_printable {
+                let trimmed: Vec<u8> = b.iter().take_while(|&&byte| byte != 0).copied().collect();
+                if let Ok(s) = String::from_utf8(trimmed) {
+                    return format!("\"{}\"", s);
+                }
+            }
+            let hex: Vec<String> = b
+                .iter()
+                .take(8)
+                .map(|byte| format!("{:02X}", byte))
+                .collect();
+            if b.len() > 8 {
+                format!("[{} … {} bytes]", hex.join(" "), b.len())
+            } else {
+                format!("[{}]", hex.join(" "))
+            }
+        }
+    }
+}
+
+/// Full SDO value for hover tooltip: compact repr + full hex dump for byte arrays.
+fn sdo_value_full_str(val: &SdoValue) -> String {
+    if let SdoValue::Bytes(b) = val {
+        let compact = sdo_value_compact_str(val);
+        let hex: String = b
+            .iter()
+            .map(|byte| format!("{:02X}", byte))
+            .collect::<Vec<_>>()
+            .join(" ");
+        format!("{}\n{}", compact, hex)
+    } else {
+        sdo_value_compact_str(val)
+    }
+}
+
 // ─── SDO Log section ──────────────────────────────────────────────────────────
 
 /// Render an SDO value with both main format and hex annotation (like PDO display).
@@ -3925,16 +4272,9 @@ fn sdo_value_ui(ui: &mut egui::Ui, val: &SdoValue) {
                 .join(" ");
 
             if let Some(text) = as_str {
-                // For visible strings: show string first, then hex bytes in italics
-                ui.horizontal_wrapped(|ui| {
-                    ui.label(format!("\"{}\"", text));
-                    ui.label(
-                        egui::RichText::new(hex_str)
-                            .italics()
-                            .small()
-                            .color(egui::Color32::from_gray(160)),
-                    );
-                });
+                // For visible strings: show only the decoded string inline;
+                // full hex bytes are in the hover tooltip to keep log rows compact.
+                ui.label(format!("\"{}\"", text)).on_hover_text(hex_str);
                 return;
             } else {
                 // For non-printable bytes: show hex format in brackets
@@ -4188,4 +4528,149 @@ pub fn load_session_config(
             .collect(),
         sse_tx,
     })
+}
+
+// ─── Unit tests ───────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ── bus_load_zones: pure arithmetic ──────────────────────────────────────
+
+    #[test]
+    fn bus_load_zones_zero_pct() {
+        let z = bus_load_zones(0.0);
+        assert_eq!(z.blue_n, 0);
+        assert_eq!(z.yellow_n, 0);
+        assert_eq!(z.red_n, 0);
+        assert_eq!(z.empty_n, 20);
+    }
+
+    /// At exactly 30 % the blue zone is fully filled; yellow and red are empty.
+    #[test]
+    fn bus_load_zones_thirty_pct() {
+        let z = bus_load_zones(30.0);
+        // 30 % × 20 blocks = 6 filled → all blue
+        assert_eq!(z.blue_n, 6);
+        assert_eq!(z.yellow_n, 0);
+        assert_eq!(z.red_n, 0);
+        assert_eq!(z.empty_n, 14);
+    }
+
+    /// At exactly 70 % blue + yellow zones are both fully filled; no red.
+    #[test]
+    fn bus_load_zones_seventy_pct() {
+        let z = bus_load_zones(70.0);
+        // 70 % × 20 = 14 filled → 6 blue + 8 yellow
+        assert_eq!(z.blue_n, 6);
+        assert_eq!(z.yellow_n, 8);
+        assert_eq!(z.red_n, 0);
+        assert_eq!(z.empty_n, 6);
+    }
+
+    /// At 100 % all three colour zones are filled and nothing is empty.
+    #[test]
+    fn bus_load_zones_full() {
+        let z = bus_load_zones(100.0);
+        // 6 blue + 8 yellow + 6 red = 20
+        assert_eq!(z.blue_n, 6);
+        assert_eq!(z.yellow_n, 8);
+        assert_eq!(z.red_n, 6);
+        assert_eq!(z.empty_n, 0);
+    }
+
+    /// Total blocks always sum to 20.
+    #[test]
+    fn bus_load_zones_total_always_20() {
+        for pct in [0, 15, 30, 55, 70, 85, 100] {
+            let z = bus_load_zones(pct as f64);
+            assert_eq!(
+                z.blue_n + z.yellow_n + z.red_n + z.empty_n,
+                20,
+                "blocks don't sum to 20 at {pct}%"
+            );
+        }
+    }
+
+    // ── Duplicate node ID detection ───────────────────────────────────────────
+
+    #[test]
+    fn duplicate_node_id_detected() {
+        let nodes = [
+            NodeEntry {
+                id_str: "1".into(),
+                eds_path: String::new(),
+            },
+            NodeEntry {
+                id_str: "1".into(),
+                eds_path: String::new(),
+            },
+        ];
+        let mut seen = std::collections::HashSet::new();
+        let has_dupe = nodes
+            .iter()
+            .filter(|e| !e.id_str.trim().is_empty())
+            .filter_map(|e| crate::eds::parse_node_id_str(e.id_str.trim()))
+            .any(|id| !seen.insert(id));
+        assert!(has_dupe, "duplicate node IDs should be detected");
+    }
+
+    #[test]
+    fn unique_node_ids_not_flagged() {
+        let nodes = [
+            NodeEntry {
+                id_str: "1".into(),
+                eds_path: String::new(),
+            },
+            NodeEntry {
+                id_str: "2".into(),
+                eds_path: String::new(),
+            },
+            NodeEntry {
+                id_str: "0x03".into(),
+                eds_path: String::new(),
+            },
+        ];
+        let mut seen = std::collections::HashSet::new();
+        let has_dupe = nodes
+            .iter()
+            .filter(|e| !e.id_str.trim().is_empty())
+            .filter_map(|e| crate::eds::parse_node_id_str(e.id_str.trim()))
+            .any(|id| !seen.insert(id));
+        assert!(
+            !has_dupe,
+            "unique node IDs should not be flagged as duplicates"
+        );
+    }
+
+    // ── egui_kittest widget snapshots ─────────────────────────────────────────
+    //
+    // Run `cargo insta review -p rustycan` after first run on each OS to accept
+    // the generated reference images.  Snapshots land in:
+    //   host/src/gui/snapshots/
+    //
+    // Reference images differ per OS (font rendering, DPI) — insta stores them
+    // with a platform suffix automatically.
+
+    #[test]
+    fn snapshot_bus_load_bar_zero_pct() {
+        let mut harness = egui_kittest::Harness::new_ui(|ui| bus_load_bar(ui, 0.0));
+        harness.run();
+        harness.snapshot("bus_load_bar_0pct");
+    }
+
+    #[test]
+    fn snapshot_bus_load_bar_medium_load() {
+        let mut harness = egui_kittest::Harness::new_ui(|ui| bus_load_bar(ui, 55.0));
+        harness.run();
+        harness.snapshot("bus_load_bar_55pct");
+    }
+
+    #[test]
+    fn snapshot_bus_load_bar_high_load() {
+        let mut harness = egui_kittest::Harness::new_ui(|ui| bus_load_bar(ui, 85.0));
+        harness.run();
+        harness.snapshot("bus_load_bar_85pct");
+    }
 }

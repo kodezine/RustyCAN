@@ -30,7 +30,7 @@
 //! - Example: `1 6040 0 0006`
 
 pub mod log_stream;
-mod widgets;
+pub(crate) mod widgets;
 
 use std::collections::VecDeque;
 use std::io;
@@ -207,7 +207,11 @@ pub fn show_app_update_prompt(
     let can_download = release.can_download();
 
     // Build the prompt lines once.
-    let title = format!(" RustyCAN {} available ", ver);
+    let title = Line::from(vec![
+        Span::raw(" Rusty"),
+        Span::styled("CAN", Style::default().fg(Color::Cyan)),
+        Span::raw(format!(" {} available ", ver)),
+    ]);
     let (action_line, key_update) = if can_download {
         ("[U] Update now  [D] Defer", 'u')
     } else {
@@ -265,7 +269,7 @@ pub fn show_app_update_prompt(
             }
 
             let block = Block::default()
-                .title(title.as_str())
+                .title(title.clone())
                 .title_alignment(Alignment::Center)
                 .borders(Borders::ALL)
                 .border_style(Style::default().fg(Color::Blue));
@@ -425,8 +429,9 @@ pub fn run_from_config(
     let _stderr_guard = StderrGuard::redirect(&stderr_log_path);
 
     let baud = session_cfg.baud;
-    let (rx, cmd_tx, node_labels, log_path) = crate::session::start(session_cfg)
-        .map_err(|e| io::Error::other(format!("Session start failed: {e}")))?;
+    let (rx, cmd_tx, node_labels, log_path, _startup_notice) =
+        crate::session::start(session_cfg)
+            .map_err(|e| io::Error::other(format!("Session start failed: {e}")))?;
 
     let state = AppState::new(log_path, baud);
     run(rx, cmd_tx, state, node_labels, dfu_path)
@@ -740,7 +745,7 @@ fn event_to_log_line(event: &CanEvent) -> Option<String> {
 ///
 /// Returns `None` on parse error (the TUI just silently discards invalid input;
 /// a future improvement could show an inline error in the command bar).
-fn parse_command(kind: &InputKind, input: &str) -> Option<CanCommand> {
+pub(crate) fn parse_command(kind: &InputKind, input: &str) -> Option<CanCommand> {
     let parts: Vec<&str> = input.split_whitespace().collect();
     match kind {
         InputKind::Nmt => {
@@ -804,5 +809,89 @@ fn parse_nmt_command(s: &str) -> Option<NmtCommand> {
         "reset_node" | "reset" => Some(NmtCommand::ResetNode),
         "reset_comm" | "reset_communication" => Some(NmtCommand::ResetCommunication),
         _ => None,
+    }
+}
+
+// ─── Unit tests ───────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::canopen::nmt::NmtCommand;
+    use crate::canopen::sdo::SdoTransferMode;
+    use crate::session::CanCommand;
+
+    // ── NMT command parser ────────────────────────────────────────────────────
+
+    #[test]
+    fn nmt_parse_start() {
+        assert!(matches!(
+            parse_command(&InputKind::Nmt, "1 start"),
+            Some(CanCommand::SendNmt {
+                command: NmtCommand::StartRemoteNode,
+                target_node: 1,
+            })
+        ));
+    }
+
+    #[test]
+    fn nmt_parse_broadcast_preop() {
+        // node_id 0 broadcasts to all nodes
+        assert!(matches!(
+            parse_command(&InputKind::Nmt, "0 pre_op"),
+            Some(CanCommand::SendNmt {
+                command: NmtCommand::EnterPreOperational,
+                target_node: 0,
+            })
+        ));
+    }
+
+    #[test]
+    fn nmt_parse_invalid_no_panic() {
+        assert!(parse_command(&InputKind::Nmt, "").is_none(), "empty → None");
+        assert!(
+            parse_command(&InputKind::Nmt, "1").is_none(),
+            "missing command → None"
+        );
+        assert!(
+            parse_command(&InputKind::Nmt, "1 bogus").is_none(),
+            "unknown command → None"
+        );
+        assert!(
+            parse_command(&InputKind::SdoRead, "1 gg 0").is_none(),
+            "bad index → None"
+        );
+    }
+
+    // ── SDO command parser ────────────────────────────────────────────────────
+
+    #[test]
+    fn sdo_read_parse() {
+        assert!(matches!(
+            parse_command(&InputKind::SdoRead, "1 1000 0"),
+            Some(CanCommand::SdoRead {
+                node_id: 1,
+                index: 0x1000,
+                subindex: 0,
+                mode: SdoTransferMode::Auto,
+            })
+        ));
+    }
+
+    #[test]
+    fn sdo_write_parse() {
+        // "0006" → 4 hex chars → 2 bytes LE: value 6 = [0x06, 0x00]
+        match parse_command(&InputKind::SdoWrite, "1 6040 0 0006") {
+            Some(CanCommand::SdoWrite {
+                node_id: 1,
+                index: 0x6040,
+                subindex: 0,
+                data,
+                mode: SdoTransferMode::Auto,
+            }) => {
+                assert_eq!(data, vec![0x06, 0x00]);
+            }
+            _ => panic!("expected SdoWrite for '1 6040 0 0006'"),
+        }
     }
 }

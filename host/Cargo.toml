@@ -66,6 +66,9 @@ winresource = "0.1"
 
 [dev-dependencies]
 tempfile = "3"
+# UI testing — egui headless harness + snapshot comparison
+egui_kittest = { version = "0.34", features = ["snapshot", "wgpu"] }
+insta = { version = "1", features = ["yaml"] }
 
 # ─── Packaging (cargo-packager) ───────────────────────────────────────────────
 [package.metadata.packager]

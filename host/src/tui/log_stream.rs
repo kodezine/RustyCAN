@@ -36,7 +36,7 @@ pub fn stream(config_path: &Path, _http_port: u16) -> io::Result<()> {
         .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
 
     let baud = session_cfg.baud;
-    let (rx, _cmd_tx, node_labels, log_path) = crate::session::start(session_cfg)
+    let (rx, _cmd_tx, node_labels, log_path, _startup_notice) = crate::session::start(session_cfg)
         .map_err(|e| io::Error::other(format!("Session start failed: {e}")))?;
 
     let mut state = AppState::new(log_path.clone(), baud);
