@@ -40,7 +40,7 @@ jobs:
             formats: appimage,deb
 
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - uses: dtolnay/rust-toolchain@stable
 
@@ -120,7 +120,7 @@ jobs:
 
       # ── Upload to GitHub Release ────────────────────────────────────────
       - name: Upload release artifact
-        uses: softprops/action-gh-release@v3.0.0
+        uses: softprops/action-gh-release@v3.0.1
         with:
           generate_release_notes: false
           fail_on_unmatched_files: true
@@ -128,7 +128,7 @@ jobs:
 
       - name: Upload Linux DEB
         if: steps.set-artifact.outputs.deb_path != ''
-        uses: softprops/action-gh-release@v3.0.0
+        uses: softprops/action-gh-release@v3.0.1
         with:
           generate_release_notes: false
           fail_on_unmatched_files: true
@@ -163,7 +163,7 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - uses: dtolnay/rust-toolchain@stable
         with:
@@ -228,7 +228,7 @@ jobs:
           echo "fw_h743_signed=${FW_H743_SIGNED}" >> "$GITHUB_OUTPUT"
 
       - name: Upload firmware to GitHub Release
-        uses: softprops/action-gh-release@v3.0.0
+        uses: softprops/action-gh-release@v3.0.1
         with:
           generate_release_notes: true
           fail_on_unmatched_files: true
@@ -248,7 +248,7 @@ jobs:
     if: always()
 
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - uses: actions/setup-python@v6
         with:
@@ -289,7 +289,7 @@ jobs:
           echo "archive=${ARCHIVE}" >> "$GITHUB_OUTPUT"
 
       - name: Upload requirements archive to GitHub Release
-        uses: softprops/action-gh-release@v3.0.0
+        uses: softprops/action-gh-release@v3.0.1
         with:
           generate_release_notes: false
           fail_on_unmatched_files: true
