@@ -6,11 +6,24 @@ RustyCAN supports two adapters; at least one is required.
 
 ### Option A — PEAK PCAN-USB
 
-A **PEAK PCAN-USB** adapter with the macOS PCANBasic library:
+**macOS / Windows:** requires the PCANBasic library:
 
-1. Download the latest *PCUSB* `.pkg` from **<https://mac-can.com>**.
-2. Run the installer — it places `libPCBUSB.dylib` in `/usr/local/lib/`.
+1. macOS: download the latest *PCUSB* `.pkg` from **<https://mac-can.com>** and run the installer — it places `libPCBUSB.dylib` in `/usr/local/lib/`.
+2. Windows: download the PEAK driver from **<https://peak-system.com/downloads>** and install.
 3. Connect your PCAN-USB adapter; it appears as channel `1` by default.
+
+**Linux:** no proprietary library is needed. The adapter is accessed through the
+`peak_usb` kernel driver and the standard `AF_CAN` socket API (SocketCAN):
+
+```sh
+# Load the driver (once per boot)
+sudo modprobe peak_usb
+
+# Bring up the interface
+sudo ip link set can0 up type can bitrate 250000
+```
+
+See [install-linux.md](install-linux.md) for the complete step-by-step guide.
 
 ### Option B — KCAN Dongle (NUCLEO-H753ZI / dongle-h753)
 
