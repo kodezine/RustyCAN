@@ -89,36 +89,74 @@ No additional drivers are needed beyond the udev rules above.
 ### PEAK PCAN-USB adapter (optional)
 
 PEAK adapters on Linux use the **SocketCAN** kernel driver (`peak_usb`), which
-is included in the mainline kernel (4.1+). Load it if not already loaded:
+is included in the mainline kernel (4.1+). No proprietary library is needed.
+
+#### Step 1 — Load the kernel module (once per boot)
 
 ```sh
 sudo modprobe peak_usb
 ```
 
-Verify the interface appeared:
+To load it automatically at boot:
+
+```sh
+echo 'peak_usb' | sudo tee /etc/modules-load.d/peak_usb.conf
+```
+
+#### Step 2 — Plug in the adapter
+
+After plugging in, verify the interface appeared:
 
 ```sh
 ip link show | grep can
-# Expected: can0: <NOARP,ECHO> ...
+# Expected output: can0: <NOARP,ECHO> mtu 16 ...
 ```
 
-Bring it up at the desired baud rate:
+> If nothing appears, the module may not be loaded or the adapter needs to be
+> re-plugged after loading.
+
+#### Step 3 — Bring up the interface
 
 ```sh
-sudo ip link set can0 type can bitrate 250000
-sudo ip link set can0 up
+sudo ip link set can0 up type can bitrate 250000
 ```
 
-RustyCAN uses SocketCAN via the `socketcan` feature of the `host-can` crate —
-no proprietary library is required.
+Verify it is UP and the bitrate is set:
+
+```sh
+ip -details link show can0
+# Expected: state UP ... bitrate 250000
+```
+
+To make the bring-up persistent across reboots, create a `systemd-networkd`
+configuration or a `udev` rule — see your distro’s documentation.
+
+#### What happens if you skip these steps?
+
+RustyCAN checks for common problems before opening the socket and shows clear
+step-by-step guidance in the Connect screen error banner if:
+
+| Problem | Message shown |
+|---------|---------------|
+| `peak_usb` module not loaded | Step-by-step: modprobe + bring up |
+| Module loaded, adapter not plugged in | Lists available CAN interfaces |
+| Interface exists but is DOWN | Exact `ip link set` command to run |
+| Interface name is wrong | Lists available CAN interfaces |
+
+RustyCAN uses the standard Linux `AF_CAN` / `PF_CAN` socket API via the
+`socketcan` crate — no proprietary library is required.
 
 ---
 
 ## First launch
 
 1. Launch `rustycan` from the terminal, app launcher (.deb), or AppImage.
-2. On the **Connect** screen, choose your adapter.
-3. Optionally browse to one or more `.eds` files for connected nodes.
-4. Click **Connect**.
+2. On the **Connect** screen, select **SocketCAN** (Linux-only radio button).
+3. Set the **Interface** field to your CAN interface name (default: `can0`).
+4. Optionally browse to one or more `.eds` files for connected nodes.
+5. Click **Connect**.
+
+> **KCAN Dongle users:** select **KCAN Dongle ★** instead of SocketCAN.
+> No additional kernel module is required.
 
 See the [GUI Guide](gui-guide.md) for a full GUI walkthrough.

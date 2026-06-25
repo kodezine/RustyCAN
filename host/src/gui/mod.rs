@@ -746,6 +746,7 @@ fn adapter_display_name(kind: &AdapterKind) -> &'static str {
     match kind {
         AdapterKind::Peak => "PEAK PCAN-USB",
         AdapterKind::KCan { .. } => "KCAN Dongle",
+        AdapterKind::SocketCan => "SocketCAN",
     }
 }
 
@@ -764,6 +765,7 @@ fn try_fallback_adapter(form: &mut ConnectForm) -> bool {
     let fallbacks: Vec<AdapterKind> = match &form.adapter_kind {
         AdapterKind::Peak => vec![AdapterKind::KCan { serial: None }],
         AdapterKind::KCan { .. } => vec![AdapterKind::Peak],
+        AdapterKind::SocketCan => vec![],
     };
 
     for fallback_kind in fallbacks {
@@ -992,7 +994,7 @@ fn render_connect(
                                     }
                                     let is_kcan =
                                         matches!(form.adapter_kind, AdapterKind::KCan { .. });
-                                    if ui.radio(is_kcan, "KCAN Dongle ★").clicked() {
+                                    if ui.radio(is_kcan, "KCAN Dongle \u{2605}").clicked() {
                                         let serial = if form.kcan_serial.is_empty() {
                                             None
                                         } else {
@@ -1002,6 +1004,22 @@ fn render_connect(
                                         form.last_probe = None;
                                         form.adapter_notice = None; // clear auto-switch notice
                                         form.original_adapter_kind = None; // reset tracking
+                                    }
+                                    #[cfg(target_os = "linux")]
+                                    {
+                                        let is_sc =
+                                            matches!(form.adapter_kind, AdapterKind::SocketCan);
+                                        if ui.radio(is_sc, "SocketCAN").clicked() {
+                                            form.adapter_kind = AdapterKind::SocketCan;
+                                            // Set a sensible default interface name when
+                                            // switching from an unrelated adapter.
+                                            if form.port.is_empty() || form.port == "1" {
+                                                form.port = "can0".into();
+                                            }
+                                            form.last_probe = None;
+                                            form.adapter_notice = None;
+                                            form.original_adapter_kind = None;
+                                        }
                                     }
                                 });
                                 ui.end_row();
@@ -1061,13 +1079,18 @@ fn render_connect(
                                     ui.end_row();
                                 }
 
-                                // Port row — only shown for PEAK
-                                if matches!(form.adapter_kind, AdapterKind::Peak) {
-                                    ui.label("Port:");
+                                // Port row — shown for PEAK (channel number) and SocketCAN (iface name)
+                                let (show_port, port_label, port_hint) = match form.adapter_kind {
+                                    AdapterKind::Peak => (true, "Port:", "1"),
+                                    AdapterKind::SocketCan => (true, "Interface:", "can0"),
+                                    _ => (false, "", ""),
+                                };
+                                if show_port {
+                                    ui.label(port_label);
                                     ui.add(
                                         egui::TextEdit::singleline(&mut form.port)
                                             .desired_width(80.0)
-                                            .hint_text("1"),
+                                            .hint_text(port_hint),
                                     );
                                     ui.end_row();
                                 }

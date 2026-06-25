@@ -5,7 +5,7 @@
 | Feature | Details |
 |---|---|
 | 🖥️ **Native GUI** | egui/eframe window — no terminal required |
-| 🔌 **Adapter selection** | Choose PEAK PCAN-USB or KCAN Dongle from the Connect screen |
+| 🔌 **Adapter selection** | Choose PEAK PCAN-USB, KCAN Dongle, or SocketCAN (Linux only) from the Connect screen |
 | 🔧 **KCAN Dongle** | Two targets: STM32H753ZI Nucleo (USB FS, 12 Mb/s) and STM32H743XI H743I-EVAL MB1246 Rev E (USB HS via ULPI, 480 Mb/s); Embassy firmware; custom 80-byte USB protocol with hardware timestamps |
 | ⏱️ **Hardware timestamps** | KCAN frames carry 100 ns-precision timestamps latched at frame SOF by FDCAN RXTS hardware; logged as `hw_ts_ns` in JSONL |
 | 🔍 **Dongle detection** | Connect button enabled only when the selected adapter is found; re-checked every 2 s |
@@ -33,6 +33,7 @@
 |---|---|
 | Native egui GUI | ✅ |
 | PEAK PCAN-USB adapter | ✅ |
+| PEAK PCAN-USB on Linux via SocketCAN (`peak_usb` kernel driver, no proprietary library) | ✅ |
 | KCAN Dongle adapter (STM32H753ZI) | ✅ |
 | KCAN Dongle adapter (STM32H743XI — H743I-EVAL MB1246 Rev E) | ✅ |
 | KCAN USB MPS feature-gating (`usb-hs` Cargo feature: 64-byte FS / 512-byte HS; host adapter must match) | ✅ |

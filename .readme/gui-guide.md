@@ -9,7 +9,7 @@
 └──────────────────────────────────────────────────────────────────────────┘
 
 ┌─ Connection ─────────────────────────────────────────────────────────────┐
-│  Adapter:  ○ PEAK PCAN-USB   ● KCAN Dongle ★                             │
+│  Adapter:  ○ PEAK PCAN-USB   ● KCAN Dongle ★   ○ SocketCAN (Linux only) │
 │  KCAN:     [ KCAN Dongle v1.0.0 (SN: 00000001) ▼ ]                       │
 │  Port:     [ 1 ]  (hidden for KCAN)                                      │
 │  Baud:     [ 250000 ▼ ]  ● Dongle: Connected                             │
@@ -67,13 +67,28 @@
 
 ### Adapter Selection
 
-**Adapter** — radio buttons to choose between PEAK PCAN-USB and KCAN Dongle.
-The KCAN row (★) is the recommended first-class option.
+**Adapter** — radio buttons to choose between PEAK PCAN-USB, KCAN Dongle, and
+(on Linux only) SocketCAN. The KCAN row (★) is the recommended first-class option.
+
+**SocketCAN** (Linux only) — third radio button, visible only on Linux. Connects
+to a kernel CAN interface (e.g. `can0`) without any proprietary library. The
+**Interface** field replaces **Port** and defaults to `can0`. RustyCAN performs
+a pre-flight check before opening the socket and displays a step-by-step error
+banner if the driver is not loaded, the interface is missing, or it is DOWN:
+
+| Situation | Banner shown |
+|-----------|-------------|
+| `peak_usb` not loaded | `sudo modprobe peak_usb` + bring-up steps |
+| Module loaded, no interface | Lists available CAN interfaces |
+| Interface DOWN | `sudo ip link set can0 up type can bitrate 250000` |
+
+See [install-linux.md](install-linux.md) for the complete setup guide.
 
 **KCAN device** — dropdown listing all KCAN dongles found via USB enumeration
 (VID `0x1209` / PID `0xBEEF`). Re-enumerated every 2 s.
 
-**Port** — PCAN-USB channel number (typically `1`); hidden when KCAN is selected.
+**Port / Interface** — PCAN-USB channel number (typically `1`) for PEAK; kernel
+interface name (e.g. `can0`) for SocketCAN; hidden when KCAN is selected.
 
 **Baud rate** — drop-down: 125000 / 250000 / 500000 / 1000000 bps.
 

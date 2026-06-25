@@ -21,6 +21,9 @@ pub mod kcan;
 // On Linux, PEAK hardware is accessed via SocketCAN (kernel driver).
 #[cfg(not(target_os = "linux"))]
 pub mod peak;
+// SocketCAN adapter is Linux-only — uses the kernel's raw CAN socket API.
+#[cfg(target_os = "linux")]
+pub mod socketcan_adapter;
 
 // ─── Public types ─────────────────────────────────────────────────────────────
 
@@ -86,6 +89,14 @@ pub enum AdapterKind {
     /// `serial` optionally pins a specific dongle by its USB serial string.
     /// When `None`, the first KCAN device found is used.
     KCan { serial: Option<String> },
+    /// Linux kernel SocketCAN interface (e.g. `can0` from the `peak_usb` driver).
+    ///
+    /// `port` holds the interface name (`"can0"`, `"can1"`, …).  The interface
+    /// must already exist; bring it up with:
+    /// ```sh
+    /// sudo ip link set can0 up type can bitrate 250000
+    /// ```
+    SocketCan,
 }
 
 /// Uniform interface for sending and receiving CAN frames.
@@ -194,6 +205,17 @@ pub fn open_adapter(
             let adapter = kcan::KCanAdapter::open(serial.as_deref(), baud, listen_only)?;
             Ok(Box::new(adapter))
         }
+        AdapterKind::SocketCan => {
+            #[cfg(target_os = "linux")]
+            {
+                let adapter = socketcan_adapter::SocketCanAdapter::open(port)?;
+                Ok(Box::new(adapter))
+            }
+            #[cfg(not(target_os = "linux"))]
+            Err(AdapterError::NotFound(
+                "SocketCAN is only available on Linux.".into(),
+            ))
+        }
     }
 }
 
@@ -249,5 +271,13 @@ pub fn probe_adapter_kind(kind: &AdapterKind, _port: &str, _baud: u32) -> bool {
             false
         }
         AdapterKind::KCan { serial } => kcan::KCanAdapter::probe(serial.as_deref()),
+        AdapterKind::SocketCan => {
+            #[cfg(target_os = "linux")]
+            {
+                socketcan_adapter::SocketCanAdapter::probe(_port)
+            }
+            #[cfg(not(target_os = "linux"))]
+            false
+        }
     }
 }

@@ -1,6 +1,6 @@
 {
-  "adapter_kind": "KCanDongle",
-  "port": "1",
+  "adapter_kind": "SocketCan",
+  "port": "can0",
   "baud": "250000",
   "http_port": 7878,
   "log_path": "phase5-linux.jsonl",

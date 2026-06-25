@@ -65,7 +65,7 @@ A fully annotated copy is included in the repository at
 | Field | Type | Default | Description |
 |---|---|---|---|
 | `adapter_kind` | `"Peak"` \| `{"KCan":{"serial":null}}` | — | Which hardware adapter to use |
-| `port` | string | — | Adapter channel (PEAK: `"1"` = PCAN_USBBUS1; unused for KCAN) |
+| `port` | string | — | Adapter channel / interface name (PEAK: `"1"` = PCAN_USBBUS1; SocketCAN: `"can0"`; unused for KCAN) |
 | `baud` | string | — | CAN baud rate in bps, e.g. `"250000"` or `"500000"` |
 | `http_port` | integer | `7878` | Port for `http://127.0.0.1:<port>/` live dashboard |
 | `log_path` | string | `"rustycan.jsonl"` | Path for the JSONL log file; relative paths are resolved from the working directory |
@@ -78,10 +78,16 @@ A fully annotated copy is included in the repository at
 
 #### `adapter_kind` values
 
-PEAK PCAN-USB:
+PEAK PCAN-USB (macOS / Windows):
 ```json
 "adapter_kind": "Peak"
 ```
+
+SocketCAN interface on Linux (PEAK PCAN-USB via `peak_usb` kernel driver):
+```json
+"adapter_kind": "SocketCan"
+```
+Use the `port` field to set the interface name (default `"can0"`).
 
 KCAN Dongle (auto-select first found):
 ```json
