@@ -11,7 +11,7 @@
 ┌─ Connection ─────────────────────────────────────────────────────────────┐
 │  Adapter:  ○ PEAK PCAN-USB   ● KCAN Dongle ★   ○ SocketCAN (Linux only) │
 │  KCAN:     [ KCAN Dongle v1.0.0 (SN: 00000001) ▼ ]                       │
-│  Port:     [ 1 ]  (hidden for KCAN)                                      │
+│  Port:     [ 1 ]  PEAK channel · Interface: [ can0 ]  SocketCAN · hidden KCAN│
 │  Baud:     [ 250000 ▼ ]  ● Dongle: Connected                             │
 │  SDO timeout: [ 500 ]                                                    │
 │  Log:      [ rustycan.jsonl              ] [Browse…]                     │

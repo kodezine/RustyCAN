@@ -1011,9 +1011,17 @@ fn render_connect(
                                             matches!(form.adapter_kind, AdapterKind::SocketCan);
                                         if ui.radio(is_sc, "SocketCAN").clicked() {
                                             form.adapter_kind = AdapterKind::SocketCan;
-                                            // Set a sensible default interface name when
-                                            // switching from an unrelated adapter.
-                                            if form.port.is_empty() || form.port == "1" {
+                                            // Reset to a sensible default interface name
+                                            // whenever the current value looks like a PEAK
+                                            // channel number (all digits, e.g. "1", "2")
+                                            // rather than a CAN interface name.
+                                            if form.port.is_empty()
+                                                || form
+                                                    .port
+                                                    .trim()
+                                                    .chars()
+                                                    .all(|c| c.is_ascii_digit())
+                                            {
                                                 form.port = "can0".into();
                                             }
                                             form.last_probe = None;

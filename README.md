@@ -42,7 +42,7 @@ The GUI window opens immediately. See [Building from Source](.readme/building.md
 ## ✨ Key Features
 
 - 🖥️ **Native GUI** — egui/eframe window, no terminal required
-- � **CLI Modes** — `--tui` for a full-screen terminal UI; `--log-to-stdout` to stream events to a pipe or file
+- 💻 **CLI Modes** — `--tui` for a full-screen terminal UI; `--log-to-stdout` to stream events to a pipe or file
 - 🔌 **Multi-adapter support** — PEAK PCAN-USB, KCAN Dongle (STM32H753ZI), or SocketCAN on Linux (no proprietary driver)
 - ⏱️ **Hardware timestamps** — 100 ns-precision timestamps latched at frame SOF by FDCAN RXTS hardware (KCAN only)
 - 💓 **NMT monitoring & control** — Live node states with broadcast/per-node commands

@@ -69,7 +69,7 @@ impl SocketCanAdapter {
                 Some(ref v) if !v.is_empty() => {
                     format!("\n\nAvailable CAN interfaces: {}", v.join(", "))
                 }
-                _ => "\n\n(No CAN interfaces are currently up — is the adapter plugged in?)".into(),
+                _ => "\n\n(No CAN interfaces found — is the adapter plugged in?)".into(),
             };
 
             return Err(AdapterError::NotFound(format!(
@@ -139,9 +139,9 @@ impl SocketCanAdapter {
 
     /// Return `true` when the named interface exists and is a CAN interface.
     ///
-    /// Checks `/sys/class/net/<iface>/type` for `280` (ARPHRD_CAN).  The
-    /// interface may be DOWN; `open()` will succeed, but `recv()` will return
-    /// `Disconnected` until it is brought up.
+    /// Checks `/sys/class/net/<iface>/type` for `280` (ARPHRD_CAN).  Note that
+    /// a DOWN interface returns `true` here; [`Self::open`] will then return
+    /// [`AdapterError::NotFound`] with a bring-up hint rather than succeeding.
     pub fn probe(interface: &str) -> bool {
         std::fs::read_to_string(format!("/sys/class/net/{interface}/type"))
             .map(|s| s.trim() == "280")
@@ -184,7 +184,7 @@ impl CanAdapter for SocketCanAdapter {
             }
 
             // ENETDOWN — interface was taken down while the session was running.
-            Err(e) if e.raw_os_error() == Some(100) => Err(AdapterError::Disconnected),
+            Err(e) if e.raw_os_error() == Some(libc::ENETDOWN) => Err(AdapterError::Disconnected),
 
             Err(e) => Err(AdapterError::Io(e.to_string())),
         }
