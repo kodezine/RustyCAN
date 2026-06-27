@@ -23,8 +23,10 @@
 //! - `node_id` 0 broadcasts to all nodes.
 //! - Example: `1 start`
 //!
-//! **SDO read:** `<node> <index_hex> <sub>`
-//! - Example: `1 1000 0`
+//! **SDO read:** `<node> <index_hex> <sub|a>`
+//! - Use `a` as the sub-index to read all sub-indices sequentially (like the GUI).
+//! - Example single: `1 1000 0`
+//! - Example all:    `32 29FF a`
 //!
 //! **SDO write:** `<node> <index_hex> <sub> <hex_value>`
 //! - Example: `1 6040 0 0006`
@@ -51,7 +53,7 @@ use ratatui::{
 
 use crate::app::{AppState, CanEvent};
 use crate::canopen::nmt::NmtCommand;
-use crate::canopen::sdo::SdoTransferMode;
+use crate::canopen::sdo::{SdoTransferMode, SdoValue};
 use crate::session::CanCommand;
 
 // ─── Stderr guard ─────────────────────────────────────────────────────────────
@@ -130,6 +132,18 @@ impl Drop for StderrGuard {
             // saved_fd is dropped here, closing the saved copy.
         }
     }
+}
+
+// ─── Read-all scan state ─────────────────────────────────────────────────────
+
+/// Tracks an in-progress "read all sub-indices" scan launched with `<node> <idx> a`.
+struct ReadAllState {
+    node_id: u8,
+    index: u16,
+    /// Next subindex to request (starts at 0; updated as responses arrive).
+    next_sub: u8,
+    /// Highest subindex reported by sub 0.  `None` until sub 0 has been received.
+    max_sub: Option<u8>,
 }
 
 // ─── Public types ─────────────────────────────────────────────────────────────
@@ -488,11 +502,18 @@ fn event_loop(
     let mut mode = TuiMode::Normal;
     let mut log_entries: VecDeque<String> = VecDeque::with_capacity(512);
     let mut show_log = true;
+    let mut read_all_state: Option<ReadAllState> = None;
     let tick = Duration::from_millis(100);
 
     loop {
         // Drain all pending decoded CAN events (non-blocking); collect log lines.
-        let alive = drain_events_with_log(&mut state, &rx, &mut log_entries);
+        let alive = drain_events_with_log(
+            &mut state,
+            &rx,
+            &mut log_entries,
+            &mut read_all_state,
+            &cmd_tx,
+        );
 
         // Render current frame.
         draw(terminal, &state, &mode, &log_entries, show_log, dfu_path)?;
@@ -561,9 +582,42 @@ fn event_loop(
                             let input = buf.trim().to_string();
                             let kind_clone = kind.clone();
                             mode = TuiMode::Normal;
-                            if let Some(cmd) = parse_command(&kind_clone, &input) {
-                                // Non-blocking send; ignore if the session thread is gone.
-                                let _ = cmd_tx.send(cmd);
+                            // Special case: SDO read-all when sub-index is "a".
+                            let handled = if kind_clone == InputKind::SdoRead {
+                                let parts: Vec<&str> = input.split_whitespace().collect();
+                                if parts.len() == 3 && matches!(parts[2], "a" | "A") {
+                                    let parsed = parts[0].parse::<u8>().ok().zip(
+                                        u16::from_str_radix(parts[1].trim_start_matches("0x"), 16)
+                                            .ok(),
+                                    );
+                                    if let Some((node_id, index)) = parsed {
+                                        read_all_state = Some(ReadAllState {
+                                            node_id,
+                                            index,
+                                            next_sub: 0,
+                                            max_sub: None,
+                                        });
+                                        let _ = cmd_tx.send(CanCommand::SdoRead {
+                                            node_id,
+                                            index,
+                                            subindex: 0,
+                                            mode: SdoTransferMode::Auto,
+                                        });
+                                        true
+                                    } else {
+                                        false
+                                    }
+                                } else {
+                                    false
+                                }
+                            } else {
+                                false
+                            };
+                            if !handled {
+                                if let Some(cmd) = parse_command(&kind_clone, &input) {
+                                    // Non-blocking send; ignore if the session thread is gone.
+                                    let _ = cmd_tx.send(cmd);
+                                }
                             }
                         }
                         KeyCode::Backspace => {
@@ -663,6 +717,8 @@ fn drain_events_with_log(
     state: &mut AppState,
     rx: &mpsc::Receiver<CanEvent>,
     log_entries: &mut VecDeque<String>,
+    read_all: &mut Option<ReadAllState>,
+    cmd_tx: &mpsc::Sender<CanCommand>,
 ) -> bool {
     use chrono::Utc;
     const LOG_CAP: usize = 512;
@@ -670,6 +726,51 @@ fn drain_events_with_log(
     loop {
         match rx.try_recv() {
             Ok(event) => {
+                // Advance read-all scan when the expected SDO result arrives.
+                if let CanEvent::Sdo(ref entry) = event {
+                    if let Some(ref mut ra) = *read_all {
+                        if entry.node_id == ra.node_id
+                            && entry.index == ra.index
+                            && entry.subindex == ra.next_sub
+                        {
+                            if ra.max_sub.is_none() {
+                                // Sub 0: read the highest sub-index count.
+                                let max_sub = match entry.value.as_ref() {
+                                    Some(SdoValue::U8(n)) => *n,
+                                    Some(SdoValue::Bytes(b)) => b.first().copied().unwrap_or(0),
+                                    _ => 0,
+                                };
+                                if max_sub >= 1 {
+                                    ra.max_sub = Some(max_sub);
+                                    ra.next_sub = 1;
+                                    let _ = cmd_tx.send(CanCommand::SdoRead {
+                                        node_id: ra.node_id,
+                                        index: ra.index,
+                                        subindex: 1,
+                                        mode: SdoTransferMode::Auto,
+                                    });
+                                } else {
+                                    *read_all = None;
+                                }
+                            } else {
+                                // Sub N: fire N+1 if still within range.
+                                let next = ra.next_sub + 1;
+                                if next <= ra.max_sub.unwrap_or(0) {
+                                    ra.next_sub = next;
+                                    let _ = cmd_tx.send(CanCommand::SdoRead {
+                                        node_id: ra.node_id,
+                                        index: ra.index,
+                                        subindex: next,
+                                        mode: SdoTransferMode::Auto,
+                                    });
+                                } else {
+                                    *read_all = None;
+                                }
+                            }
+                        }
+                    }
+                }
+
                 let line = event_to_log_line(&event);
                 crate::app::apply_event(state, event);
                 if let Some(line) = line {
@@ -698,11 +799,21 @@ fn event_to_log_line(event: &CanEvent) -> Option<String> {
                 .value
                 .as_ref()
                 .map(|v| format!("{v}"))
-                .or_else(|| entry.abort_code.map(|c| format!("ABORT 0x{c:08X}")))
+                .or_else(|| {
+                    entry
+                        .abort_code
+                        .map(|c| format!("ABORT 0x{c:08X}: {}", sdo_abort_description(c)))
+                })
                 .unwrap_or_else(|| "pending".into());
+            let fallback_name = format!("{:04X}h/{:02X}", entry.index, entry.subindex);
+            let name_part = if entry.name == fallback_name {
+                String::new()
+            } else {
+                format!("  {}", entry.name)
+            };
             Some(format!(
-                "SDO  node {}  {dir}  {:04X}:{:02X}  {} = {}",
-                entry.node_id, entry.index, entry.subindex, entry.name, val
+                "SDO  node {}  {dir}  {:04X}:{:02X}{name_part} = {}",
+                entry.node_id, entry.index, entry.subindex, val
             ))
         }
         CanEvent::Pdo {
@@ -793,6 +904,44 @@ pub(crate) fn parse_command(kind: &InputKind, input: &str) -> Option<CanCommand>
                 mode: SdoTransferMode::Auto,
             })
         }
+    }
+}
+
+/// Return a short English description for a CANopen SDO abort code (CiA 301).
+pub(crate) fn sdo_abort_description(code: u32) -> &'static str {
+    match code {
+        0x05030000 => "toggle bit not alternated",
+        0x05040000 => "SDO protocol timed out",
+        0x05040001 => "command specifier not valid",
+        0x05040002 => "invalid block size",
+        0x05040003 => "invalid sequence number",
+        0x05040004 => "CRC error",
+        0x05040005 => "out of memory",
+        0x06010000 => "unsupported access to object",
+        0x06010001 => "attempt to read a write-only object",
+        0x06010002 => "attempt to write a read-only object",
+        0x06020000 => "object does not exist",
+        0x06040041 => "object cannot be mapped to PDO",
+        0x06040042 => "PDO mapping would exceed PDO length",
+        0x06040043 => "general parameter incompatibility",
+        0x06040047 => "general internal incompatibility in device",
+        0x06060000 => "access failed due to hardware error",
+        0x06070010 => "data type / length mismatch",
+        0x06070012 => "data type mismatch: length too high",
+        0x06070013 => "data type mismatch: length too low",
+        0x06090011 => "sub-index does not exist",
+        0x06090030 => "invalid value for parameter",
+        0x06090031 => "value too high",
+        0x06090032 => "value too low",
+        0x06090036 => "maximum value less than minimum",
+        0x060A0023 => "resource not available",
+        0x08000000 => "general error",
+        0x08000020 => "data cannot be transferred to application",
+        0x08000021 => "data cannot be transferred: local control",
+        0x08000022 => "data cannot be transferred: device state",
+        0x08000023 => "object dictionary generation failed",
+        0x08000024 => "no data available",
+        _ => "unknown abort code",
     }
 }
 

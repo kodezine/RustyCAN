@@ -65,6 +65,16 @@ pub struct SdoLogEntry {
     pub abort_code: Option<u32>,
 }
 
+/// One entry in the PDO log ring buffer.
+/// Same COB-ID with an unchanged payload only updates `ts`; a changed payload
+/// pushes a new entry so value transitions are always visible.
+#[derive(Debug, Clone)]
+pub struct PdoLogEntry {
+    pub ts: DateTime<Utc>,
+    pub cob_id: u16,
+    pub values: Vec<PdoValue>,
+}
+
 /// Decoded CAN event passed from the recv thread to the UI thread.
 pub enum CanEvent {
     Nmt {
@@ -121,6 +131,8 @@ pub struct AppState {
     pub pdo_values: HashMap<(u8, u16), PdoEntry>,
     /// Ring buffer of recent SDO events.
     pub sdo_log: VecDeque<SdoLogEntry>,
+    /// Ring buffer of recent PDO events (deduped by payload).
+    pub pdo_log: VecDeque<PdoLogEntry>,
     /// In-flight SDO transfers initiated by the master: node_id → (index, subindex, direction).
     pub pending_sdos: HashMap<u8, (u16, u8, SdoDirection)>,
     /// Live DBC signal values: (can_id, signal_name) → entry.
@@ -152,6 +164,7 @@ pub struct AppState {
 }
 
 const SDO_LOG_CAP: usize = 50;
+const PDO_LOG_CAP: usize = 100;
 const FPS_WINDOW_SECS: f64 = 2.0;
 
 impl AppState {
@@ -160,6 +173,7 @@ impl AppState {
             node_map: HashMap::new(),
             pdo_values: HashMap::new(),
             sdo_log: VecDeque::with_capacity(SDO_LOG_CAP + 1),
+            pdo_log: VecDeque::with_capacity(PDO_LOG_CAP + 1),
             pending_sdos: HashMap::new(),
             dbc_signals: HashMap::new(),
             last_raw_bytes: HashMap::new(),
@@ -223,7 +237,45 @@ impl AppState {
             .get(&(node_id, cob_id))
             .map(|(_, prev, _)| prev.elapsed());
         self.pdo_values
-            .insert((node_id, cob_id), (values, Instant::now(), period));
+            .insert((node_id, cob_id), (values.clone(), Instant::now(), period));
+
+        // Deduplicated PDO log: if the last entry for this COB-ID has the same
+        // payload, just refresh its timestamp; otherwise push a new row.
+        let new_repr: String = values
+            .iter()
+            .map(|v| format!("{}", v.value))
+            .collect::<Vec<_>>()
+            .join(",");
+        let same_value = self
+            .pdo_log
+            .iter_mut()
+            .rev()
+            .find(|e| e.cob_id == cob_id)
+            .map(|e| {
+                let repr: String = e
+                    .values
+                    .iter()
+                    .map(|v| format!("{}", v.value))
+                    .collect::<Vec<_>>()
+                    .join(",");
+                if repr == new_repr {
+                    e.ts = Utc::now();
+                    true
+                } else {
+                    false
+                }
+            })
+            .unwrap_or(false);
+        if !same_value {
+            if self.pdo_log.len() >= PDO_LOG_CAP {
+                self.pdo_log.pop_front();
+            }
+            self.pdo_log.push_back(PdoLogEntry {
+                ts: Utc::now(),
+                cob_id,
+                values,
+            });
+        }
     }
 }
 
