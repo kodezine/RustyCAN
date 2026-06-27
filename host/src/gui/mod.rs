@@ -228,6 +228,7 @@ impl RustyCanApp {
         config_path: Option<std::path::PathBuf>,
         http_port: u16,
         dfu_path: Option<PathBuf>,
+        auto_connect: bool,
     ) -> Self {
         let icon_bytes = include_bytes!("../../assets/RustyCAN.iconset/icon_256x256.png");
         let icon_data =
@@ -256,11 +257,13 @@ impl RustyCanApp {
         let screen = if let Some(ref path) = config_path {
             match PersistedConfig::load_from(path) {
                 Some(config) => {
-                    // Pre-populate the Connect form with the config file settings
-                    // but do NOT auto-connect.  The user presses Connect when ready.
-                    // (Auto-connect is handled by --tui / --log-to-stdout which have
-                    // no interactive button.)
-                    Screen::Connect(config.into_form())
+                    // Pre-populate the Connect form with the config file settings.
+                    // With --auto-connect the form will transition to Monitor as
+                    // soon as the adapter probe succeeds; without it the user
+                    // presses Connect when ready.
+                    let mut form = config.into_form();
+                    form.auto_connect = auto_connect;
+                    Screen::Connect(form)
                 }
                 None => {
                     let form = ConnectForm {
@@ -374,6 +377,9 @@ struct ConnectForm {
     original_adapter_kind: Option<AdapterKind>,
     /// Message history (last 5 errors/warnings/notices) for display.
     message_history: Vec<MessageEntry>,
+    /// When true the GUI will connect automatically on the first frame where
+    /// the adapter is detected — no user click required.  Set by `--auto-connect`.
+    auto_connect: bool,
 }
 
 impl Clone for ConnectForm {
@@ -402,6 +408,7 @@ impl Clone for ConnectForm {
             adapter_notice: self.adapter_notice.clone(),
             original_adapter_kind: self.original_adapter_kind.clone(),
             message_history: self.message_history.clone(),
+            auto_connect: self.auto_connect,
         }
     }
 }
@@ -527,6 +534,7 @@ impl PersistedConfig {
             adapter_notice: None,
             original_adapter_kind: None,
             message_history: vec![],
+            auto_connect: false,
         }
     }
 }
@@ -577,6 +585,7 @@ impl Default for ConnectForm {
                 adapter_notice: None,
                 original_adapter_kind: None,
                 message_history: vec![],
+                auto_connect: false,
             }
         }
     }
@@ -894,10 +903,24 @@ fn render_connect(
                     resp.on_disabled_hover_text("Connect a CAN dongle first");
                 } else if has_dupes {
                     resp.on_disabled_hover_text("Fix duplicate node IDs before connecting");
-                } else if resp.clicked() {
+                } else if resp.clicked() || form.auto_connect {
+                    // Consume the flag only on success so that a transient failure
+                    // (e.g. adapter down at startup) retries automatically once the
+                    // adapter comes back up.  On an explicit Disconnect the user
+                    // returns to a fresh ConnectForm with auto_connect=false, so
+                    // there is no reconnect loop after a deliberate disconnect.
                     match form.try_connect(sse_tx, dfu_path.clone(), app_update.clone()) {
-                        Ok(view) => transition = Some(Screen::Monitor(Box::new(view))),
-                        Err(e) => form.error = Some(e),
+                        Ok(view) => {
+                            form.auto_connect = false;
+                            transition = Some(Screen::Monitor(Box::new(view)));
+                        }
+                        Err(e) => {
+                            // Clear flag on explicit click; keep it for auto-retry.
+                            if resp.clicked() {
+                                form.auto_connect = false;
+                            }
+                            form.error = Some(e);
+                        }
                     }
                 }
 
@@ -4400,6 +4423,7 @@ pub fn run(
     config_path: Option<std::path::PathBuf>,
     http_port: u16,
     dfu_path: Option<PathBuf>,
+    auto_connect: bool,
 ) -> Result<(), eframe::Error> {
     let icon = eframe::icon_data::from_png_bytes(include_bytes!(
         "../../assets/RustyCAN.iconset/icon_512x512@2x.png"
@@ -4469,6 +4493,7 @@ pub fn run(
                 config_path,
                 http_port,
                 dfu_path,
+                auto_connect,
             )))
         }),
     )
@@ -4679,7 +4704,7 @@ mod tests {
     //
     // Run `cargo insta review -p rustycan` after first run on each OS to accept
     // the generated reference images.  Snapshots land in:
-    //   host/src/gui/snapshots/
+    //   host/tests/snapshots/
     //
     // Reference images differ per OS (font rendering, DPI) — insta stores them
     // with a platform suffix automatically.
@@ -4703,5 +4728,62 @@ mod tests {
         let mut harness = egui_kittest::Harness::new_ui(|ui| bus_load_bar(ui, 85.0));
         harness.run();
         harness.snapshot("bus_load_bar_85pct");
+    }
+
+    // ── Linux-specific: SocketCAN connect-form snapshots ─────────────────────
+    //
+    // These run only on Linux (cfg guard mirrors the production #[cfg] gate).
+    // Generate baselines on fedora-can first, then commit the snapshot files:
+    //
+    //   ssh fedora-can "cd ~/repo/RustyCAN && \
+    //     UPDATE_SNAPSHOTS=1 LIBGL_ALWAYS_SOFTWARE=1 \
+    //     xvfb-run -s '-screen 0 1920x1080x24' \
+    //     cargo test -p rustycan --lib snapshot_connect"
+    //
+    //   scp 'fedora-can:~/repo/RustyCAN/host/tests/snapshots/connect_*.png' \
+    //       host/tests/snapshots/
+
+    #[cfg(target_os = "linux")]
+    mod linux_connect_snapshots {
+        use super::*;
+
+        /// Adapter selector row on Linux: all three radio buttons visible,
+        /// SocketCAN selected.  Catches regressions in label text or layout
+        /// introduced by changes to the #[cfg(target_os = "linux")] block.
+        #[test]
+        fn snapshot_connect_adapter_selector_socketcan() {
+            let mut harness = egui_kittest::Harness::new_ui(|ui| {
+                ui.horizontal(|ui| {
+                    let _ = ui.radio(false, "PEAK PCAN-USB");
+                    let _ = ui.radio(false, "KCAN Dongle \u{2605}");
+                    let _ = ui.radio(true, "SocketCAN");
+                });
+            });
+            harness.run();
+            harness.snapshot("connect_adapter_selector_socketcan");
+        }
+
+        /// Port row as rendered when SocketCAN is the active adapter:
+        /// label is "Interface:" and the hint text is "can0".
+        #[test]
+        fn snapshot_connect_port_row_socketcan() {
+            let mut port = "can0".to_string();
+            let mut harness = egui_kittest::Harness::new_ui(move |ui| {
+                egui::Grid::new("port_row_sc")
+                    .num_columns(2)
+                    .spacing([12.0, 10.0])
+                    .show(ui, |ui| {
+                        ui.label("Interface:");
+                        ui.add(
+                            egui::TextEdit::singleline(&mut port)
+                                .desired_width(80.0)
+                                .hint_text("can0"),
+                        );
+                        ui.end_row();
+                    });
+            });
+            harness.run();
+            harness.snapshot("connect_port_row_socketcan");
+        }
     }
 }

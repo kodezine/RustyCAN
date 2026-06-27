@@ -9,8 +9,8 @@ use std::collections::VecDeque;
 use ratatui::{
     layout::Rect,
     style::{Color, Modifier, Style},
-    text::{Line, Span},
-    widgets::{Block, Borders, List, ListItem, Paragraph, Row, Table},
+    text::{Line, Span, Text},
+    widgets::{Block, Borders, List, ListItem, ListState, Paragraph, Row, Table},
     Frame,
 };
 
@@ -90,50 +90,92 @@ fn nmt_state_color(state: &NmtState) -> Color {
 
 // ─── PDO panel ───────────────────────────────────────────────────────────────
 
-/// Render the live PDO signal values panel.
+/// Render the PDO log panel.
 ///
-/// Groups signals by `(node_id, cob_id)` and shows the most-recent decoded
-/// values.  Entries are sorted by node-ID then COB-ID for stable ordering.
+/// Entries scroll like the SDO log (newest at bottom).  Same COB-ID with an
+/// unchanged payload refreshes only the timestamp; a payload change adds a new
+/// row.  Raw ByteN fallback is shown as a compact hex stream; EDS-decoded
+/// frames show signal names.
 pub fn render_pdo_panel(f: &mut Frame, state: &AppState, area: Rect) {
     let block = Block::default()
-        .title(" PDO Live Values ")
+        .title(" PDO Log ")
         .borders(Borders::ALL)
         .border_style(Style::default().fg(Color::Blue));
 
-    let mut entries: Vec<_> = state.pdo_values.iter().collect();
-    entries.sort_by_key(|((node, cob), _)| (*node, *cob));
+    let inner_w = area.width.saturating_sub(2) as usize;
 
-    let items: Vec<ListItem> = entries
+    let items: Vec<ListItem> = state
+        .pdo_log
         .iter()
-        .flat_map(|((node_id, cob_id), (values, _ts, period))| {
-            let hb = period
-                .as_ref()
-                .map(|d| format!("  {:.0}ms", d.as_millis()))
-                .unwrap_or_default();
+        .map(|entry| {
+            let ts_str = entry.ts.format("%H:%M:%S%.3f").to_string();
 
-            let header_line = Line::from(vec![Span::styled(
-                format!("Node {node_id}  COB 0x{cob_id:03X}{hb}"),
-                Style::default()
-                    .fg(Color::Blue)
-                    .add_modifier(Modifier::BOLD),
-            )]);
+            let is_raw = !entry.values.is_empty()
+                && entry.values.iter().all(|pv| {
+                    pv.signal_name.starts_with("Byte") && pv.signal_name[4..].parse::<u32>().is_ok()
+                });
 
-            let mut lines: Vec<Line> = vec![header_line];
-            for pv in values {
-                lines.push(Line::from(vec![
-                    Span::raw("  "),
-                    Span::styled(
-                        format!("{} = {}", pv.signal_name, pv.value),
-                        Style::default().fg(Color::White),
-                    ),
-                ]));
+            let payload = if is_raw {
+                let stream = entry
+                    .values
+                    .iter()
+                    .map(|pv| {
+                        let s = format!("{}", pv.value);
+                        s.trim_matches(|c: char| c == '[' || c == ']').to_string()
+                    })
+                    .collect::<Vec<_>>()
+                    .join(" ");
+                format!("[{stream}]")
+            } else {
+                entry
+                    .values
+                    .iter()
+                    .map(|pv| format!("{} = {}", pv.signal_name, pv.value))
+                    .collect::<Vec<_>>()
+                    .join("  ")
+            };
+
+            let text = format!("[{ts_str}] 0x{:03X}  {payload}", entry.cob_id);
+
+            // Word-wrap long lines (same logic as SDO log).
+            if text.len() <= inner_w {
+                ListItem::new(Line::from(text))
+            } else {
+                let mut lines: Vec<Line> = Vec::new();
+                let mut remaining = text.as_str();
+                let mut first = true;
+                while !remaining.is_empty() {
+                    let width = if first {
+                        inner_w
+                    } else {
+                        inner_w.saturating_sub(2)
+                    };
+                    let (chunk, rest) = if remaining.len() <= width {
+                        (remaining, "")
+                    } else {
+                        let split = remaining[..width]
+                            .rfind(' ')
+                            .unwrap_or(width.min(remaining.len()));
+                        (&remaining[..split], remaining[split..].trim_start())
+                    };
+                    if first {
+                        lines.push(Line::from(chunk.to_string()));
+                        first = false;
+                    } else {
+                        lines.push(Line::from(format!("  {chunk}")));
+                    }
+                    remaining = rest;
+                }
+                ListItem::new(Text::from(lines))
             }
-            lines.into_iter().map(ListItem::new).collect::<Vec<_>>()
         })
         .collect();
 
-    let list = List::new(items).block(block);
-    f.render_widget(list, area);
+    let mut list_state = ListState::default();
+    if !items.is_empty() {
+        list_state.select(Some(items.len() - 1));
+    }
+    f.render_stateful_widget(List::new(items).block(block), area, &mut list_state);
 }
 
 // ─── SDO log ─────────────────────────────────────────────────────────────────
@@ -148,6 +190,9 @@ pub fn render_sdo_log(f: &mut Frame, state: &AppState, area: Rect) {
         .borders(Borders::ALL)
         .border_style(Style::default().fg(Color::Magenta));
 
+    // Inner width available for text (subtract left+right borders).
+    let inner_w = area.width.saturating_sub(2) as usize;
+
     let items: Vec<ListItem> = state
         .sdo_log
         .iter()
@@ -159,15 +204,22 @@ pub fn render_sdo_log(f: &mut Frame, state: &AppState, area: Rect) {
             let value_str = if let Some(v) = &entry.value {
                 format!("{v}")
             } else if let Some(code) = entry.abort_code {
-                format!("ABORT 0x{code:08X}")
+                format!("ABORT 0x{code:08X}: {}", super::sdo_abort_description(code))
             } else {
                 "pending".into()
             };
 
             let ts_str = entry.ts.format("%H:%M:%S%.3f").to_string();
+            // Omit the name when it is just the fallback address (no EDS loaded).
+            let fallback_name = format!("{:04X}h/{:02X}", entry.index, entry.subindex);
+            let name_part = if entry.name == fallback_name {
+                String::new()
+            } else {
+                format!(" {}", entry.name)
+            };
             let text = format!(
-                "[{ts_str}] N{} {dir} {:04X}:{:02X} {} = {}",
-                entry.node_id, entry.index, entry.subindex, entry.name, value_str
+                "[{ts_str}] N{} {dir} {:04X}:{:02X}{name_part} = {}",
+                entry.node_id, entry.index, entry.subindex, value_str
             );
 
             let color = if entry.abort_code.is_some() {
@@ -175,12 +227,44 @@ pub fn render_sdo_log(f: &mut Frame, state: &AppState, area: Rect) {
             } else {
                 Color::White
             };
-            ListItem::new(text).style(Style::default().fg(color))
+
+            // Word-wrap entries that exceed the panel width.
+            if inner_w > 0 && text.len() > inner_w {
+                const INDENT: &str = "  ";
+                let cont_w = inner_w.saturating_sub(INDENT.len());
+                let style = Style::default().fg(color);
+                let mut lines: Vec<Line> = Vec::new();
+                let mut s = text.as_str();
+
+                // First line — full inner width.
+                let cut = s[..inner_w].rfind(' ').unwrap_or(inner_w);
+                lines.push(Line::styled(s[..cut].to_string(), style));
+                s = s[cut..].trim_start_matches(' ');
+
+                // Continuation lines — indented.
+                while !s.is_empty() {
+                    if s.len() <= cont_w {
+                        lines.push(Line::styled(format!("{INDENT}{s}"), style));
+                        break;
+                    }
+                    let cut = s[..cont_w].rfind(' ').unwrap_or(cont_w);
+                    lines.push(Line::styled(format!("{INDENT}{}", &s[..cut]), style));
+                    s = s[cut..].trim_start_matches(' ');
+                }
+
+                ListItem::new(Text::from(lines))
+            } else {
+                ListItem::new(text).style(Style::default().fg(color))
+            }
         })
         .collect();
 
+    let mut list_state = ListState::default();
+    if !items.is_empty() {
+        list_state.select(Some(items.len() - 1));
+    }
     let list = List::new(items).block(block);
-    f.render_widget(list, area);
+    f.render_stateful_widget(list, area, &mut list_state);
 }
 
 // ─── Stats bar ───────────────────────────────────────────────────────────────
