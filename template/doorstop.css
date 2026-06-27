@@ -1,0 +1,192 @@
+/*
+ * RustyCAN theme for Doorstop HTML output.
+ *
+ * This file is copied over docs/reqs-output/template/doorstop.css after
+ * `doorstop publish all` runs in CI.  Edit CSS custom properties below to
+ * adjust the theme without touching the CI workflow.
+ *
+ * Colour palette:
+ *   Gold accent : #edb059
+ *   Dark base   : #1a1a1a
+ *   Body text   : #2d2d2d
+ */
+
+/* ── Google Fonts ──────────────────────────────────────────────────────── */
+@import url('https://fonts.googleapis.com/css2?family=Source+Sans+3:wght@400;600;700&family=Source+Code+Pro:wght@400;500&display=swap');
+
+/* ── Custom properties ─────────────────────────────────────────────────── */
+:root {
+  --rc-primary:   #1a1a1a;   /* navbar / dark areas */
+  --rc-accent:    #edb059;   /* gold: brand highlight, links, borders */
+  --rc-accent-dk: #c9913a;   /* darker gold for hover states */
+  --rc-text:      #2d2d2d;   /* body copy */
+  --rc-bg:        #ffffff;
+  --rc-code-bg:   #f7f3ec;   /* warm tint that echoes the gold */
+  --rc-border:    #e8dcc8;
+}
+
+/* ── Base ──────────────────────────────────────────────────────────────── */
+body {
+  font-family: 'Source Sans 3', 'Source Sans Pro', system-ui, sans-serif;
+  color: var(--rc-text);
+  background-color: var(--rc-bg);
+  font-size: 16px;
+  line-height: 1.65;
+}
+
+h1, h2, h3, h4, h5, h6 {
+  color: var(--rc-primary);
+  font-weight: 700;
+  margin-top: 1.5rem;
+}
+
+a {
+  color: var(--rc-accent-dk);
+  text-decoration: none;
+}
+
+a:hover {
+  color: var(--rc-primary);
+  text-decoration: underline;
+}
+
+/* ── Navbar ────────────────────────────────────────────────────────────── */
+.bd-navbar,
+.navbar,
+.text-bg-secondary,
+nav.navbar {
+  background-color: var(--rc-primary) !important;
+  border-bottom: 3px solid var(--rc-accent);
+}
+
+.navbar-brand,
+.nav-link,
+.navbar-text,
+.navbar .text-white {
+  color: #ffffff !important;
+}
+
+.nav-link:hover,
+.nav-link:focus {
+  color: var(--rc-accent) !important;
+}
+
+/* Logo sizing inside navbar */
+.navbar-brand img {
+  height: 40px;
+  width: auto;
+}
+
+/* ── Requirement sections ─────────────────────────────────────────────── */
+section.level1,
+section.level2,
+section.level3 {
+  border-left: 4px solid var(--rc-accent);
+  padding-left: 1.25rem;
+  margin-bottom: 2rem;
+}
+
+/* Item ID badge */
+.badge,
+span.label {
+  background-color: var(--rc-accent) !important;
+  color: var(--rc-primary) !important;
+  font-weight: 600;
+  border-radius: 3px;
+}
+
+/* ── Tables ────────────────────────────────────────────────────────────── */
+table {
+  width: 100%;
+  border-collapse: collapse;
+  margin-bottom: 1.5rem;
+}
+
+table thead th {
+  background-color: var(--rc-primary);
+  color: #ffffff;
+  font-weight: 600;
+  padding: 0.6rem 0.9rem;
+  border: 1px solid var(--rc-primary);
+}
+
+table tbody td {
+  padding: 0.5rem 0.9rem;
+  border: 1px solid var(--rc-border);
+  vertical-align: top;
+}
+
+table tbody tr:nth-child(even) td {
+  background-color: #faf7f2;
+}
+
+/* ── Code & pre ────────────────────────────────────────────────────────── */
+code,
+pre,
+.text-monospace,
+kbd {
+  font-family: 'Source Code Pro', 'JetBrains Mono', monospace;
+  font-size: 0.87em;
+}
+
+code {
+  background-color: var(--rc-code-bg);
+  border: 1px solid var(--rc-border);
+  border-radius: 3px;
+  padding: 0.1em 0.35em;
+}
+
+pre {
+  background-color: var(--rc-code-bg);
+  border-left: 4px solid var(--rc-accent);
+  border-radius: 4px;
+  padding: 1rem 1.25rem;
+  overflow-x: auto;
+}
+
+pre code {
+  border: none;
+  padding: 0;
+  background: none;
+}
+
+/* ── Sidebar / TOC ─────────────────────────────────────────────────────── */
+.dropdown-menu-scrollable {
+  max-height: 70vh;
+  overflow-y: auto;
+  overflow-x: hidden;
+}
+
+.list-group-item.active {
+  background-color: var(--rc-accent);
+  border-color: var(--rc-accent);
+  color: var(--rc-primary);
+}
+
+/* ── Doorstop built-ins (preserve defaults) ────────────────────────────── */
+.caption {
+  text-align: center;
+  font-size: 14px;
+  color: #666;
+  margin-top: 0.25rem;
+}
+
+#img {
+  width: 100%;
+}
+
+/* ── Alerts / callouts ─────────────────────────────────────────────────── */
+.alert-warning {
+  border-color: var(--rc-accent);
+  background-color: #fdf5e6;
+  color: var(--rc-primary);
+}
+
+/* ── Footer ────────────────────────────────────────────────────────────── */
+footer {
+  border-top: 2px solid var(--rc-accent);
+  padding-top: 1rem;
+  margin-top: 2rem;
+  font-size: 0.85em;
+  color: #666;
+}

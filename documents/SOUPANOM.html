@@ -1,0 +1,236 @@
+<!DOCTYPE html>
+<html>
+<head><title>doc-SOUPANOM</title>
+  <meta charset="utf-8" />
+  <meta http-equiv="content-type" content="text/html; charset=UTF-8" />
+  <link rel="stylesheet" href="../template/bootstrap.min.css" />
+  <link rel="stylesheet" href="../template/general.css" />
+  <link type="text/css" rel="stylesheet" href="../template/doorstop.css" />
+  <script src="../template/tex-mml-chtml.js" id="MathJax-script" async></script>
+  <script type="text/x-mathjax-config">
+  MathJax.Hub.Config({
+    tex2jax: {inlineMath: [["$","$"],["\\(","\\)"]]}
+  });
+  </script>
+</head>
+<body>
+
+  <header class="navbar navbar-expand-lg navbar-dark bd-navbar sticky-top text-bg-secondary">
+  <nav class="container-xxl bd-gutter flex-wrap flex-lg-nowrap" aria-label="Document attributes">
+    <div class="container-fluid">
+      <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbarNavDropdown" aria-controls="navbarNavDropdown" aria-expanded="false" aria-label="Toggle navigation">
+        <span class="navbar-toggler-icon"></span>
+      </button>
+      <div class="collapse navbar-collapse" id="navbarNavDropdown">
+        <ul class="navbar-nav">
+          <li class="nav-item">
+            <a class="nav-link" href="../index.html">Documents</a>
+          </li>
+          <li class="nav-item">
+            <a class="nav-link" href="../traceability.html">Traceability</a>
+          </li>
+          <li class="nav-item dropdown">
+            <a class="nav-link dropdown-toggle" href="#" role="button" data-bs-toggle="dropdown" aria-expanded="false">
+              Contents
+            </a>
+            <ul class="dropdown-menu">
+                <li><a class="dropdown-item" href="#toc">Table of Contents</a></li>
+                <ul>
+                <li><a class="dropdown-item" href="#SOUPANOM001">1.1 macOS: set_configuration() Causes kIOReturnAborted</a></li>
+                <li><a class="dropdown-item" href="#SOUPANOM002">1.2 macOS: GET_INFO Returns Cancelled on First Attempt</a></li>
+                <li><a class="dropdown-item" href="#SOUPANOM003">1.3 OTG FS: Bulk OUT Writes &gt;64 Bytes Silently Truncated</a></li>
+                <li><a class="dropdown-item" href="#SOUPANOM004">1.4 PEAK Adapter Not Supported on Linux via Vendor Driver</a></li>
+                <li><a class="dropdown-item" href="#SOUPANOM005">1.5 bbd Firmware Tool Excluded from Packaged Releases</a></li>
+                <li><a class="dropdown-item" href="#SOUPANOM006">1.6 KCAN Bulk IN Timeout Must Exceed Frame Interval</a></li>
+            </ul>
+          </li>
+        </ul>
+      </div>
+    </div>
+    <div class="container-fluid">
+      <div class="row">
+        <div class="col-2">
+          <div class="bd-lead text-nowrap">
+            <!-- Insert logotype. -->
+            <img src="../template/logo-black-white.png" alt="Doorstop" height="128" class="d-inline-block align-text-top">
+          </div>
+        </div>
+        <div class="col-6 align-self-center">
+          <div class="bd-lead text-nowrap text-center">
+            <span class="text-monospace"><strong>doc-SOUPANOM</strong></span>
+          </div>
+        </div>
+        <div class="col-2">
+          <div class="bd-lead text-nowrap">
+            <span class="text-muted">Ref</span>
+            <p><span class="text-monospace">-</span></p>
+          </div>
+        </div>
+        <div class="col-2">
+          <div class="bd-lead text-nowrap">
+            <span class="text-muted">By</span>
+            <p><span class="text-monospace">-</span></p>
+            <span class="text-muted">Issue</span>
+            <p><span class="text-monospace">-</span></p>
+          </div>
+        </div>
+      </div>
+    </div>
+    </div>
+  </nav>
+</header>
+<div class="container-xxl bd-gutter mt-3 my-md-4 bd-layout">
+  <main class="bd-main order-1">
+    <div class="bd-intro ps-lg-4">
+      <H1><p>RustyCAN — SOUP Anomaly List</p></H1>
+      <h2 id="SOUPANOM001">1.1 macOS: set_configuration() Causes kIOReturnAborted <small>SOUPANOM001</small></h2>
+<p><strong>Affected platforms:</strong> macOS</p>
+<p><strong>Description:</strong> On macOS, calling <code>set_configuration()</code> on the USB device after <code>claim_interface(0)</code> causes all subsequent control-endpoint (EP0) requests to fail with <code>kIOReturnAborted</code>. This prevents <code>GET_INFO</code> and other KCAN control commands from executing.</p>
+<p><strong>Workaround:</strong> The application omits <code>set_configuration()</code> entirely. The call order used is: <code>open()</code> → <code>claim_interface(0)</code> → <code>control_in/out()</code>. No <code>set_configuration()</code> or <code>set_alt_setting()</code> call is made.</p>
+<p><strong>Impact:</strong> None at runtime; the device operates correctly without explicit configuration selection because the KCAN Dongle presents a single configuration.</p>
+<p><em>Parent links:</em> <a href="SOUP.html#SOUP003">SOUP003 KCAN Dongle Adapter Support</a>, <a href="SOUP.html#SOUP023">SOUP023 KCAN Adapter Hardware Interface</a></p>
+<table>
+<thead>
+<tr>
+<th>Attribute</th>
+<th>Value</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>type</td>
+<td>anomaly</td>
+</tr>
+<tr>
+<td>iec62304-clause</td>
+<td>8.1.3</td>
+</tr>
+</tbody>
+</table>
+<h2 id="SOUPANOM002">1.2 macOS: GET_INFO Returns Cancelled on First Attempt <small>SOUPANOM002</small></h2>
+<p><strong>Affected platforms:</strong> macOS</p>
+<p><strong>Description:</strong> After <code>claim_interface(0)</code>, the first <code>GET_INFO</code> control request to the KCAN Dongle may return a <code>Cancelled</code> error (<code>kIOReturnAborted</code>) due to macOS IOKit initialisation latency.</p>
+<p><strong>Workaround:</strong> The application retries the <code>GET_INFO</code> request up to five (5) times with 50 ms exponential backoff before reporting a connection failure.</p>
+<p><strong>Impact:</strong> Connection setup may take up to ~250 ms longer on macOS on first attach. No data loss occurs.</p>
+<p><em>Parent links:</em> <a href="SOUP.html#SOUP003">SOUP003 KCAN Dongle Adapter Support</a></p>
+<table>
+<thead>
+<tr>
+<th>Attribute</th>
+<th>Value</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>type</td>
+<td>anomaly</td>
+</tr>
+<tr>
+<td>iec62304-clause</td>
+<td>8.1.3</td>
+</tr>
+</tbody>
+</table>
+<h2 id="SOUPANOM003">1.3 OTG FS: Bulk OUT Writes &gt;64 Bytes Silently Truncated <small>SOUPANOM003</small></h2>
+<p><strong>Affected platforms:</strong> All (firmware behaviour; visible on host regardless of OS)</p>
+<p><strong>Description:</strong> On the STM32H753ZI OTG FS peripheral, a single <code>write_packet</code> call with a payload larger than 64 bytes (the USB Full-Speed Maximum Packet Size) silently truncates the transfer to 64 bytes. This affects KCAN command frames that exceed one USB packet.</p>
+<p><strong>Workaround:</strong> The KCAN firmware transmits all bulk OUT data in 64-byte (MPS) chunks, appending a zero-length packet (ZLP) when the payload is an exact multiple of MPS. The host bulk IN read buffer is sized to a multiple of MPS (128 bytes for 80-byte KCAN frames).</p>
+<p><strong>Impact:</strong> None at runtime with the workaround applied. Removing the chunking from firmware would cause silent data loss.</p>
+<p><em>Parent links:</em> <a href="SOUP.html#SOUP003">SOUP003 KCAN Dongle Adapter Support</a></p>
+<table>
+<thead>
+<tr>
+<th>Attribute</th>
+<th>Value</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>type</td>
+<td>anomaly</td>
+</tr>
+<tr>
+<td>iec62304-clause</td>
+<td>8.1.3</td>
+</tr>
+</tbody>
+</table>
+<h2 id="SOUPANOM004">1.4 PEAK Adapter Not Supported on Linux via Vendor Driver <small>SOUPANOM004</small></h2>
+<p><strong>Affected platforms:</strong> Linux</p>
+<p><strong>Description:</strong> The PEAK vendor-provided <code>pcan</code> userspace driver used on macOS and Windows is not available on Linux. Linux support for PEAK PCAN-USB adapters is provided via the SocketCAN kernel interface (<code>pcan</code> kernel module), which requires the <code>pcan</code> module to be loaded.</p>
+<p><strong>Workaround:</strong> On Linux, configure the PEAK adapter as a SocketCAN network interface (e.g., <code>ip link set can0 up type can bitrate 250000</code>) before launching RustyCAN.</p>
+<p><strong>Impact:</strong> Linux users must perform additional system configuration before connecting a PEAK adapter. KCAN Dongle support is unaffected on all platforms.</p>
+<p><em>Parent links:</em> <a href="SOUP.html#SOUP002">SOUP002 PEAK PCAN-USB Adapter Support</a></p>
+<table>
+<thead>
+<tr>
+<th>Attribute</th>
+<th>Value</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>type</td>
+<td>anomaly</td>
+</tr>
+<tr>
+<td>iec62304-clause</td>
+<td>8.1.3</td>
+</tr>
+</tbody>
+</table>
+<h2 id="SOUPANOM005">1.5 bbd Firmware Tool Excluded from Packaged Releases <small>SOUPANOM005</small></h2>
+<p><strong>Affected platforms:</strong> All</p>
+<p><strong>Description:</strong> The <code>bbd</code> (BinaryBlockDownload) command-line tool for CANopen firmware updates via PEAK or KCAN adapters is compiled as part of the workspace but is excluded from signed packaged releases (DMG, NSIS installer, AppImage/deb). It is available only in developer builds (<code>cargo build -p rustycan --bin bbd</code>).</p>
+<p><strong>Workaround:</strong> Build from source to obtain <code>bbd</code>. Pre-built packaged installers do not include this tool.</p>
+<p><strong>Impact:</strong> End-users installing RustyCAN from a release package cannot perform CANopen-based firmware updates using <code>bbd</code> without building from source. The KCAN Dongle USB DFU update path (via the GUI or <code>--dfu-firmware</code> flag) is unaffected and is included in all releases.</p>
+<p><em>Parent links:</em> <a href="SOUP.html#SOUP017">SOUP017 KCAN Dongle Firmware Update</a></p>
+<table>
+<thead>
+<tr>
+<th>Attribute</th>
+<th>Value</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>type</td>
+<td>anomaly</td>
+</tr>
+<tr>
+<td>iec62304-clause</td>
+<td>8.1.3</td>
+</tr>
+</tbody>
+</table>
+<h2 id="SOUPANOM006">1.6 KCAN Bulk IN Timeout Must Exceed Frame Interval <small>SOUPANOM006</small></h2>
+<p><strong>Affected platforms:</strong> All</p>
+<p><strong>Description:</strong> If the bulk IN read timeout is shorter than the firmware's frame transmission interval, the host receives spurious timeout errors that are indistinguishable from a genuine adapter stall. For a 100 ms echo/heartbeat interval the minimum safe timeout is 200 ms.</p>
+<p><strong>Workaround:</strong> The application sets the bulk IN read timeout to at least 200 ms (2× the expected maximum inter-frame interval). This value must be reviewed if the firmware frame interval changes.</p>
+<p><strong>Impact:</strong> Setting an insufficient timeout causes false <code>AdapterDisconnected</code> events. Setting an excessively large timeout delays stall detection. The current 200 ms value is a documented configuration constant.</p>
+<p><em>Parent links:</em> <a href="SOUP.html#SOUP003">SOUP003 KCAN Dongle Adapter Support</a></p>
+<table>
+<thead>
+<tr>
+<th>Attribute</th>
+<th>Value</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>type</td>
+<td>anomaly</td>
+</tr>
+<tr>
+<td>iec62304-clause</td>
+<td>8.1.3</td>
+</tr>
+</tbody>
+</table>
+    </div>
+  </main>
+</div>
+<script src="../template/bootstrap.bundle.min.js"></script>
+</body>
+</html>
+

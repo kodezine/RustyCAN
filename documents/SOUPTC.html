@@ -1,0 +1,838 @@
+<!DOCTYPE html>
+<html>
+<head><title>doc-SOUPTC</title>
+  <meta charset="utf-8" />
+  <meta http-equiv="content-type" content="text/html; charset=UTF-8" />
+  <link rel="stylesheet" href="../template/bootstrap.min.css" />
+  <link rel="stylesheet" href="../template/general.css" />
+  <link type="text/css" rel="stylesheet" href="../template/doorstop.css" />
+  <script src="../template/tex-mml-chtml.js" id="MathJax-script" async></script>
+  <script type="text/x-mathjax-config">
+  MathJax.Hub.Config({
+    tex2jax: {inlineMath: [["$","$"],["\\(","\\)"]]}
+  });
+  </script>
+</head>
+<body>
+
+  <header class="navbar navbar-expand-lg navbar-dark bd-navbar sticky-top text-bg-secondary">
+  <nav class="container-xxl bd-gutter flex-wrap flex-lg-nowrap" aria-label="Document attributes">
+    <div class="container-fluid">
+      <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbarNavDropdown" aria-controls="navbarNavDropdown" aria-expanded="false" aria-label="Toggle navigation">
+        <span class="navbar-toggler-icon"></span>
+      </button>
+      <div class="collapse navbar-collapse" id="navbarNavDropdown">
+        <ul class="navbar-nav">
+          <li class="nav-item">
+            <a class="nav-link" href="../index.html">Documents</a>
+          </li>
+          <li class="nav-item">
+            <a class="nav-link" href="../traceability.html">Traceability</a>
+          </li>
+          <li class="nav-item dropdown">
+            <a class="nav-link dropdown-toggle" href="#" role="button" data-bs-toggle="dropdown" aria-expanded="false">
+              Contents
+            </a>
+            <ul class="dropdown-menu">
+                <li><a class="dropdown-item" href="#toc">Table of Contents</a></li>
+                <ul>
+                <li><a class="dropdown-item" href="#SOUPTC001">1.1 NMT Heartbeat Decode</a></li>
+                <li><a class="dropdown-item" href="#SOUPTC002">1.2 NMT Master Command Encoding</a></li>
+                <li><a class="dropdown-item" href="#SOUPTC003">1.3 PDO Decoding from EDS</a></li>
+                <li><a class="dropdown-item" href="#SOUPTC004">1.4 EDS File Parsing (Integration)</a></li>
+                <li><a class="dropdown-item" href="#SOUPTC005">1.5 EDS Parser Unit Tests</a></li>
+                <li><a class="dropdown-item" href="#SOUPTC006">1.6 SDO Expedited and Segmented Transfer</a></li>
+                <li><a class="dropdown-item" href="#SOUPTC007">1.7 CAN Frame COB-ID Classification</a></li>
+                <li><a class="dropdown-item" href="#SOUPTC008">1.8 DBC Message and Signal Decoding (Integration)</a></li>
+                <li><a class="dropdown-item" href="#SOUPTC009">1.9 DBC Bit Extraction Unit Tests</a></li>
+                <li><a class="dropdown-item" href="#SOUPTC010">2.1 PEAK PCAN-USB Adapter Connection</a></li>
+                <li><a class="dropdown-item" href="#SOUPTC011">2.2 KCAN Dongle Connection</a></li>
+                <li><a class="dropdown-item" href="#SOUPTC012">2.3 Adapter Disconnection Detection</a></li>
+                <li><a class="dropdown-item" href="#SOUPTC013">2.4 NMT Master Command Execution</a></li>
+                <li><a class="dropdown-item" href="#SOUPTC014">2.5 SDO Read and Write on Live Node</a></li>
+                <li><a class="dropdown-item" href="#SOUPTC015">2.6 JSONL Event Log Integrity</a></li>
+                <li><a class="dropdown-item" href="#SOUPTC016">2.7 Native Desktop GUI Launch</a></li>
+                <li><a class="dropdown-item" href="#SOUPTC017">2.8 TUI Mode Launch</a></li>
+                <li><a class="dropdown-item" href="#SOUPTC018">2.9 Live HTTP/SSE Dashboard</a></li>
+                <li><a class="dropdown-item" href="#SOUPTC019">2.10 JSON Configuration File Loading</a></li>
+                <li><a class="dropdown-item" href="#SOUPTC020">2.11 KCAN Dongle Firmware Update via DFU</a></li>
+                <li><a class="dropdown-item" href="#SOUPTC021">2.12 Hardware Timestamp Resolution Verification</a></li>
+                <li><a class="dropdown-item" href="#SOUPTC022">2.13 Multi-Node Logging Stability</a></li>
+                <li><a class="dropdown-item" href="#SOUPTC023">2.14 Cross-Platform CI Build and Test</a></li>
+                <li><a class="dropdown-item" href="#SOUPTC026">2.15 App Update: Version Tag Parsing</a></li>
+                <li><a class="dropdown-item" href="#SOUPTC024">3.1 Code Review: Adapter Interface Implementation</a></li>
+                <li><a class="dropdown-item" href="#SOUPTC025">3.2 Code Review: EDS and DBC Format Compliance</a></li>
+            </ul>
+          </li>
+        </ul>
+      </div>
+    </div>
+    <div class="container-fluid">
+      <div class="row">
+        <div class="col-2">
+          <div class="bd-lead text-nowrap">
+            <!-- Insert logotype. -->
+            <img src="../template/logo-black-white.png" alt="Doorstop" height="128" class="d-inline-block align-text-top">
+          </div>
+        </div>
+        <div class="col-6 align-self-center">
+          <div class="bd-lead text-nowrap text-center">
+            <span class="text-monospace"><strong>doc-SOUPTC</strong></span>
+          </div>
+        </div>
+        <div class="col-2">
+          <div class="bd-lead text-nowrap">
+            <span class="text-muted">Ref</span>
+            <p><span class="text-monospace">-</span></p>
+          </div>
+        </div>
+        <div class="col-2">
+          <div class="bd-lead text-nowrap">
+            <span class="text-muted">By</span>
+            <p><span class="text-monospace">-</span></p>
+            <span class="text-muted">Issue</span>
+            <p><span class="text-monospace">-</span></p>
+          </div>
+        </div>
+      </div>
+    </div>
+    </div>
+  </nav>
+</header>
+<div class="container-xxl bd-gutter mt-3 my-md-4 bd-layout">
+  <main class="bd-main order-1">
+    <div class="bd-intro ps-lg-4">
+      <H1><p>RustyCAN — SOUP Test Cases</p></H1>
+      <h2 id="SOUPTC001">1.1 NMT Heartbeat Decode <small>SOUPTC001</small></h2>
+<p><strong>Objective:</strong> Verify that NMT heartbeat frames are correctly decoded to node state values.</p>
+<p><strong>Test suite:</strong> <code>host/src/canopen/nmt.rs</code> — unit tests <code>decode_bootup</code>, <code>decode_operational</code>, <code>decode_pre_op</code>, <code>decode_start_all</code>, <code>returns_none_on_empty</code> (6 tests).</p>
+<p><strong>Pass criteria:</strong> All tests pass with exit code 0.</p>
+<p><strong>Execution:</strong></p>
+<pre><code class="language-sh">cargo test -p rustycan -- nmt
+</code></pre>
+<p><em>Parent links:</em> <a href="SOUP.html#SOUP007">SOUP007 CANopen NMT Node State Monitoring</a></p>
+<table>
+<thead>
+<tr>
+<th>Attribute</th>
+<th>Value</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>method</td>
+<td>automated</td>
+</tr>
+<tr>
+<td>test-command</td>
+<td>cargo test -p rustycan -- nmt</td>
+</tr>
+</tbody>
+</table>
+<h2 id="SOUPTC002">1.2 NMT Master Command Encoding <small>SOUPTC002</small></h2>
+<p><strong>Objective:</strong> Verify that NMT master commands are correctly encoded into CAN frames.</p>
+<p><strong>Test suite:</strong> <code>host/src/canopen/nmt.rs</code> — unit test <code>encode_all_commands</code>.</p>
+<p><strong>Pass criteria:</strong> All NMT command variants (Start, Stop, EnterPreOperational, ResetNode, ResetCommunication) encode to the expected COB-ID 0x000 frame bytes.</p>
+<p><strong>Execution:</strong></p>
+<pre><code class="language-sh">cargo test -p rustycan -- nmt::tests::encode_all_commands
+</code></pre>
+<p><em>Parent links:</em> <a href="SOUP.html#SOUP008">SOUP008 CANopen NMT Master Commands</a></p>
+<table>
+<thead>
+<tr>
+<th>Attribute</th>
+<th>Value</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>method</td>
+<td>automated</td>
+</tr>
+<tr>
+<td>test-command</td>
+<td>cargo test -p rustycan -- nmt::tests::encode_all_commands</td>
+</tr>
+</tbody>
+</table>
+<h2 id="SOUPTC003">1.3 PDO Decoding from EDS <small>SOUPTC003</small></h2>
+<p><strong>Objective:</strong> Verify that a PDO frame is correctly decoded into named signal values using mappings from an EDS file.</p>
+<p><strong>Test suite:</strong> <code>host/tests/integration_test.rs</code> — <code>pdo_decoder_builds_from_eds</code>.</p>
+<p><strong>Pass criteria:</strong> A known 4-byte PDO payload is decoded to the expected Status Bits, Digital Inputs, and Current Segment values as defined in <code>tests/fixtures/sample_drive.eds</code>.</p>
+<p><strong>Execution:</strong></p>
+<pre><code class="language-sh">cargo test -p rustycan -- pdo
+</code></pre>
+<p><em>Parent links:</em> <a href="SOUP.html#SOUP009">SOUP009 CANopen PDO Decoding</a></p>
+<table>
+<thead>
+<tr>
+<th>Attribute</th>
+<th>Value</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>method</td>
+<td>automated</td>
+</tr>
+<tr>
+<td>test-command</td>
+<td>cargo test -p rustycan -- pdo</td>
+</tr>
+</tbody>
+</table>
+<h2 id="SOUPTC004">1.4 EDS File Parsing (Integration) <small>SOUPTC004</small></h2>
+<p><strong>Objective:</strong> Verify that EDS files are correctly parsed into an object dictionary with the expected entries.</p>
+<p><strong>Test suite:</strong> <code>host/tests/integration_test.rs</code> — <code>eds_parse_device_type</code>, <code>eds_parse_status_word</code>, <code>eds_parse_tpdo1_sub_objects</code> (3 tests).</p>
+<p><strong>Pass criteria:</strong> Device type (0x1000), Status Word (0x3000), and TPDO1 mapping (0x1A00 sub-objects) parse to the expected types, names, and default values from <code>tests/fixtures/sample_drive.eds</code>.</p>
+<p><strong>Execution:</strong></p>
+<pre><code class="language-sh">cargo test -p rustycan -- eds_parse
+</code></pre>
+<p><em>Parent links:</em> <a href="SOUP.html#SOUP009">SOUP009 CANopen PDO Decoding</a></p>
+<table>
+<thead>
+<tr>
+<th>Attribute</th>
+<th>Value</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>method</td>
+<td>automated</td>
+</tr>
+<tr>
+<td>test-command</td>
+<td>cargo test -p rustycan -- eds_parse</td>
+</tr>
+</tbody>
+</table>
+<h2 id="SOUPTC005">1.5 EDS Parser Unit Tests <small>SOUPTC005</small></h2>
+<p><strong>Objective:</strong> Verify internal EDS parsing logic — section classification, node-ID string parsing, and default value parsing.</p>
+<p><strong>Test suite:</strong> <code>host/src/eds/mod.rs</code> — <code>parse_section_var</code>, <code>parse_section_sub</code>, <code>parse_section_non_object</code>, <code>parse_node_id_str_variants</code>, <code>parse_default_u32_hex</code>, <code>parse_default_u32_decimal</code>, <code>build_entry_minimal</code> (8 tests).</p>
+<p><strong>Pass criteria:</strong> All 8 unit tests pass with exit code 0.</p>
+<p><strong>Execution:</strong></p>
+<pre><code class="language-sh">cargo test -p rustycan -- eds::
+</code></pre>
+<p><em>Parent links:</em> <a href="SOUP.html#SOUP024">SOUP024 EDS and DBC File Formats</a></p>
+<table>
+<thead>
+<tr>
+<th>Attribute</th>
+<th>Value</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>method</td>
+<td>automated</td>
+</tr>
+<tr>
+<td>test-command</td>
+<td>cargo test -p rustycan -- eds::</td>
+</tr>
+</tbody>
+</table>
+<h2 id="SOUPTC006">1.6 SDO Expedited and Segmented Transfer <small>SOUPTC006</small></h2>
+<p><strong>Objective:</strong> Verify that SDO command frames are correctly encoded and decoded for expedited and segmented upload/download operations.</p>
+<p><strong>Test suite:</strong> <code>host/tests/integration_test.rs</code> — <code>sdo_decodes_status_word_with_eds</code>, <code>sdo_encode_upload_request_roundtrip</code>, <code>sdo_encode_download_expedited_u16</code>, <code>sdo_encode_value_u32_known_object</code>, <code>sdo_parse_hex_bytes_and_segmented_init</code> (4–5 tests).</p>
+<p><strong>Pass criteria:</strong> All SDO integration tests pass; round-trip encode/decode produces identical frames; EDS-looked-up object names and values match expectations.</p>
+<p><strong>Execution:</strong></p>
+<pre><code class="language-sh">cargo test -p rustycan -- sdo
+</code></pre>
+<p><em>Parent links:</em> <a href="SOUP.html#SOUP010">SOUP010 CANopen SDO Transfer</a></p>
+<table>
+<thead>
+<tr>
+<th>Attribute</th>
+<th>Value</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>method</td>
+<td>automated</td>
+</tr>
+<tr>
+<td>test-command</td>
+<td>cargo test -p rustycan -- sdo</td>
+</tr>
+</tbody>
+</table>
+<h2 id="SOUPTC007">1.7 CAN Frame COB-ID Classification <small>SOUPTC007</small></h2>
+<p><strong>Objective:</strong> Verify that incoming CAN frame COB-IDs are correctly classified as heartbeat, TPDO, or RPDO frame types.</p>
+<p><strong>Test suite:</strong> <code>host/tests/integration_test.rs</code> — <code>classify_heartbeat_frame</code>, <code>classify_tpdo_rpdo</code>.</p>
+<p><strong>Pass criteria:</strong> COB-IDs 0x701–0x702 are classified as heartbeat; TPDO and RPDO COB-ID ranges are correctly distinguished.</p>
+<p><strong>Execution:</strong></p>
+<pre><code class="language-sh">cargo test -p rustycan -- classify
+</code></pre>
+<p><em>Parent links:</em> <a href="SOUP.html#SOUP005">SOUP005 CAN Frame Reception</a></p>
+<table>
+<thead>
+<tr>
+<th>Attribute</th>
+<th>Value</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>method</td>
+<td>automated</td>
+</tr>
+<tr>
+<td>test-command</td>
+<td>cargo test -p rustycan -- classify</td>
+</tr>
+</tbody>
+</table>
+<h2 id="SOUPTC008">1.8 DBC Message and Signal Decoding (Integration) <small>SOUPTC008</small></h2>
+<p><strong>Objective:</strong> Verify that DBC files are parsed and CAN signal values are correctly decoded including scaling, offset, and VAL_ descriptions.</p>
+<p><strong>Test suite:</strong> <code>host/tests/integration_test.rs</code> — <code>dbc_parse_fixture_message_name</code>, <code>dbc_decode_engine_speed_intel_le</code>, <code>dbc_decode_coolant_temp_with_val_description</code> (3 tests).</p>
+<p><strong>Pass criteria:</strong> <code>EngineData</code> message parses correctly from <code>tests/fixtures/sample_bus.dbc</code>; <code>EngineSpeed</code> raw value <code>0x0320</code> decodes to 100.0 rpm; <code>CoolantTemp</code> decodes to expected VAL_ description.</p>
+<p><strong>Execution:</strong></p>
+<pre><code class="language-sh">cargo test -p rustycan -- dbc
+</code></pre>
+<p><em>Parent links:</em> <a href="SOUP.html#SOUP011">SOUP011 DBC Signal Decoding</a></p>
+<table>
+<thead>
+<tr>
+<th>Attribute</th>
+<th>Value</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>method</td>
+<td>automated</td>
+</tr>
+<tr>
+<td>test-command</td>
+<td>cargo test -p rustycan -- dbc</td>
+</tr>
+</tbody>
+</table>
+<h2 id="SOUPTC009">1.9 DBC Bit Extraction Unit Tests <small>SOUPTC009</small></h2>
+<p><strong>Objective:</strong> Verify low-level DBC signal bit-extraction for Intel and Motorola byte orders, including cross-byte signals and two's complement conversion.</p>
+<p><strong>Test suite:</strong> <code>host/src/dbc/mod.rs</code> — <code>extract_intel_single_byte</code>, <code>extract_intel_nibble</code>, <code>extract_intel_cross_byte</code>, <code>extract_motorola_single_byte</code>, <code>to_signed_positive</code>, <code>to_signed_negative</code> (6 tests).</p>
+<p><strong>Pass criteria:</strong> All 6 unit tests pass with exit code 0.</p>
+<p><strong>Execution:</strong></p>
+<pre><code class="language-sh">cargo test -p rustycan -- dbc::
+</code></pre>
+<p><em>Parent links:</em> <a href="SOUP.html#SOUP011">SOUP011 DBC Signal Decoding</a></p>
+<table>
+<thead>
+<tr>
+<th>Attribute</th>
+<th>Value</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>method</td>
+<td>automated</td>
+</tr>
+<tr>
+<td>test-command</td>
+<td>cargo test -p rustycan -- dbc::</td>
+</tr>
+</tbody>
+</table>
+<h2 id="SOUPTC010">2.1 PEAK PCAN-USB Adapter Connection <small>SOUPTC010</small></h2>
+<p><strong>Objective:</strong> Verify that RustyCAN detects and connects to a PEAK PCAN-USB adapter.</p>
+<p><strong>Preconditions:</strong> PEAK PCAN-USB adapter connected to host. Driver installed (macOS/Windows) or <code>pcan</code> kernel module loaded (Linux). CAN bus with termination resistors.</p>
+<p><strong>Procedure:</strong></p>
+<ol>
+<li>Launch RustyCAN.</li>
+<li>On the Connect screen, select adapter type <strong>PEAK PCAN-USB</strong>.</li>
+<li>Select the correct port/channel and baud rate.</li>
+<li>Click <strong>Connect</strong>.</li>
+</ol>
+<p><strong>Pass criteria:</strong> The Monitor screen opens. The status bar shows the adapter as connected. No error dialog is displayed.</p>
+<p><em>Parent links:</em> <a href="SOUP.html#SOUP002">SOUP002 PEAK PCAN-USB Adapter Support</a></p>
+<table>
+<thead>
+<tr>
+<th>Attribute</th>
+<th>Value</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>method</td>
+<td>manual</td>
+</tr>
+</tbody>
+</table>
+<h2 id="SOUPTC011">2.2 KCAN Dongle Connection <small>SOUPTC011</small></h2>
+<p><strong>Objective:</strong> Verify that RustyCAN detects and connects to a KCAN Dongle and exposes both CAN channels.</p>
+<p><strong>Preconditions:</strong> KCAN Dongle (STM32H753ZI) connected via USB. No other software accessing the device.</p>
+<p><strong>Procedure:</strong></p>
+<ol>
+<li>Launch RustyCAN.</li>
+<li>On the Connect screen, select adapter type <strong>KCAN Dongle</strong>.</li>
+<li>Select baud rate and click <strong>Connect</strong>.</li>
+</ol>
+<p><strong>Pass criteria:</strong> The Monitor screen opens showing both FDCAN1 (channel 0) and FDCAN2 (channel 1). The status bar shows the dongle firmware version. No error dialog is displayed.</p>
+<p><em>Parent links:</em> <a href="SOUP.html#SOUP003">SOUP003 KCAN Dongle Adapter Support</a></p>
+<table>
+<thead>
+<tr>
+<th>Attribute</th>
+<th>Value</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>method</td>
+<td>manual</td>
+</tr>
+</tbody>
+</table>
+<h2 id="SOUPTC012">2.3 Adapter Disconnection Detection <small>SOUPTC012</small></h2>
+<p><strong>Objective:</strong> Verify that RustyCAN detects and surfaces an adapter disconnection event during an active session.</p>
+<p><strong>Preconditions:</strong> RustyCAN connected to any supported adapter with an active session.</p>
+<p><strong>Procedure:</strong></p>
+<ol>
+<li>Establish a connection and confirm the Monitor screen is active.</li>
+<li>Physically unplug the adapter USB cable.</li>
+<li>Observe the UI within 5 seconds.</li>
+</ol>
+<p><strong>Pass criteria:</strong> The UI displays an <code>AdapterDisconnected</code> notification (error banner or status change). The application does not crash. The user can dismiss the error and return to the Connect screen.</p>
+<p><em>Parent links:</em> <a href="SOUP.html#SOUP004">SOUP004 Adapter Disconnection Detection</a></p>
+<table>
+<thead>
+<tr>
+<th>Attribute</th>
+<th>Value</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>method</td>
+<td>manual</td>
+</tr>
+</tbody>
+</table>
+<h2 id="SOUPTC013">2.4 NMT Master Command Execution <small>SOUPTC013</small></h2>
+<p><strong>Objective:</strong> Verify that NMT master commands issued via the GUI result in the correct node state transition on a live CANopen node.</p>
+<p><strong>Preconditions:</strong> RustyCAN connected. At least one CANopen node active on the bus, implementing standard NMT heartbeat (CiA 301).</p>
+<p><strong>Procedure:</strong></p>
+<ol>
+<li>Confirm the node appears in the Monitor screen in <strong>Operational</strong> state.</li>
+<li>Issue <strong>Stop Remote Node</strong> to the node via the GUI.</li>
+<li>Confirm node transitions to <strong>Stopped</strong>.</li>
+<li>Issue <strong>Start Remote Node</strong> to the node.</li>
+<li>Confirm node transitions back to <strong>Operational</strong>.</li>
+<li>Issue <strong>Reset Node</strong> (broadcast, node-ID 0).</li>
+<li>Confirm all nodes transition to <strong>Bootup</strong> then return to <strong>Pre-Operational</strong> or <strong>Operational</strong>.</li>
+</ol>
+<p><strong>Pass criteria:</strong> Each NMT state transition is reflected in the Monitor screen within 2 seconds of the command being issued.</p>
+<p><em>Parent links:</em> <a href="SOUP.html#SOUP008">SOUP008 CANopen NMT Master Commands</a></p>
+<table>
+<thead>
+<tr>
+<th>Attribute</th>
+<th>Value</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>method</td>
+<td>manual</td>
+</tr>
+</tbody>
+</table>
+<h2 id="SOUPTC014">2.5 SDO Read and Write on Live Node <small>SOUPTC014</small></h2>
+<p><strong>Objective:</strong> Verify that SDO upload (read) and download (write) operations return correct values on a live CANopen node.</p>
+<p><strong>Preconditions:</strong> RustyCAN connected. A CANopen node with a known object dictionary accessible via SDO (e.g., Device Type at 0x1000 sub 0).</p>
+<p><strong>Procedure:</strong></p>
+<ol>
+<li>Using the SDO panel, request an SDO read on index <code>0x1000</code>, sub <code>0</code>.</li>
+<li>Observe the returned value.</li>
+<li>Request an SDO write on a writable object (e.g., a vendor-specific parameter).</li>
+<li>Perform an SDO read of the same object to confirm the written value.</li>
+</ol>
+<p><strong>Pass criteria:</strong> The read returns the expected value. The write completes without error. The subsequent read confirms the written value is stored.</p>
+<p><em>Parent links:</em> <a href="SOUP.html#SOUP010">SOUP010 CANopen SDO Transfer</a></p>
+<table>
+<thead>
+<tr>
+<th>Attribute</th>
+<th>Value</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>method</td>
+<td>manual</td>
+</tr>
+</tbody>
+</table>
+<h2 id="SOUPTC015">2.6 JSONL Event Log Integrity <small>SOUPTC015</small></h2>
+<p><strong>Objective:</strong> Verify that the JSONL log file contains well-formed JSON entries with timestamps for all received CAN events.</p>
+<p><strong>Preconditions:</strong> RustyCAN connected to a CAN bus with at least one active node.</p>
+<p><strong>Procedure:</strong></p>
+<ol>
+<li>Start a session and allow at least 30 seconds of data capture.</li>
+<li>Disconnect and locate the generated <code>.jsonl</code> log file.</li>
+<li>Run <code>cat &lt;logfile&gt; | python3 -c "import sys,json; [json.loads(l) for l in sys.stdin]"</code> (or equivalent).</li>
+<li>Inspect at least 10 entries for the presence of a <code>timestamp</code> field and a recognised event type field.</li>
+</ol>
+<p><strong>Pass criteria:</strong> All lines parse as valid JSON. Every entry contains a <code>timestamp</code> field. No truncated or malformed lines are present.</p>
+<p><em>Parent links:</em> <a href="SOUP.html#SOUP012">SOUP012 JSONL Event Logging</a></p>
+<table>
+<thead>
+<tr>
+<th>Attribute</th>
+<th>Value</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>method</td>
+<td>manual</td>
+</tr>
+</tbody>
+</table>
+<h2 id="SOUPTC016">2.7 Native Desktop GUI Launch <small>SOUPTC016</small></h2>
+<p><strong>Objective:</strong> Verify that the RustyCAN desktop GUI starts and renders the Connect and Monitor screens.</p>
+<p><strong>Preconditions:</strong> RustyCAN installed or built from source. No adapter required.</p>
+<p><strong>Procedure:</strong></p>
+<ol>
+<li>Launch <code>rustycan</code> (no flags).</li>
+<li>Observe the Connect screen.</li>
+<li>Connect to any available adapter.</li>
+<li>Observe the Monitor screen.</li>
+</ol>
+<p><strong>Pass criteria:</strong> The application window opens without error. The Connect screen renders adapter type and port selection controls. After connection the Monitor screen renders NMT node table, PDO panel, and SDO panel.</p>
+<p><em>Parent links:</em> <a href="SOUP.html#SOUP013">SOUP013 Native Desktop GUI</a></p>
+<table>
+<thead>
+<tr>
+<th>Attribute</th>
+<th>Value</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>method</td>
+<td>manual</td>
+</tr>
+</tbody>
+</table>
+<h2 id="SOUPTC017">2.8 TUI Mode Launch <small>SOUPTC017</small></h2>
+<p><strong>Objective:</strong> Verify that the <code>--tui</code> flag starts the full-screen terminal user interface.</p>
+<p><strong>Preconditions:</strong> A valid JSON config file pointing to an available adapter. Terminal capable of rendering full-screen TUI (e.g., 80×24 minimum).</p>
+<p><strong>Procedure:</strong></p>
+<ol>
+<li>Run <code>rustycan --tui --config &lt;config.json&gt;</code>.</li>
+<li>Observe the terminal.</li>
+<li>Press <code>q</code> to quit.</li>
+</ol>
+<p><strong>Pass criteria:</strong> A full-screen terminal UI is rendered showing NMT, PDO, SDO, and event-log panels. The terminal is fully restored to normal mode after quitting. No graphical window is opened.</p>
+<p><em>Parent links:</em> <a href="SOUP.html#SOUP014">SOUP014 Terminal User Interface (TUI) Mode</a></p>
+<table>
+<thead>
+<tr>
+<th>Attribute</th>
+<th>Value</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>method</td>
+<td>manual</td>
+</tr>
+<tr>
+<td>test-command</td>
+<td>rustycan --tui --config <config.json></td>
+</tr>
+</tbody>
+</table>
+<h2 id="SOUPTC018">2.9 Live HTTP/SSE Dashboard <small>SOUPTC018</small></h2>
+<p><strong>Objective:</strong> Verify that the live browser dashboard is accessible and streams real-time events.</p>
+<p><strong>Preconditions:</strong> RustyCAN connected to a CAN bus with active traffic.</p>
+<p><strong>Procedure:</strong></p>
+<ol>
+<li>Start a session in GUI or TUI mode.</li>
+<li>Open <code>http://127.0.0.1:7878/</code> in a web browser.</li>
+<li>Observe the page for at least 10 seconds.</li>
+</ol>
+<p><strong>Pass criteria:</strong> The page loads without error. The NMT node grid renders. New CAN events appear in the event log in real time via SSE without requiring a page refresh.</p>
+<p><em>Parent links:</em> <a href="SOUP.html#SOUP015">SOUP015 Live HTTP/SSE Dashboard</a></p>
+<table>
+<thead>
+<tr>
+<th>Attribute</th>
+<th>Value</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>method</td>
+<td>manual</td>
+</tr>
+</tbody>
+</table>
+<h2 id="SOUPTC019">2.10 JSON Configuration File Loading <small>SOUPTC019</small></h2>
+<p><strong>Objective:</strong> Verify that adapter type and baud rate specified in a JSON config file are correctly applied on startup.</p>
+<p><strong>Preconditions:</strong> A valid <code>config.kcan.json</code> file specifying KCAN adapter and a specific baud rate.</p>
+<p><strong>Procedure:</strong></p>
+<ol>
+<li>Run <code>rustycan --config config.kcan.json</code>.</li>
+<li>Observe the Connect screen (GUI) or the session startup (TUI/log mode).</li>
+</ol>
+<p><strong>Pass criteria:</strong> The adapter type shown matches the config file. The baud rate shown matches the config file. No prompts for adapter selection are shown when <code>auto_connect</code> is set in the config.</p>
+<p><em>Parent links:</em> <a href="SOUP.html#SOUP016">SOUP016 JSON Configuration File</a></p>
+<table>
+<thead>
+<tr>
+<th>Attribute</th>
+<th>Value</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>method</td>
+<td>manual</td>
+</tr>
+<tr>
+<td>test-command</td>
+<td>rustycan --config config.kcan.json</td>
+</tr>
+</tbody>
+</table>
+<h2 id="SOUPTC020">2.11 KCAN Dongle Firmware Update via DFU <small>SOUPTC020</small></h2>
+<p><strong>Objective:</strong> Verify that a signed firmware image can be successfully flashed to a KCAN Dongle via USB DFU.</p>
+<p><strong>Preconditions:</strong> KCAN Dongle connected via USB. A valid Ed25519-signed firmware image (<code>.bin</code>) available.</p>
+<p><strong>Procedure:</strong></p>
+<ol>
+<li>Launch <code>rustycan --dfu-firmware &lt;signed.bin&gt;</code> or initiate DFU from the GUI/TUI DFU flow.</li>
+<li>Confirm the signature verification prompt.</li>
+<li>Observe the update progress.</li>
+<li>After completion, power-cycle the dongle and reconnect.</li>
+</ol>
+<p><strong>Pass criteria:</strong> The firmware update completes without error. The dongle boots the new firmware. An image with an invalid signature is rejected with an explicit error message before any programming begins.</p>
+<p><em>Parent links:</em> <a href="SOUP.html#SOUP017">SOUP017 KCAN Dongle Firmware Update</a></p>
+<table>
+<thead>
+<tr>
+<th>Attribute</th>
+<th>Value</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>method</td>
+<td>manual</td>
+</tr>
+</tbody>
+</table>
+<h2 id="SOUPTC021">2.12 Hardware Timestamp Resolution Verification <small>SOUPTC021</small></h2>
+<p><strong>Objective:</strong> Verify that KCAN Dongle timestamps in the JSONL log have 100 ns resolution.</p>
+<p><strong>Preconditions:</strong> RustyCAN connected to a KCAN Dongle. CAN bus with periodic frame traffic.</p>
+<p><strong>Procedure:</strong></p>
+<ol>
+<li>Capture at least 100 frames with the KCAN Dongle.</li>
+<li>Stop the session and open the JSONL log.</li>
+<li>Inspect the <code>timestamp</code> values of consecutive frames.</li>
+<li>Compute the difference between consecutive timestamps for two frames known to arrive close together.</li>
+</ol>
+<p><strong>Pass criteria:</strong> Timestamp values are expressed with sub-microsecond granularity (100 ns LSB). Differences between close frames resolve to values less than 1 µs where expected from the known frame interval.</p>
+<p><em>Parent links:</em> <a href="SOUP.html#SOUP018">SOUP018 Hardware Timestamp Resolution</a></p>
+<table>
+<thead>
+<tr>
+<th>Attribute</th>
+<th>Value</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>method</td>
+<td>manual</td>
+</tr>
+</tbody>
+</table>
+<h2 id="SOUPTC022">2.13 Multi-Node Logging Stability <small>SOUPTC022</small></h2>
+<p><strong>Objective:</strong> Verify that RustyCAN sustains continuous logging without frame loss on a network with seven or more active CANopen nodes.</p>
+<p><strong>Preconditions:</strong> Seven (7) or more CANopen nodes active on the bus, each transmitting heartbeats and at least one TPDO. Adapter: PEAK or KCAN.</p>
+<p><strong>Procedure:</strong></p>
+<ol>
+<li>Start a session with all seven nodes active.</li>
+<li>Allow the session to run for 60 seconds.</li>
+<li>Stop the session and open the JSONL log.</li>
+<li>Count heartbeat events per node and compare against expected heartbeat count (node heartbeat interval × 60 s).</li>
+</ol>
+<p><strong>Pass criteria:</strong> Heartbeat frame counts per node deviate by no more than 2% from the expected count. No corruption or truncated JSON lines are present in the log.</p>
+<p><em>Parent links:</em> <a href="SOUP.html#SOUP020">SOUP020 Multi-Node Logging Stability</a></p>
+<table>
+<thead>
+<tr>
+<th>Attribute</th>
+<th>Value</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>method</td>
+<td>manual</td>
+</tr>
+</tbody>
+</table>
+<h2 id="SOUPTC023">2.14 Cross-Platform CI Build and Test <small>SOUPTC023</small></h2>
+<p><strong>Objective:</strong> Verify that RustyCAN builds and all automated tests pass on all supported platforms.</p>
+<p><strong>Test suite:</strong> GitHub Actions CI matrix — <code>ci.yml</code> (build + <code>cargo test</code>) on:</p>
+<ul>
+<li>macOS (Apple Silicon)</li>
+<li>macOS (Intel x86-64)</li>
+<li>Windows 10 x86-64</li>
+<li>Linux x86-64 (Ubuntu)</li>
+</ul>
+<p><strong>Pass criteria:</strong> All CI matrix jobs complete with exit code 0. The <code>release.yml</code> workflow produces installable artifacts for all three platforms (DMG, NSIS installer, AppImage/deb).</p>
+<p><em>Parent links:</em> <a href="SOUP.html#SOUP021">SOUP021 Supported Operating Systems</a></p>
+<table>
+<thead>
+<tr>
+<th>Attribute</th>
+<th>Value</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>method</td>
+<td>automated</td>
+</tr>
+<tr>
+<td>test-command</td>
+<td>(see CI workflows .github/workflows/ci.yml and release.yml)</td>
+</tr>
+</tbody>
+</table>
+<h2 id="SOUPTC026">2.15 App Update: Version Tag Parsing <small>SOUPTC026</small></h2>
+<p><strong>Objective:</strong> Verify that <code>updater::parse_semver_tag</code> correctly parses Git version tags into <code>(major, minor, patch)</code> triples and rejects malformed input.</p>
+<p><strong>Test suite:</strong> <code>host/src/updater.rs</code> — unit tests in <code>updater::tests</code>:</p>
+<table>
+<thead>
+<tr>
+<th>Test name</th>
+<th>Input</th>
+<th>Expected output</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>parse_plain_tag</code></td>
+<td><code>"v1.2.3"</code></td>
+<td><code>Some((1, 2, 3))</code></td>
+</tr>
+<tr>
+<td><code>parse_describe_suffix</code></td>
+<td><code>"v0.2.0-5-gabcdef"</code></td>
+<td><code>Some((0, 2, 0))</code></td>
+</tr>
+<tr>
+<td><code>parse_zero_patch</code></td>
+<td><code>"v1.0.0"</code></td>
+<td><code>Some((1, 0, 0))</code></td>
+</tr>
+<tr>
+<td><code>parse_no_v_prefix</code></td>
+<td><code>"2.3.4"</code></td>
+<td><code>Some((2, 3, 4))</code></td>
+</tr>
+<tr>
+<td><code>parse_empty</code></td>
+<td><code>""</code></td>
+<td><code>None</code></td>
+</tr>
+<tr>
+<td><code>parse_garbage</code></td>
+<td><code>"not-a-version"</code></td>
+<td><code>None</code></td>
+</tr>
+<tr>
+<td><code>parse_too_few_parts</code></td>
+<td><code>"v1.2"</code></td>
+<td><code>None</code></td>
+</tr>
+</tbody>
+</table>
+<p><strong>Pass criteria:</strong> All seven tests pass with exit code 0.</p>
+<p><strong>Execution:</strong></p>
+<pre><code class="language-sh">cargo test -p rustycan -- updater::tests
+</code></pre>
+<p><em>Parent links:</em> <a href="SOUP.html#SOUP025">SOUP025 App Update Notification and Self-Update</a></p>
+<table>
+<thead>
+<tr>
+<th>Attribute</th>
+<th>Value</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>method</td>
+<td>automated</td>
+</tr>
+<tr>
+<td>test-command</td>
+<td>cargo test -p rustycan -- updater::tests</td>
+</tr>
+</tbody>
+</table>
+<h2 id="SOUPTC024">3.1 Code Review: Adapter Interface Implementation <small>SOUPTC024</small></h2>
+<p><strong>Objective:</strong> Confirm by code review that <code>host/src/adapters/peak.rs</code> and <code>host/src/adapters/kcan.rs</code> correctly implement the declared hardware interface requirements.</p>
+<p><strong>Reviewers:</strong> At least one reviewer with USB and CAN bus expertise.</p>
+<p><strong>Review checklist:</strong></p>
+<ul>
+<li><code>peak.rs</code>: Uses vendor PEAK driver API on macOS/Windows; uses SocketCAN <code>AF_CAN</code> socket on Linux. Correct error propagation on driver failure.</li>
+<li><code>kcan.rs</code>: Uses <code>nusb</code> exclusively (no <code>libusb</code> or <code>rusb</code> imports). Bulk endpoints OUT=0x01, IN=0x81. Call order: <code>open()</code> → <code>claim_interface(0)</code> → control/bulk I/O. GET_INFO retry logic present. Bulk OUT chunked to 64-byte MPS.</li>
+</ul>
+<p><strong>Pass criteria:</strong> Review completed and documented. No deviations from SOUP023 (nusb-only) or SOUP022 (driver mapping) found, or deviations are recorded as new anomaly items.</p>
+<p><em>Parent links:</em> <a href="SOUP.html#SOUP022">SOUP022 PEAK Adapter Hardware Interface</a>, <a href="SOUP.html#SOUP023">SOUP023 KCAN Adapter Hardware Interface</a></p>
+<table>
+<thead>
+<tr>
+<th>Attribute</th>
+<th>Value</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>method</td>
+<td>review</td>
+</tr>
+</tbody>
+</table>
+<h2 id="SOUPTC025">3.2 Code Review: EDS and DBC Format Compliance <small>SOUPTC025</small></h2>
+<p><strong>Objective:</strong> Confirm by code review that <code>host/src/eds/mod.rs</code> and <code>host/src/dbc/mod.rs</code> accept files in the declared formats and handle malformed input gracefully.</p>
+<p><strong>Reviewers:</strong> At least one reviewer familiar with CiA 306 (EDS) and Vector DBC format.</p>
+<p><strong>Review checklist:</strong></p>
+<ul>
+<li><code>eds/mod.rs</code>: Parses INI-style EDS sections; correctly handles <code>ObjectType</code>, <code>DataType</code>, <code>DefaultValue</code>, <code>SubNumber</code>; rejects or skips non-object sections without panic.</li>
+<li><code>dbc/mod.rs</code>: Parses <code>BO_</code> message blocks and <code>SG_</code> signal lines; correctly handles Intel and Motorola byte orders, signal bit positions, scaling, offset, and <code>VAL_</code> tables.</li>
+</ul>
+<p><strong>Pass criteria:</strong> Review completed and documented. Parser correctly handles all test fixtures. Any format limitations are recorded as new anomaly items or known limitations in SOUP024.</p>
+<p><em>Parent links:</em> <a href="SOUP.html#SOUP024">SOUP024 EDS and DBC File Formats</a></p>
+<table>
+<thead>
+<tr>
+<th>Attribute</th>
+<th>Value</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>method</td>
+<td>review</td>
+</tr>
+</tbody>
+</table>
+    </div>
+  </main>
+</div>
+<script src="../template/bootstrap.bundle.min.js"></script>
+</body>
+</html>
+

@@ -1,0 +1,718 @@
+<!DOCTYPE html>
+<html>
+<head><title>doc-SOUP</title>
+  <meta charset="utf-8" />
+  <meta http-equiv="content-type" content="text/html; charset=UTF-8" />
+  <link rel="stylesheet" href="../template/bootstrap.min.css" />
+  <link rel="stylesheet" href="../template/general.css" />
+  <link type="text/css" rel="stylesheet" href="../template/doorstop.css" />
+  <script src="../template/tex-mml-chtml.js" id="MathJax-script" async></script>
+  <script type="text/x-mathjax-config">
+  MathJax.Hub.Config({
+    tex2jax: {inlineMath: [["$","$"],["\\(","\\)"]]}
+  });
+  </script>
+</head>
+<body>
+
+  <header class="navbar navbar-expand-lg navbar-dark bd-navbar sticky-top text-bg-secondary">
+  <nav class="container-xxl bd-gutter flex-wrap flex-lg-nowrap" aria-label="Document attributes">
+    <div class="container-fluid">
+      <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbarNavDropdown" aria-controls="navbarNavDropdown" aria-expanded="false" aria-label="Toggle navigation">
+        <span class="navbar-toggler-icon"></span>
+      </button>
+      <div class="collapse navbar-collapse" id="navbarNavDropdown">
+        <ul class="navbar-nav">
+          <li class="nav-item">
+            <a class="nav-link" href="../index.html">Documents</a>
+          </li>
+          <li class="nav-item">
+            <a class="nav-link" href="../traceability.html">Traceability</a>
+          </li>
+          <li class="nav-item dropdown">
+            <a class="nav-link dropdown-toggle" href="#" role="button" data-bs-toggle="dropdown" aria-expanded="false">
+              Contents
+            </a>
+            <ul class="dropdown-menu">
+                <li><a class="dropdown-item" href="#toc">Table of Contents</a></li>
+                <ul>
+                <li><a class="dropdown-item" href="#SOUP001">1.0 RustyCAN is a native cross-platform application for monitoring, decoding, and controlling CANopen networks on CAN bus.</a></li>
+                <ul>
+                <li><a class="dropdown-item" href="#SOUP002">2.1 PEAK PCAN-USB Adapter Support</a></li>
+                <li><a class="dropdown-item" href="#SOUP003">2.2 KCAN Dongle Adapter Support</a></li>
+                <li><a class="dropdown-item" href="#SOUP004">2.3 Adapter Disconnection Detection</a></li>
+                <li><a class="dropdown-item" href="#SOUP005">3.1 CAN Frame Reception</a></li>
+                <li><a class="dropdown-item" href="#SOUP006">3.2 CAN Frame Transmission</a></li>
+                <li><a class="dropdown-item" href="#SOUP007">4.1 CANopen NMT Node State Monitoring</a></li>
+                <li><a class="dropdown-item" href="#SOUP008">4.2 CANopen NMT Master Commands</a></li>
+                <li><a class="dropdown-item" href="#SOUP009">4.3 CANopen PDO Decoding</a></li>
+                <li><a class="dropdown-item" href="#SOUP010">4.4 CANopen SDO Transfer</a></li>
+                <li><a class="dropdown-item" href="#SOUP011">5.1 DBC Signal Decoding</a></li>
+                <li><a class="dropdown-item" href="#SOUP012">6.1 JSONL Event Logging</a></li>
+                <li><a class="dropdown-item" href="#SOUP013">7.1 Native Desktop GUI</a></li>
+                <li><a class="dropdown-item" href="#SOUP014">7.2 Terminal User Interface (TUI) Mode</a></li>
+                <li><a class="dropdown-item" href="#SOUP015">7.3 Live HTTP/SSE Dashboard</a></li>
+                <li><a class="dropdown-item" href="#SOUP016">8.1 JSON Configuration File</a></li>
+                <li><a class="dropdown-item" href="#SOUP017">9.1 KCAN Dongle Firmware Update</a></li>
+                <li><a class="dropdown-item" href="#SOUP018">10.1 Hardware Timestamp Resolution</a></li>
+                <li><a class="dropdown-item" href="#SOUP019">10.2 Configurable CAN Baud Rate</a></li>
+                <li><a class="dropdown-item" href="#SOUP020">10.3 Multi-Node Logging Stability</a></li>
+                <li><a class="dropdown-item" href="#SOUP021">11.1 Supported Operating Systems</a></li>
+                <li><a class="dropdown-item" href="#SOUP022">11.2 PEAK Adapter Hardware Interface</a></li>
+                <li><a class="dropdown-item" href="#SOUP023">11.3 KCAN Adapter Hardware Interface</a></li>
+                <li><a class="dropdown-item" href="#SOUP024">11.4 EDS and DBC File Formats</a></li>
+                <li><a class="dropdown-item" href="#SOUP025">12.1 App Update Notification and Self-Update</a></li>
+            </ul>
+          </li>
+        </ul>
+      </div>
+    </div>
+    <div class="container-fluid">
+      <div class="row">
+        <div class="col-2">
+          <div class="bd-lead text-nowrap">
+            <!-- Insert logotype. -->
+            <img src="../template/logo-black-white.png" alt="Doorstop" height="128" class="d-inline-block align-text-top">
+          </div>
+        </div>
+        <div class="col-6 align-self-center">
+          <div class="bd-lead text-nowrap text-center">
+            <span class="text-monospace"><strong>doc-SOUP</strong></span>
+          </div>
+        </div>
+        <div class="col-2">
+          <div class="bd-lead text-nowrap">
+            <span class="text-muted">Ref</span>
+            <p><span class="text-monospace">-</span></p>
+          </div>
+        </div>
+        <div class="col-2">
+          <div class="bd-lead text-nowrap">
+            <span class="text-muted">By</span>
+            <p><span class="text-monospace">-</span></p>
+            <span class="text-muted">Issue</span>
+            <p><span class="text-monospace">-</span></p>
+          </div>
+        </div>
+      </div>
+    </div>
+    </div>
+  </nav>
+</header>
+<div class="container-xxl bd-gutter mt-3 my-md-4 bd-layout">
+  <main class="bd-main order-1">
+    <div class="bd-intro ps-lg-4">
+      <H1><p>RustyCAN — Software of Unknown Provenance (SOUP)</p></H1>
+      <h1 id="SOUP001">1.0 SOUP Identification</h1>
+<p>RustyCAN is a native cross-platform application for monitoring, decoding, and controlling CANopen networks on CAN bus.</p>
+<table>
+<thead>
+<tr>
+<th>Attribute</th>
+<th>Value</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Name</strong></td>
+<td>RustyCAN</td>
+</tr>
+<tr>
+<td><strong>Manufacturer</strong></td>
+<td>Kodezine</td>
+</tr>
+<tr>
+<td><strong>Version</strong></td>
+<td>v0.2.6</td>
+</tr>
+<tr>
+<td><strong>License</strong></td>
+<td>MIT</td>
+</tr>
+<tr>
+<td><strong>Repository</strong></td>
+<td>https://github.com/kodezine/RustyCAN</td>
+</tr>
+<tr>
+<td><strong>Language</strong></td>
+<td>Rust (2021 edition)</td>
+</tr>
+<tr>
+<td><strong>Supported Platforms</strong></td>
+<td>macOS 12+ (Apple Silicon, Intel x86-64), Windows 10+ (x86-64), Linux kernel ≥ 5.4 (x86-64)</td>
+</tr>
+<tr>
+<td><strong>SOUP Role</strong></td>
+<td>CAN bus monitor and diagnostic tool used during manufacturing or testing of a medical device</td>
+</tr>
+<tr>
+<td><strong>IEC 62304 Clause</strong></td>
+<td>8.1</td>
+</tr>
+</tbody>
+</table>
+<table>
+<thead>
+<tr>
+<th>Attribute</th>
+<th>Value</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>type</td>
+<td>identification</td>
+</tr>
+<tr>
+<td>iec62304-clause</td>
+<td>8.1.1</td>
+</tr>
+</tbody>
+</table>
+<h2 id="SOUP002">2.1 PEAK PCAN-USB Adapter Support <small>SOUP002</small></h2>
+<p>RustyCAN <strong>shall</strong> support connection to a PEAK PCAN-USB adapter for CAN bus access.</p>
+<p>On macOS and Windows the vendor-provided PEAK driver is used. On Linux, the SocketCAN kernel interface (<code>pcan</code> module) is used instead.</p>
+<p><em>Child links:</em> <a href="SOUPANOM.html#SOUPANOM004">SOUPANOM004 PEAK Adapter Not Supported on Linux via Vendor Driver</a>, <a href="SOUPTC.html#SOUPTC010">SOUPTC010 PEAK PCAN-USB Adapter Connection</a></p>
+<table>
+<thead>
+<tr>
+<th>Attribute</th>
+<th>Value</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>type</td>
+<td>functional</td>
+</tr>
+<tr>
+<td>iec62304-clause</td>
+<td>8.1.2</td>
+</tr>
+</tbody>
+</table>
+<h2 id="SOUP003">2.2 KCAN Dongle Adapter Support <small>SOUP003</small></h2>
+<p>RustyCAN <strong>shall</strong> support connection to a KCAN Dongle (STM32H753ZI-based custom hardware) via USB bulk transfer using the <code>nusb</code> pure-Rust USB library.</p>
+<p>The dongle exposes two CAN channels (FDCAN1 on channel 0, FDCAN2 on channel 1) using the KCAN binary protocol over USB bulk endpoints (OUT: 0x01, IN: 0x81).</p>
+<p><em>Child links:</em> <a href="SOUPANOM.html#SOUPANOM001">SOUPANOM001 macOS: set_configuration() Causes kIOReturnAborted</a>, <a href="SOUPANOM.html#SOUPANOM002">SOUPANOM002 macOS: GET_INFO Returns Cancelled on First Attempt</a>, <a href="SOUPANOM.html#SOUPANOM003">SOUPANOM003 OTG FS: Bulk OUT Writes &gt;64 Bytes Silently Truncated</a>, <a href="SOUPANOM.html#SOUPANOM006">SOUPANOM006 KCAN Bulk IN Timeout Must Exceed Frame Interval</a>, <a href="SOUPTC.html#SOUPTC011">SOUPTC011 KCAN Dongle Connection</a></p>
+<table>
+<thead>
+<tr>
+<th>Attribute</th>
+<th>Value</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>type</td>
+<td>functional</td>
+</tr>
+<tr>
+<td>iec62304-clause</td>
+<td>8.1.2</td>
+</tr>
+</tbody>
+</table>
+<h2 id="SOUP004">2.3 Adapter Disconnection Detection <small>SOUP004</small></h2>
+<p>RustyCAN <strong>shall</strong> detect when a connected adapter is removed or becomes unresponsive during an active session and <strong>shall</strong> surface an <code>AdapterDisconnected</code> event to the user interface.</p>
+<p><em>Child links:</em> <a href="SOUPTC.html#SOUPTC012">SOUPTC012 Adapter Disconnection Detection</a></p>
+<table>
+<thead>
+<tr>
+<th>Attribute</th>
+<th>Value</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>type</td>
+<td>functional</td>
+</tr>
+<tr>
+<td>iec62304-clause</td>
+<td>8.1.2</td>
+</tr>
+</tbody>
+</table>
+<h2 id="SOUP005">3.1 CAN Frame Reception <small>SOUP005</small></h2>
+<p>RustyCAN <strong>shall</strong> receive CAN 2.0A (11-bit ID) and CAN 2.0B (29-bit ID) frames from the connected adapter and make them available for decoding and logging.</p>
+<p><em>Child links:</em> <a href="SOUPTC.html#SOUPTC007">SOUPTC007 CAN Frame COB-ID Classification</a></p>
+<table>
+<thead>
+<tr>
+<th>Attribute</th>
+<th>Value</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>type</td>
+<td>functional</td>
+</tr>
+<tr>
+<td>iec62304-clause</td>
+<td>8.1.2</td>
+</tr>
+</tbody>
+</table>
+<h2 id="SOUP006">3.2 CAN Frame Transmission <small>SOUP006</small></h2>
+<p>RustyCAN <strong>shall</strong> transmit CAN frames (including NMT commands and SDO requests) to the bus via the connected adapter.</p>
+<table>
+<thead>
+<tr>
+<th>Attribute</th>
+<th>Value</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>type</td>
+<td>functional</td>
+</tr>
+<tr>
+<td>iec62304-clause</td>
+<td>8.1.2</td>
+</tr>
+</tbody>
+</table>
+<h2 id="SOUP007">4.1 CANopen NMT Node State Monitoring <small>SOUP007</small></h2>
+<p>RustyCAN <strong>shall</strong> monitor the NMT (Network Management) state of CANopen nodes on the bus by processing heartbeat messages (COB-ID 0x700 + node-ID) as defined in CiA 301, and <strong>shall</strong> track the last-seen state and inter-event period for each node.</p>
+<p><em>Child links:</em> <a href="SOUPTC.html#SOUPTC001">SOUPTC001 NMT Heartbeat Decode</a></p>
+<table>
+<thead>
+<tr>
+<th>Attribute</th>
+<th>Value</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>type</td>
+<td>functional</td>
+</tr>
+<tr>
+<td>iec62304-clause</td>
+<td>8.1.2</td>
+</tr>
+</tbody>
+</table>
+<h2 id="SOUP008">4.2 CANopen NMT Master Commands <small>SOUP008</small></h2>
+<p>RustyCAN <strong>shall</strong> issue NMT master commands (Start Remote Node, Stop Remote Node, Enter Pre-Operational, Reset Node, Reset Communication) to individual CANopen nodes or as a broadcast to all nodes (node-ID 0), as defined in CiA 301.</p>
+<p><em>Child links:</em> <a href="SOUPTC.html#SOUPTC002">SOUPTC002 NMT Master Command Encoding</a>, <a href="SOUPTC.html#SOUPTC013">SOUPTC013 NMT Master Command Execution</a></p>
+<table>
+<thead>
+<tr>
+<th>Attribute</th>
+<th>Value</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>type</td>
+<td>functional</td>
+</tr>
+<tr>
+<td>iec62304-clause</td>
+<td>8.1.2</td>
+</tr>
+</tbody>
+</table>
+<h2 id="SOUP009">4.3 CANopen PDO Decoding <small>SOUP009</small></h2>
+<p>RustyCAN <strong>shall</strong> decode Process Data Object (PDO) frames received from the bus using signal mappings defined in EDS (Electronic Data Sheet) files, and <strong>shall</strong> display live signal values with timestamps and inter-event periods.</p>
+<p><em>Child links:</em> <a href="SOUPTC.html#SOUPTC003">SOUPTC003 PDO Decoding from EDS</a>, <a href="SOUPTC.html#SOUPTC004">SOUPTC004 EDS File Parsing (Integration)</a></p>
+<table>
+<thead>
+<tr>
+<th>Attribute</th>
+<th>Value</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>type</td>
+<td>functional</td>
+</tr>
+<tr>
+<td>iec62304-clause</td>
+<td>8.1.2</td>
+</tr>
+</tbody>
+</table>
+<h2 id="SOUP010">4.4 CANopen SDO Transfer <small>SOUP010</small></h2>
+<p>RustyCAN <strong>shall</strong> execute SDO (Service Data Object) read (upload) and write (download) operations on CANopen nodes, supporting expedited transfer, segmented transfer, and block transfer modes as defined in CiA 301.</p>
+<p><em>Child links:</em> <a href="SOUPTC.html#SOUPTC006">SOUPTC006 SDO Expedited and Segmented Transfer</a>, <a href="SOUPTC.html#SOUPTC014">SOUPTC014 SDO Read and Write on Live Node</a></p>
+<table>
+<thead>
+<tr>
+<th>Attribute</th>
+<th>Value</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>type</td>
+<td>functional</td>
+</tr>
+<tr>
+<td>iec62304-clause</td>
+<td>8.1.2</td>
+</tr>
+</tbody>
+</table>
+<h2 id="SOUP011">5.1 DBC Signal Decoding <small>SOUP011</small></h2>
+<p>RustyCAN <strong>shall</strong> decode CAN signal values from DBC message definitions, supporting Intel (little-endian) and Motorola (big-endian) byte orders, scaling factors, offsets, and value description tables (VAL_).</p>
+<p><em>Child links:</em> <a href="SOUPTC.html#SOUPTC008">SOUPTC008 DBC Message and Signal Decoding (Integration)</a>, <a href="SOUPTC.html#SOUPTC009">SOUPTC009 DBC Bit Extraction Unit Tests</a></p>
+<table>
+<thead>
+<tr>
+<th>Attribute</th>
+<th>Value</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>type</td>
+<td>functional</td>
+</tr>
+<tr>
+<td>iec62304-clause</td>
+<td>8.1.2</td>
+</tr>
+</tbody>
+</table>
+<h2 id="SOUP012">6.1 JSONL Event Logging <small>SOUP012</small></h2>
+<p>RustyCAN <strong>shall</strong> record all CAN events — including raw frames, NMT state changes, PDO signal values, and SDO transactions — to a timestamped newline-delimited JSON (JSONL) file for the duration of each session.</p>
+<p><em>Child links:</em> <a href="SOUPTC.html#SOUPTC015">SOUPTC015 JSONL Event Log Integrity</a></p>
+<table>
+<thead>
+<tr>
+<th>Attribute</th>
+<th>Value</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>type</td>
+<td>functional</td>
+</tr>
+<tr>
+<td>iec62304-clause</td>
+<td>8.1.2</td>
+</tr>
+</tbody>
+</table>
+<h2 id="SOUP013">7.1 Native Desktop GUI <small>SOUP013</small></h2>
+<p>RustyCAN <strong>shall</strong> provide a native desktop graphical user interface (implemented with egui/eframe) presenting a Connect screen for adapter selection and a Monitor screen displaying live NMT states, PDO signals, and SDO transactions.</p>
+<p><em>Child links:</em> <a href="SOUPTC.html#SOUPTC016">SOUPTC016 Native Desktop GUI Launch</a></p>
+<table>
+<thead>
+<tr>
+<th>Attribute</th>
+<th>Value</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>type</td>
+<td>functional</td>
+</tr>
+<tr>
+<td>iec62304-clause</td>
+<td>8.1.2</td>
+</tr>
+</tbody>
+</table>
+<h2 id="SOUP014">7.2 Terminal User Interface (TUI) Mode <small>SOUP014</small></h2>
+<p>RustyCAN <strong>shall</strong> provide a full-screen terminal user interface mode, activated via the <code>--tui</code> command-line flag, that presents the same monitoring and command capabilities as the GUI without requiring a graphical display.</p>
+<p><em>Child links:</em> <a href="SOUPTC.html#SOUPTC017">SOUPTC017 TUI Mode Launch</a></p>
+<table>
+<thead>
+<tr>
+<th>Attribute</th>
+<th>Value</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>type</td>
+<td>functional</td>
+</tr>
+<tr>
+<td>iec62304-clause</td>
+<td>8.1.2</td>
+</tr>
+</tbody>
+</table>
+<h2 id="SOUP015">7.3 Live HTTP/SSE Dashboard <small>SOUP015</small></h2>
+<p>RustyCAN <strong>shall</strong> expose a live browser-accessible dashboard at <code>http://127.0.0.1:7878/</code> that streams CAN events via Server-Sent Events (SSE) and displays a live NMT node grid and colour-coded event log.</p>
+<p><em>Child links:</em> <a href="SOUPTC.html#SOUPTC018">SOUPTC018 Live HTTP/SSE Dashboard</a></p>
+<table>
+<thead>
+<tr>
+<th>Attribute</th>
+<th>Value</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>type</td>
+<td>functional</td>
+</tr>
+<tr>
+<td>iec62304-clause</td>
+<td>8.1.2</td>
+</tr>
+</tbody>
+</table>
+<h2 id="SOUP016">8.1 JSON Configuration File <small>SOUP016</small></h2>
+<p>RustyCAN <strong>shall</strong> accept a JSON configuration file supplied via the <code>--config</code> command-line flag, specifying at minimum the adapter kind, port or serial identifier, CAN baud rate, EDS file paths, and optional auto-connect behaviour.</p>
+<p><em>Child links:</em> <a href="SOUPTC.html#SOUPTC019">SOUPTC019 JSON Configuration File Loading</a></p>
+<table>
+<thead>
+<tr>
+<th>Attribute</th>
+<th>Value</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>type</td>
+<td>functional</td>
+</tr>
+<tr>
+<td>iec62304-clause</td>
+<td>8.1.2</td>
+</tr>
+</tbody>
+</table>
+<h2 id="SOUP017">9.1 KCAN Dongle Firmware Update <small>SOUP017</small></h2>
+<p>RustyCAN <strong>shall</strong> perform firmware updates of the KCAN Dongle via USB DFU using the KCAN binary protocol, and <strong>shall</strong> verify the cryptographic signature (Ed25519) of the firmware image before programming it to the device, rejecting images with an invalid signature.</p>
+<p><em>Child links:</em> <a href="SOUPANOM.html#SOUPANOM005">SOUPANOM005 bbd Firmware Tool Excluded from Packaged Releases</a>, <a href="SOUPTC.html#SOUPTC020">SOUPTC020 KCAN Dongle Firmware Update via DFU</a></p>
+<table>
+<thead>
+<tr>
+<th>Attribute</th>
+<th>Value</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>type</td>
+<td>functional</td>
+</tr>
+<tr>
+<td>iec62304-clause</td>
+<td>8.1.2</td>
+</tr>
+</tbody>
+</table>
+<h2 id="SOUP018">10.1 Hardware Timestamp Resolution <small>SOUP018</small></h2>
+<p>When used with a KCAN Dongle, RustyCAN <strong>shall</strong> record CAN frame timestamps with a resolution of 100 nanoseconds, latched at frame Start-of-Frame (SOF) by the FDCAN RXTS hardware counter on the STM32H753ZI.</p>
+<p><em>Child links:</em> <a href="SOUPTC.html#SOUPTC021">SOUPTC021 Hardware Timestamp Resolution Verification</a></p>
+<table>
+<thead>
+<tr>
+<th>Attribute</th>
+<th>Value</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>type</td>
+<td>performance</td>
+</tr>
+<tr>
+<td>iec62304-clause</td>
+<td>8.1.2</td>
+</tr>
+</tbody>
+</table>
+<h2 id="SOUP019">10.2 Configurable CAN Baud Rate <small>SOUP019</small></h2>
+<p>RustyCAN <strong>shall</strong> support operator-configurable CAN baud rates. For PEAK PCAN-USB adapters the supported range is up to 1 Mbit/s. For KCAN Dongles the supported baud rates are those defined in the KCAN firmware bit-timing configuration.</p>
+<table>
+<thead>
+<tr>
+<th>Attribute</th>
+<th>Value</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>type</td>
+<td>performance</td>
+</tr>
+<tr>
+<td>iec62304-clause</td>
+<td>8.1.2</td>
+</tr>
+</tbody>
+</table>
+<h2 id="SOUP020">10.3 Multi-Node Logging Stability <small>SOUP020</small></h2>
+<p>RustyCAN <strong>shall</strong> sustain continuous JSONL event logging without frame loss on networks with seven (7) or more simultaneously active CANopen nodes transmitting heartbeat and PDO frames.</p>
+<p><em>Child links:</em> <a href="SOUPTC.html#SOUPTC022">SOUPTC022 Multi-Node Logging Stability</a></p>
+<table>
+<thead>
+<tr>
+<th>Attribute</th>
+<th>Value</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>type</td>
+<td>performance</td>
+</tr>
+<tr>
+<td>iec62304-clause</td>
+<td>8.1.2</td>
+</tr>
+</tbody>
+</table>
+<h2 id="SOUP021">11.1 Supported Operating Systems <small>SOUP021</small></h2>
+<p>RustyCAN <strong>shall</strong> operate on the following platforms without modification:</p>
+<ul>
+<li>macOS 12 (Monterey) and later, on Apple Silicon (arm64) and Intel (x86-64)</li>
+<li>Windows 10 (64-bit) and later (x86-64)</li>
+<li>Linux with kernel ≥ 5.4 (x86-64)</li>
+</ul>
+<p><em>Child links:</em> <a href="SOUPTC.html#SOUPTC023">SOUPTC023 Cross-Platform CI Build and Test</a></p>
+<table>
+<thead>
+<tr>
+<th>Attribute</th>
+<th>Value</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>type</td>
+<td>interface</td>
+</tr>
+<tr>
+<td>iec62304-clause</td>
+<td>8.1.2</td>
+</tr>
+</tbody>
+</table>
+<h2 id="SOUP022">11.2 PEAK Adapter Hardware Interface <small>SOUP022</small></h2>
+<p>RustyCAN <strong>shall</strong> interface with PEAK PCAN-USB adapters via the vendor-provided PEAK driver on macOS and Windows, and via the SocketCAN kernel interface (using the <code>pcan</code> kernel module) on Linux.</p>
+<p><em>Child links:</em> <a href="SOUPTC.html#SOUPTC024">SOUPTC024 Code Review: Adapter Interface Implementation</a></p>
+<table>
+<thead>
+<tr>
+<th>Attribute</th>
+<th>Value</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>type</td>
+<td>interface</td>
+</tr>
+<tr>
+<td>iec62304-clause</td>
+<td>8.1.2</td>
+</tr>
+</tbody>
+</table>
+<h2 id="SOUP023">11.3 KCAN Adapter Hardware Interface <small>SOUP023</small></h2>
+<p>RustyCAN <strong>shall</strong> interface with the KCAN Dongle exclusively via the <code>nusb</code> pure-Rust USB library (no dependency on libusb or system USB frameworks), communicating over USB bulk endpoints OUT=0x01 and IN=0x81.</p>
+<p><em>Child links:</em> <a href="SOUPANOM.html#SOUPANOM001">SOUPANOM001 macOS: set_configuration() Causes kIOReturnAborted</a>, <a href="SOUPTC.html#SOUPTC024">SOUPTC024 Code Review: Adapter Interface Implementation</a></p>
+<table>
+<thead>
+<tr>
+<th>Attribute</th>
+<th>Value</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>type</td>
+<td>interface</td>
+</tr>
+<tr>
+<td>iec62304-clause</td>
+<td>8.1.2</td>
+</tr>
+</tbody>
+</table>
+<h2 id="SOUP024">11.4 EDS and DBC File Formats <small>SOUP024</small></h2>
+<p>RustyCAN <strong>shall</strong> accept CANopen Electronic Data Sheet (EDS) files conforming to CiA 306 for PDO signal mapping and object dictionary lookup, and DBC files in Vector DBC format for automotive CAN signal decoding.</p>
+<p><em>Child links:</em> <a href="SOUPTC.html#SOUPTC005">SOUPTC005 EDS Parser Unit Tests</a>, <a href="SOUPTC.html#SOUPTC025">SOUPTC025 Code Review: EDS and DBC Format Compliance</a></p>
+<table>
+<thead>
+<tr>
+<th>Attribute</th>
+<th>Value</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>type</td>
+<td>interface</td>
+</tr>
+<tr>
+<td>iec62304-clause</td>
+<td>8.1.2</td>
+</tr>
+</tbody>
+</table>
+<h2 id="SOUP025">12.1 App Update Notification and Self-Update <small>SOUP025</small></h2>
+<p>RustyCAN <strong>shall</strong> check for a newer released version at startup by querying the GitHub Releases API (<code>GET /repos/kodezine/RustyCAN/releases/latest</code>).</p>
+<p>If a newer version is detected:</p>
+<ul>
+<li>The user <strong>shall</strong> be notified in all modes (GUI, TUI, log-stream).</li>
+<li>The user <strong>shall</strong> be offered the option to <strong>update now</strong> or <strong>defer</strong>.</li>
+<li><strong>Defer</strong> dismisses the notification for the current session only; the notification reappears on the next launch.</li>
+</ul>
+<p>Update behaviour by platform:</p>
+<table>
+<thead>
+<tr>
+<th>Platform</th>
+<th>Behaviour</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>macOS Apple Silicon (aarch64)</td>
+<td>Downloads the release DMG, mounts it, replaces the running <code>.app</code> bundle in-place, and relaunches the new version automatically.</td>
+</tr>
+<tr>
+<td>Windows (x86-64)</td>
+<td>Presents a labelled button and hyperlink to the GitHub release page for the available version.</td>
+</tr>
+<tr>
+<td>Linux (x86-64)</td>
+<td>Presents a labelled button and hyperlink to the GitHub release page for the available version.</td>
+</tr>
+</tbody>
+</table>
+<p>The version check <strong>shall</strong> be non-blocking; any failure to reach the GitHub API (network unavailable, rate-limit, parse error) <strong>shall</strong> be silently ignored and <strong>shall not</strong> prevent normal operation.</p>
+<p>The version comparison <strong>shall</strong> parse Git tags of the form <code>vMAJOR.MINOR.PATCH</code> (with an optional <code>-N-gHASH</code> describe suffix) and compare them against the build-time version embedded at compile time.</p>
+<p><em>Child links:</em> <a href="SOUPTC.html#SOUPTC026">SOUPTC026 App Update: Version Tag Parsing</a></p>
+<table>
+<thead>
+<tr>
+<th>Attribute</th>
+<th>Value</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>type</td>
+<td>functional</td>
+</tr>
+<tr>
+<td>iec62304-clause</td>
+<td>8.1.2</td>
+</tr>
+</tbody>
+</table>
+    </div>
+  </main>
+</div>
+<script src="../template/bootstrap.bundle.min.js"></script>
+</body>
+</html>
+
