@@ -46,5 +46,5 @@
 │[14:42:42.131] PDO  node 32  cob 0x201  Status Word = 43, Digital Inputs = 0, Current Segment Index = 0                                                                                               │
 │[14:42:42.252] PDO  node 32  cob 0x201  Status Word = 43, Digital Inputs = 0, Current Segment Index = 0                                                                                               │
 └──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
- 6 fps  Bus 0.3%  32 frames  log: /home/s/code/RustyCAN/phase5-linux_20260627164228.jsonl
+ 6 fps  Bus 0.3%  32 frames  log: ~/code/RustyCAN/phase5-linux_20260627164228.jsonl
  [n] NMT  [s] SDO read  [w] SDO write  [L] log  [q] quit

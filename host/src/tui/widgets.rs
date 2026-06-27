@@ -19,6 +19,43 @@ use crate::canopen::nmt::NmtState;
 
 use super::TuiMode;
 
+/// Word-wrap `text` into chunks: the first chunk fills up to `first_w`
+/// characters, each continuation up to `cont_w`.
+///
+/// The wrap is UTF-8 safe (it never splits inside a codepoint) and always
+/// makes forward progress — even when a width of `0` is requested it consumes
+/// at least one character per line, so it can never loop forever on tiny
+/// terminal widths.  Breaks prefer the last space within the window.
+fn wrap_words(text: &str, first_w: usize, cont_w: usize) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    let mut rest = text;
+    let mut first = true;
+    while !rest.is_empty() {
+        // Guarantee progress: never allow a zero-width window.
+        let width = if first { first_w } else { cont_w }.max(1);
+
+        // Byte index that is `width` characters into `rest` (codepoint-safe).
+        let end = rest
+            .char_indices()
+            .nth(width)
+            .map(|(idx, _)| idx)
+            .unwrap_or(rest.len());
+
+        // Prefer breaking at the last space within the window, but only if it
+        // makes progress (a space at index 0 would not).
+        let split = if end < rest.len() {
+            rest[..end].rfind(' ').filter(|&p| p > 0).unwrap_or(end)
+        } else {
+            end
+        };
+
+        out.push(rest[..split].to_string());
+        rest = rest[split..].trim_start_matches(' ');
+        first = false;
+    }
+    out
+}
+
 // ─── NMT panel ───────────────────────────────────────────────────────────────
 
 /// Render the NMT node status table.
@@ -141,31 +178,17 @@ pub fn render_pdo_panel(f: &mut Frame, state: &AppState, area: Rect) {
             if text.len() <= inner_w {
                 ListItem::new(Line::from(text))
             } else {
-                let mut lines: Vec<Line> = Vec::new();
-                let mut remaining = text.as_str();
-                let mut first = true;
-                while !remaining.is_empty() {
-                    let width = if first {
-                        inner_w
-                    } else {
-                        inner_w.saturating_sub(2)
-                    };
-                    let (chunk, rest) = if remaining.len() <= width {
-                        (remaining, "")
-                    } else {
-                        let split = remaining[..width]
-                            .rfind(' ')
-                            .unwrap_or(width.min(remaining.len()));
-                        (&remaining[..split], remaining[split..].trim_start())
-                    };
-                    if first {
-                        lines.push(Line::from(chunk.to_string()));
-                        first = false;
-                    } else {
-                        lines.push(Line::from(format!("  {chunk}")));
-                    }
-                    remaining = rest;
-                }
+                let lines: Vec<Line> = wrap_words(&text, inner_w, inner_w.saturating_sub(2))
+                    .into_iter()
+                    .enumerate()
+                    .map(|(i, chunk)| {
+                        if i == 0 {
+                            Line::from(chunk)
+                        } else {
+                            Line::from(format!("  {chunk}"))
+                        }
+                    })
+                    .collect();
                 ListItem::new(Text::from(lines))
             }
         })
@@ -233,25 +256,17 @@ pub fn render_sdo_log(f: &mut Frame, state: &AppState, area: Rect) {
                 const INDENT: &str = "  ";
                 let cont_w = inner_w.saturating_sub(INDENT.len());
                 let style = Style::default().fg(color);
-                let mut lines: Vec<Line> = Vec::new();
-                let mut s = text.as_str();
-
-                // First line — full inner width.
-                let cut = s[..inner_w].rfind(' ').unwrap_or(inner_w);
-                lines.push(Line::styled(s[..cut].to_string(), style));
-                s = s[cut..].trim_start_matches(' ');
-
-                // Continuation lines — indented.
-                while !s.is_empty() {
-                    if s.len() <= cont_w {
-                        lines.push(Line::styled(format!("{INDENT}{s}"), style));
-                        break;
-                    }
-                    let cut = s[..cont_w].rfind(' ').unwrap_or(cont_w);
-                    lines.push(Line::styled(format!("{INDENT}{}", &s[..cut]), style));
-                    s = s[cut..].trim_start_matches(' ');
-                }
-
+                let lines: Vec<Line> = wrap_words(&text, inner_w, cont_w)
+                    .into_iter()
+                    .enumerate()
+                    .map(|(i, chunk)| {
+                        if i == 0 {
+                            Line::styled(chunk, style)
+                        } else {
+                            Line::styled(format!("{INDENT}{chunk}"), style)
+                        }
+                    })
+                    .collect();
                 ListItem::new(Text::from(lines))
             } else {
                 ListItem::new(text).style(Style::default().fg(color))
@@ -470,6 +485,34 @@ mod tests {
     use crate::canopen::pdo::{PdoRawValue, PdoValue};
     use ratatui::backend::TestBackend;
     use ratatui::Terminal;
+
+    #[test]
+    fn wrap_words_zero_width_makes_progress() {
+        // A width of 0 must still consume one char per line (no infinite loop).
+        let out = wrap_words("abc", 0, 0);
+        assert_eq!(out, vec!["a", "b", "c"]);
+    }
+
+    #[test]
+    fn wrap_words_non_ascii_respects_codepoints() {
+        // Multi-byte chars must never be split mid-codepoint.
+        let out = wrap_words("héllo wörld", 5, 5);
+        assert!(out
+            .iter()
+            .all(|s| std::str::from_utf8(s.as_bytes()).is_ok()));
+        assert_eq!(out.concat().replace(' ', ""), "héllowörld");
+    }
+
+    #[test]
+    fn wrap_words_breaks_on_spaces() {
+        let out = wrap_words("alpha beta gamma", 8, 8);
+        assert_eq!(out, vec!["alpha", "beta", "gamma"]);
+    }
+
+    #[test]
+    fn wrap_words_short_text_single_chunk() {
+        assert_eq!(wrap_words("short", 80, 78), vec!["short"]);
+    }
 
     /// Render `draw` into a `w×h` TestBackend and return the flat text content.
     fn buf_text<F: FnOnce(&mut Frame)>(w: u16, h: u16, draw: F) -> String {

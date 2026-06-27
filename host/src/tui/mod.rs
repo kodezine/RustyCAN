@@ -754,8 +754,11 @@ fn drain_events_with_log(
                                 }
                             } else {
                                 // Sub N: fire N+1 if still within range.
-                                let next = ra.next_sub + 1;
-                                if next <= ra.max_sub.unwrap_or(0) {
+                                // Compare before incrementing so sub-index 255
+                                // (a valid u8) cannot overflow `next_sub + 1`.
+                                let max_sub = ra.max_sub.unwrap_or(0);
+                                if ra.next_sub < max_sub {
+                                    let next = ra.next_sub + 1;
                                     ra.next_sub = next;
                                     let _ = cmd_tx.send(CanCommand::SdoRead {
                                         node_id: ra.node_id,

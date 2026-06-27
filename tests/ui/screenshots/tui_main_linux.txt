@@ -46,5 +46,5 @@
 │[14:39:24.021] NMT  node 32  → PRE-OPERATIONAL                                                                                                                                                        │
 │                                                                                                                                                                                                      │
 └──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
- 1 fps  Bus 0.1%  9 frames  log: /home/s/code/RustyCAN/phase5-linux_20260627163915.jsonl
+ 1 fps  Bus 0.1%  9 frames  log: ~/code/RustyCAN/phase5-linux_20260627163915.jsonl
  [n] NMT  [s] SDO read  [w] SDO write  [L] log  [q] quit
