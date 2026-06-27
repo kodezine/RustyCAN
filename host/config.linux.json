@@ -8,6 +8,11 @@
   "listen_only": false,
   "text_log": true,
   "kcan_serial": "",
-  "nodes": [],
+  "nodes": [
+    {
+      "id_str": "32",
+      "eds_path": "/home/s/code/pst7x-distributOR-board-mk3/ao/canopen/eds/ODEditorExports/distributor_board_mk3.eds"
+    }
+  ],
   "dbc_files": []
 }

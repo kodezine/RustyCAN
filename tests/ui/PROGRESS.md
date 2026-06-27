@@ -11,14 +11,17 @@ Update checkboxes and push to share status with other sessions/systems.
 - Phase 2 — TUI automated tests (ratatui TestBackend) ✅ macOS ✅ Fedora ✅ Windows
 - Phase 3 — Web automated tests (Playwright + mock SSE) ✅ macOS ✅ Fedora ✅ Windows
 - Phase 4 — CI integration (`.github/workflows/ci.yml`) ✅
-- Phase 5 — Manual test sessions per OS (screenshots/terminal/browser)
+- Phase 5 — Manual test sessions per OS (screenshots/terminal/browser) — fed: egui ✅ CAN ✅; web ⏳ (port-forward verified HTTP, SSE pending stable can0)
+- Phase 6 — Linux native GUI via XQuartz (egui window forwarded `ssh -Y fedora-can`) — fed ✅ (see Phase 6a/6b below)
+- Phase 7 — Ubuntu 26.04 headless validation (`ubu` @ 192.168.7.154, Xvfb+scrot / tmux, live PEAK can0) ✅ (see Phase 7 below)
 
 **Test systems:**
 | Label | System | Access |
 |-------|--------|--------|
 | mac | macOS (this machine) | native |
 | win | Windows 11 (Parallels on second Mac) | native VM |
-| fed | Fedora latest | SSH; TUI direct, Web via port-forward |
+| fed | Fedora latest | SSH; TUI direct, Web via port-forward, **egui native via XQuartz** (`ssh -Y fedora-can`) |
+| ubu | Ubuntu 26.04 LTS (lubuntu @ 192.168.7.154) | SSH; headless — egui via **Xvfb+scrot**, TUI via **tmux**, live PEAK `can0` |
 
 ---
 
@@ -80,6 +83,8 @@ Update checkboxes and push to share status with other sessions/systems.
 | Connect screen — no dongle | Phase 1b | Phase 1b | Phase 1b |
 | Connect screen — dongle detected | Phase 1b | Phase 1b | Phase 1b |
 | Monitor NMT panel — 3 nodes | Phase 1b | Phase 1b | Phase 1b |
+| Connect adapter selector — SocketCAN selected (Linux only) | N/A | N/A | ✅ |
+| Connect port row — Interface label + can0 hint (Linux only) | N/A | N/A | ✅ |
 
 ---
 
@@ -182,7 +187,8 @@ Update checkboxes and push to share status with other sessions/systems.
 | Monitor — full status bar | ✅ | [ ] | [ ] |
 | Plot view window | [ ] | [ ] | [ ] |
 | PEAK adapter shown (mac/win only) | ✅ | [ ] | N/A |
-| PEAK UI hidden on Linux | N/A | N/A | [ ] |
+| SocketCAN adapter shown on Linux (PEAK/KCAN also visible) | N/A | N/A | ✅ |
+| Connect screen — SocketCAN selected, Interface field | N/A | N/A | ✅ |
 
 ### TUI — Terminal Session
 > Run: `cargo run -p rustycan -- --tui --config host/config.example.json`
@@ -213,6 +219,107 @@ Update checkboxes and push to share status with other sessions/systems.
 | Pause / resume works | [ ] | [ ] | [ ] |
 | Dark mode appearance | ✅ | [ ] | [ ] |
 | Mobile-width layout (devtools) | [ ] | [ ] | [ ] |
+
+---
+
+---
+
+## Phase 6 — Linux Native GUI via XQuartz
+
+> **Setup:** XQuartz must be running on the macOS host. `ssh -Y fedora-can` is
+> confirmed working (DISPLAY forwarded). The `can0` interface is UP @ 250 kbps
+> on fedora-can (PEAK PCAN-USB via `peak_usb` kernel module).
+>
+> **Launch script:** `tests/ui/run-fedora-xquartz.sh` — SSH + DISPLAY setup,
+> runs the GUI and optionally captures a screenshot via `scrot`.
+>
+> **Snapshot baselines:** After running the Phase 1b Linux tests for the first
+> time, accept snapshots with:
+> ```sh
+> ssh fedora-can "cd ~/repo/RustyCAN && \
+>   UPDATE_SNAPSHOTS=1 LIBGL_ALWAYS_SOFTWARE=1 \
+>   xvfb-run -s '-screen 0 1920x1080x24' \
+>   cargo test -p rustycan --lib snapshot_connect"
+> scp 'fedora-can:~/repo/RustyCAN/host/tests/snapshots/connect_*.png' \
+>     host/tests/snapshots/
+> git add host/tests/snapshots/ && git commit -m 'test: add Linux SocketCAN connect-form snapshots'
+> ```
+
+### Phase 1b: Linux SocketCAN Snapshot Tests
+
+| Snapshot | Status |
+|----------|--------|
+| `connect_adapter_selector_socketcan` — baseline generated on fedora-can | ✅ |
+| `connect_adapter_selector_socketcan` — snapshot file committed | ✅ |
+| `connect_port_row_socketcan` — baseline generated on fedora-can | ✅ |
+| `connect_port_row_socketcan` — snapshot file committed | ✅ |
+| CI ubuntu-22.04 passes the two new Linux snapshot tests | [ ] |
+
+### Phase 6a: Manual egui Screenshots via XQuartz
+
+> Run: `./tests/ui/run-fedora-xquartz.sh`
+> Window appears locally via XQuartz. Use `scrot` on the remote or a macOS
+> screenshot for captures.
+
+| Screen | fed (XQuartz) |
+|--------|---------------|
+| Connect screen — SocketCAN adapter selected, can0 in Interface field | ✅ |
+| Connect screen — all three adapters visible (PEAK, KCAN, SocketCAN) | ✅ |
+| Connect screen — SocketCAN probe: adapter ready / not-found diagnostic | ✅ |
+| Connect screen → Monitor (live can0, node 32 heartbeating) | ✅ |
+| Monitor — NMT panel with live node 32 | ✅ |
+| Monitor — full status bar (bus load, FPS) | ✅ |
+| Monitor — PDO panel | ✅ |
+| Monitor — SDO log | [ ] |
+
+### Phase 6b: SocketCAN Pre-flight Diagnostic Screenshots
+
+> Simulated error states to verify diagnostic messages render correctly.
+
+| Scenario | fed (XQuartz) |
+|----------|---------------|
+| `peak_usb` module not loaded → step-by-step modprobe message | [ ] |
+| Interface `can0` not found → lists available CAN interfaces | [ ] |
+| Interface `can0` DOWN → `ip link set can0 up` hint shown | ✅ |
+| Interface UP → opens successfully, transitions to Monitor screen | ✅ |
+
+---
+
+## Phase 7 — Ubuntu 26.04 headless validation (`ubu`)
+
+> **Host:** `lubuntu` @ 192.168.7.154 (`ssh s@…`), Ubuntu 26.04 LTS, 4 cores / 3.7 GiB.
+> Headless tty (no physical display) — egui captured via **Xvfb + scrot**, TUI via **tmux capture-pane**.
+> Sources rsynced from mac (primary, commit `bb0cf8f`) via `tools/remote-dev/sync-to-remote.sh`;
+> md5 of `app.rs`/`tui/widgets.rs`/`gui/mod.rs` verified identical to mac.
+> Live CAN: PEAK PCAN-USB `can0` @ 250 kbps (brought UP persistently via udev rule
+> `/etc/udev/rules.d/90-can.rules`). Real device **node 32** (`distributor_board_mk3.eds`) on the bus.
+> Config: `host/config.linux.json` (SocketCan/can0, node 32 → EDS on remote).
+> Capture helper: `tests/ui/capture-egui-headless.sh`. Artifacts: `tests/ui/screenshots/`.
+
+### Automated suites (Linux, this host)
+
+| Suite | Result |
+|-------|--------|
+| Phase 1 egui — `cargo test --lib` (logic + snapshots, incl. SocketCAN) | ✅ 128 passed |
+| Phase 1b egui — `--test ui_egui` | ✅ 7 passed / 3 Phase-1b ignored |
+| Phase 2 TUI — `--test ui_tui` + inline `--lib tui` | ✅ (ring-buffer + inline widget/parser) |
+| Phase 3 Web — Playwright (chromium 1228, mock SSE) | ✅ 15/15 passed |
+
+### Manual GUI / live-CAN captures
+
+| Surface | Status | Artifact / evidence |
+|---------|--------|---------------------|
+| egui Connect — all 3 adapters, SocketCAN selected, `can0` | ✅ | `egui_connect_linux.png` |
+| egui Monitor — node 32 live, PRE-OP heartbeat, status bar | ✅ | `egui_monitor_linux.png` |
+| egui Monitor — node 32 **OP**, PDO Live Values `0x201 [Δ 206 ms]` | ✅ | `egui_monitor_operational_linux.png` |
+| TUI — NMT / PDO / SDO / Event-Log panels, stats bar | ✅ | `tui_main_linux.txt` |
+| TUI — Event Log toggle (`L`) with live heartbeats | ✅ | `tui_log_linux.txt` |
+| TUI — SDO read (`s`) `32 1000 0` → `Device Type = 0x000F0191` | ✅ | `tui_sdo_input_linux.txt`, `tui_sdo_result_linux.txt` |
+| TUI — NMT Start (`n`) `32 start` → OPERATIONAL + TPDO `0x201` | ✅ | `tui_pdo_linux.txt` |
+
+> **Not done (need sudo + destructive to live setup, already ✅ on `fed`):**
+> Phase 6b `peak_usb`-not-loaded and `can0`-not-found error simulations — would require
+> unloading the kernel module / removing the interface, disrupting the persistent `can0`.
 
 ---
 

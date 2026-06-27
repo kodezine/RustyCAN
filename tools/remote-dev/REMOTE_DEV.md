@@ -41,6 +41,36 @@ echo 'SUBSYSTEM=="usb", ATTR{idVendor}=="cafe", ATTR{idProduct}=="beef", MODE="0
 udevadm control --reload-rules
 ```
 
+### Linux remote (Ubuntu/Debian)
+
+**One-time setup on Ubuntu (tested: 26.04 LTS "resolute"):**
+```bash
+# Rust toolchain
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --no-modify-path
+echo 'source ~/.cargo/env' >> ~/.bashrc
+source ~/.cargo/env
+
+# Build + OpenGL + X11 + Xvfb + capture tools
+sudo apt-get update -qq && sudo apt-get install -y \
+  build-essential pkg-config libssl-dev \
+  libgl1-mesa-dri libegl1 mesa-utils \
+  libx11-dev libxcursor-dev libxrandr-dev libxi-dev libxext-dev \
+  xvfb scrot xauth \
+  rsync curl
+
+# Enable X11 forwarding in sshd
+sudo sed -i 's/^#*X11Forwarding.*/X11Forwarding yes/' /etc/ssh/sshd_config
+sudo systemctl reload ssh
+
+# udev rule for KCAN USB dongle (replug after adding)
+echo 'SUBSYSTEM=="usb", ATTR{idVendor}=="cafe", ATTR{idProduct}=="beef", MODE="0666"' | \
+  sudo tee /etc/udev/rules.d/99-kcan.rules > /dev/null
+sudo udevadm control --reload-rules
+
+# Create repo directory
+mkdir -p ~/code/RustyCAN
+```
+
 Config: `host/config.linux.json` — uses `KCanDongle` adapter (PCAN not supported on Linux).
 
 ## SSH Config (~/.ssh/config)

@@ -9,8 +9,8 @@ use std::collections::VecDeque;
 use ratatui::{
     layout::Rect,
     style::{Color, Modifier, Style},
-    text::{Line, Span},
-    widgets::{Block, Borders, List, ListItem, Paragraph, Row, Table},
+    text::{Line, Span, Text},
+    widgets::{Block, Borders, List, ListItem, ListState, Paragraph, Row, Table},
     Frame,
 };
 
@@ -18,6 +18,43 @@ use crate::app::AppState;
 use crate::canopen::nmt::NmtState;
 
 use super::TuiMode;
+
+/// Word-wrap `text` into chunks: the first chunk fills up to `first_w`
+/// characters, each continuation up to `cont_w`.
+///
+/// The wrap is UTF-8 safe (it never splits inside a codepoint) and always
+/// makes forward progress — even when a width of `0` is requested it consumes
+/// at least one character per line, so it can never loop forever on tiny
+/// terminal widths.  Breaks prefer the last space within the window.
+fn wrap_words(text: &str, first_w: usize, cont_w: usize) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    let mut rest = text;
+    let mut first = true;
+    while !rest.is_empty() {
+        // Guarantee progress: never allow a zero-width window.
+        let width = if first { first_w } else { cont_w }.max(1);
+
+        // Byte index that is `width` characters into `rest` (codepoint-safe).
+        let end = rest
+            .char_indices()
+            .nth(width)
+            .map(|(idx, _)| idx)
+            .unwrap_or(rest.len());
+
+        // Prefer breaking at the last space within the window, but only if it
+        // makes progress (a space at index 0 would not).
+        let split = if end < rest.len() {
+            rest[..end].rfind(' ').filter(|&p| p > 0).unwrap_or(end)
+        } else {
+            end
+        };
+
+        out.push(rest[..split].to_string());
+        rest = rest[split..].trim_start_matches(' ');
+        first = false;
+    }
+    out
+}
 
 // ─── NMT panel ───────────────────────────────────────────────────────────────
 
@@ -90,50 +127,78 @@ fn nmt_state_color(state: &NmtState) -> Color {
 
 // ─── PDO panel ───────────────────────────────────────────────────────────────
 
-/// Render the live PDO signal values panel.
+/// Render the PDO log panel.
 ///
-/// Groups signals by `(node_id, cob_id)` and shows the most-recent decoded
-/// values.  Entries are sorted by node-ID then COB-ID for stable ordering.
+/// Entries scroll like the SDO log (newest at bottom).  Same COB-ID with an
+/// unchanged payload refreshes only the timestamp; a payload change adds a new
+/// row.  Raw ByteN fallback is shown as a compact hex stream; EDS-decoded
+/// frames show signal names.
 pub fn render_pdo_panel(f: &mut Frame, state: &AppState, area: Rect) {
     let block = Block::default()
-        .title(" PDO Live Values ")
+        .title(" PDO Log ")
         .borders(Borders::ALL)
         .border_style(Style::default().fg(Color::Blue));
 
-    let mut entries: Vec<_> = state.pdo_values.iter().collect();
-    entries.sort_by_key(|((node, cob), _)| (*node, *cob));
+    let inner_w = area.width.saturating_sub(2) as usize;
 
-    let items: Vec<ListItem> = entries
+    let items: Vec<ListItem> = state
+        .pdo_log
         .iter()
-        .flat_map(|((node_id, cob_id), (values, _ts, period))| {
-            let hb = period
-                .as_ref()
-                .map(|d| format!("  {:.0}ms", d.as_millis()))
-                .unwrap_or_default();
+        .map(|entry| {
+            let ts_str = entry.ts.format("%H:%M:%S%.3f").to_string();
 
-            let header_line = Line::from(vec![Span::styled(
-                format!("Node {node_id}  COB 0x{cob_id:03X}{hb}"),
-                Style::default()
-                    .fg(Color::Blue)
-                    .add_modifier(Modifier::BOLD),
-            )]);
+            let is_raw = !entry.values.is_empty()
+                && entry.values.iter().all(|pv| {
+                    pv.signal_name.starts_with("Byte") && pv.signal_name[4..].parse::<u32>().is_ok()
+                });
 
-            let mut lines: Vec<Line> = vec![header_line];
-            for pv in values {
-                lines.push(Line::from(vec![
-                    Span::raw("  "),
-                    Span::styled(
-                        format!("{} = {}", pv.signal_name, pv.value),
-                        Style::default().fg(Color::White),
-                    ),
-                ]));
+            let payload = if is_raw {
+                let stream = entry
+                    .values
+                    .iter()
+                    .map(|pv| {
+                        let s = format!("{}", pv.value);
+                        s.trim_matches(|c: char| c == '[' || c == ']').to_string()
+                    })
+                    .collect::<Vec<_>>()
+                    .join(" ");
+                format!("[{stream}]")
+            } else {
+                entry
+                    .values
+                    .iter()
+                    .map(|pv| format!("{} = {}", pv.signal_name, pv.value))
+                    .collect::<Vec<_>>()
+                    .join("  ")
+            };
+
+            let text = format!("[{ts_str}] 0x{:03X}  {payload}", entry.cob_id);
+
+            // Word-wrap long lines (same logic as SDO log).
+            if text.len() <= inner_w {
+                ListItem::new(Line::from(text))
+            } else {
+                let lines: Vec<Line> = wrap_words(&text, inner_w, inner_w.saturating_sub(2))
+                    .into_iter()
+                    .enumerate()
+                    .map(|(i, chunk)| {
+                        if i == 0 {
+                            Line::from(chunk)
+                        } else {
+                            Line::from(format!("  {chunk}"))
+                        }
+                    })
+                    .collect();
+                ListItem::new(Text::from(lines))
             }
-            lines.into_iter().map(ListItem::new).collect::<Vec<_>>()
         })
         .collect();
 
-    let list = List::new(items).block(block);
-    f.render_widget(list, area);
+    let mut list_state = ListState::default();
+    if !items.is_empty() {
+        list_state.select(Some(items.len() - 1));
+    }
+    f.render_stateful_widget(List::new(items).block(block), area, &mut list_state);
 }
 
 // ─── SDO log ─────────────────────────────────────────────────────────────────
@@ -148,6 +213,9 @@ pub fn render_sdo_log(f: &mut Frame, state: &AppState, area: Rect) {
         .borders(Borders::ALL)
         .border_style(Style::default().fg(Color::Magenta));
 
+    // Inner width available for text (subtract left+right borders).
+    let inner_w = area.width.saturating_sub(2) as usize;
+
     let items: Vec<ListItem> = state
         .sdo_log
         .iter()
@@ -159,15 +227,22 @@ pub fn render_sdo_log(f: &mut Frame, state: &AppState, area: Rect) {
             let value_str = if let Some(v) = &entry.value {
                 format!("{v}")
             } else if let Some(code) = entry.abort_code {
-                format!("ABORT 0x{code:08X}")
+                format!("ABORT 0x{code:08X}: {}", super::sdo_abort_description(code))
             } else {
                 "pending".into()
             };
 
             let ts_str = entry.ts.format("%H:%M:%S%.3f").to_string();
+            // Omit the name when it is just the fallback address (no EDS loaded).
+            let fallback_name = format!("{:04X}h/{:02X}", entry.index, entry.subindex);
+            let name_part = if entry.name == fallback_name {
+                String::new()
+            } else {
+                format!(" {}", entry.name)
+            };
             let text = format!(
-                "[{ts_str}] N{} {dir} {:04X}:{:02X} {} = {}",
-                entry.node_id, entry.index, entry.subindex, entry.name, value_str
+                "[{ts_str}] N{} {dir} {:04X}:{:02X}{name_part} = {}",
+                entry.node_id, entry.index, entry.subindex, value_str
             );
 
             let color = if entry.abort_code.is_some() {
@@ -175,12 +250,36 @@ pub fn render_sdo_log(f: &mut Frame, state: &AppState, area: Rect) {
             } else {
                 Color::White
             };
-            ListItem::new(text).style(Style::default().fg(color))
+
+            // Word-wrap entries that exceed the panel width.
+            if inner_w > 0 && text.len() > inner_w {
+                const INDENT: &str = "  ";
+                let cont_w = inner_w.saturating_sub(INDENT.len());
+                let style = Style::default().fg(color);
+                let lines: Vec<Line> = wrap_words(&text, inner_w, cont_w)
+                    .into_iter()
+                    .enumerate()
+                    .map(|(i, chunk)| {
+                        if i == 0 {
+                            Line::styled(chunk, style)
+                        } else {
+                            Line::styled(format!("{INDENT}{chunk}"), style)
+                        }
+                    })
+                    .collect();
+                ListItem::new(Text::from(lines))
+            } else {
+                ListItem::new(text).style(Style::default().fg(color))
+            }
         })
         .collect();
 
+    let mut list_state = ListState::default();
+    if !items.is_empty() {
+        list_state.select(Some(items.len() - 1));
+    }
     let list = List::new(items).block(block);
-    f.render_widget(list, area);
+    f.render_stateful_widget(list, area, &mut list_state);
 }
 
 // ─── Stats bar ───────────────────────────────────────────────────────────────
@@ -386,6 +485,34 @@ mod tests {
     use crate::canopen::pdo::{PdoRawValue, PdoValue};
     use ratatui::backend::TestBackend;
     use ratatui::Terminal;
+
+    #[test]
+    fn wrap_words_zero_width_makes_progress() {
+        // A width of 0 must still consume one char per line (no infinite loop).
+        let out = wrap_words("abc", 0, 0);
+        assert_eq!(out, vec!["a", "b", "c"]);
+    }
+
+    #[test]
+    fn wrap_words_non_ascii_respects_codepoints() {
+        // Multi-byte chars must never be split mid-codepoint.
+        let out = wrap_words("héllo wörld", 5, 5);
+        assert!(out
+            .iter()
+            .all(|s| std::str::from_utf8(s.as_bytes()).is_ok()));
+        assert_eq!(out.concat().replace(' ', ""), "héllowörld");
+    }
+
+    #[test]
+    fn wrap_words_breaks_on_spaces() {
+        let out = wrap_words("alpha beta gamma", 8, 8);
+        assert_eq!(out, vec!["alpha", "beta", "gamma"]);
+    }
+
+    #[test]
+    fn wrap_words_short_text_single_chunk() {
+        assert_eq!(wrap_words("short", 80, 78), vec!["short"]);
+    }
 
     /// Render `draw` into a `w×h` TestBackend and return the flat text content.
     fn buf_text<F: FnOnce(&mut Frame)>(w: u16, h: u16, draw: F) -> String {

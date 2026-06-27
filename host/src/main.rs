@@ -63,6 +63,16 @@ struct CliArgs {
     /// When omitted the first KCAN dongle found is used.
     #[arg(long, value_name = "SERIAL")]
     kcan_serial: Option<String>,
+
+    /// Open the GUI and connect automatically once the adapter is detected.
+    ///
+    /// Requires `--config` to be supplied.  The connect form is shown briefly
+    /// while the adapter probe runs; as soon as the adapter is detected the
+    /// connection is established without any user interaction.  Useful for
+    /// automated testing (e.g. over SSH X11 forwarding where mouse input may
+    /// not be available) and for kiosk / autostart setups.
+    #[arg(long, requires = "config")]
+    auto_connect: bool,
 }
 
 fn main() {
@@ -150,7 +160,8 @@ fn main() {
         }
     } else {
         let dfu_path = if !args.tui { args.dfu_update } else { None };
-        if let Err(e) = rustycan::gui::run(args.config, effective_port, dfu_path) {
+        if let Err(e) = rustycan::gui::run(args.config, effective_port, dfu_path, args.auto_connect)
+        {
             eprintln!("error: {e}");
             std::process::exit(1);
         }
