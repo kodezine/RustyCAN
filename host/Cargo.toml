@@ -18,9 +18,9 @@ path = "src/bin/bbd/main.rs"
 # host-can: pcan feature not enabled here — see target-specific sections below.
 embedded-can = "0.4"
 clap = { version = "4", features = ["derive"] }
-eframe = "0.34"
-egui = "0.34"
-egui_plot = "0.35"
+eframe = "0.35"
+egui = "0.35"
+egui_plot = "0.36"
 rfd = "0.17"
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["preserve_order"] }
@@ -68,7 +68,7 @@ winresource = "0.1"
 [dev-dependencies]
 tempfile = "3"
 # UI testing — egui headless harness + snapshot comparison
-egui_kittest = { version = "0.34", features = ["snapshot", "wgpu"] }
+egui_kittest = { version = "0.35", features = ["snapshot", "wgpu"] }
 insta = { version = "1", features = ["yaml"] }
 
 # ─── Packaging (cargo-packager) ───────────────────────────────────────────────
