@@ -26,7 +26,9 @@ use state_machine::{run_firmware_download, ActionType, DownloadConfig, DownloadS
 
 // ─── Version string ───────────────────────────────────────────────────────────
 
-const VERSION: &str = concat!(env!("CARGO_PKG_VERSION"), " (bbd)");
+// Repo release version derived from `git describe --tags` at build time (see
+// host/build.rs). Falls back to the Cargo version when git is unavailable.
+const VERSION: &str = env!("RUSTYCAN_VERSION");
 
 // ─── CLI definition ───────────────────────────────────────────────────────────
 
@@ -224,7 +226,7 @@ fn main() {
 
     // ── Print version banner ──────────────────────────────────────────────────
     println!("--------------------------------------------------------------------");
-    println!("BinaryBlockDownload (bbd) v{}", VERSION);
+    println!("BinaryBlockDownload tool (BBD) {}", VERSION);
     println!("--------------------------------------------------------------------");
 
     // ── Validate node ID ─────────────────────────────────────────────────────
@@ -374,6 +376,12 @@ fn main() {
             if done {
                 bar_finalized = true;
             }
+        }
+        Progress::AppWorking { device_type } => {
+            println!("[BBD] State: Application working (0x{device_type:08X})");
+        }
+        Progress::BootloaderReentered { device_type } => {
+            println!("[BBD] State: Bootloader re-entered (0x{device_type:08X})");
         }
     };
 

@@ -121,6 +121,12 @@ pub enum Progress {
     },
     /// Block downloaded: `(bytes_transferred, total_bytes)`.
     BlockDownloaded { bytes_done: u64, total_bytes: u64 },
+    /// Application confirmed running after a start command. Carries the raw
+    /// device-type value read from object 0x1000 (any non-bootloader value).
+    AppWorking { device_type: u32 },
+    /// Bootloader confirmed active again after returning from the application.
+    /// Carries the raw device-type value read from object 0x1000.
+    BootloaderReentered { device_type: u32 },
 }
 
 /// Errors returned by the state machine.
@@ -136,6 +142,30 @@ pub enum DownloadError {
     BootloaderTimeout(String),
     /// The application failed to start after flashing.
     AppStartFailed,
+    /// The bootloader reported a non-OK flash status on object 0x1F57.
+    /// Carries the raw status DWORD; decoded to a name by `flash_status_name`.
+    FlashStatus(u32),
+}
+
+/// Decode a non-busy 0x1F57 flash-status DWORD into a human-readable reason.
+///
+/// Status layout (bootloader `BLCOP_STAT_WRITE`): `busy ? 1 : (err << 1) | (manu << 16)`.
+/// So the error code is `status >> 1`; these names mirror the bootloader's
+/// `BLCOP_STATERR_*` definitions.
+fn flash_status_name(raw: u32) -> &'static str {
+    match (raw >> 1) & 0x7FFF {
+        0x00 => "OK",
+        0x01 => "NOVALPROG (no valid program — application CRC check failed)",
+        0x02 => "FORMAT (invalid block format)",
+        0x03 => "CRC (block CRC error)",
+        0x04 => "NOTCLEARED (flash not cleared before write)",
+        0x05 => "WRITE (flash write error)",
+        0x06 => "ADDRESS (invalid flash address)",
+        0x07 => "SECURED (flash is read/write protected)",
+        0x08 => "NVDATA (non-volatile data error)",
+        0x3F => "UNSPECIFIED",
+        _ => "unknown flash error",
+    }
 }
 
 impl std::fmt::Display for DownloadError {
@@ -146,6 +176,11 @@ impl std::fmt::Display for DownloadError {
             Self::Validation(s) => write!(f, "validation error: {s}"),
             Self::BootloaderTimeout(s) => write!(f, "bootloader timeout: {s}"),
             Self::AppStartFailed => write!(f, "application failed to start after flashing"),
+            Self::FlashStatus(raw) => write!(
+                f,
+                "bootloader flash status 0x{raw:08X}: {}",
+                flash_status_name(*raw)
+            ),
         }
     }
 }
@@ -282,17 +317,20 @@ pub fn run_firmware_download(
 
     // ── 6. First start — smoke test ──────────────────────────────────────────
     progress_cb(Progress::State("FirstStartApp"));
-    client.write_u8(OBJ_PROGRAM_CONTROL, cfg.program_number, CMD_START_APP)?;
+    write_control_expect_reset(client, cfg, CMD_START_APP)?;
 
     progress_cb(Progress::State("DelayCheckApp"));
     thread::sleep(dur_100us(cfg.delay_check_app_100us));
 
     progress_cb(Progress::State("CheckAppWorks"));
-    let app_running = !is_bootloader_active(client, cfg.action)?;
-    if !app_running {
-        // Image is broken — don't write the signature for a bad binary.
-        return Err(DownloadError::AppStartFailed);
-    }
+    // Poll 0x1000 until the application answers with any non-bootloader device
+    // type. This tolerates the transient SDO timeout / adapter disconnect that
+    // occurs while the node hands control from the bootloader to the app, and
+    // works for every application on this bootloader (not just one).
+    let app_dev_type = wait_app_running(client, cfg)?;
+    progress_cb(Progress::AppWorking {
+        device_type: app_dev_type,
+    });
 
     // App verified — read its version while it's running.
     summary.app_version_after = client.read_string(OBJ_APP_VERSION, 0).ok();
@@ -305,22 +343,18 @@ pub fn run_firmware_download(
     // the CRC signature lives. The application cannot write flash, so we must
     // switch back to bootloader mode before issuing CMD_SET_SIGNATURE.
     progress_cb(Progress::State("RestartBootloader"));
-    client.write_u8(
-        OBJ_PROGRAM_CONTROL,
-        cfg.program_number,
-        CMD_START_BOOTLOADER,
-    )?;
+    write_control_expect_reset(client, cfg, CMD_START_BOOTLOADER)?;
 
     progress_cb(Progress::State("DelayCheckReenterBootloader"));
     thread::sleep(dur_100us(cfg.delay_check_bl_100us));
 
     progress_cb(Progress::State("CheckReenterBootloader"));
-    let back_in_bl = is_bootloader_active(client, cfg.action)?;
-    if !back_in_bl {
-        return Err(DownloadError::BootloaderTimeout(
-            "bootloader did not re-enter after first start attempt".into(),
-        ));
-    }
+    // Poll 0x1000 until the bootloader answers again, riding through the SDO
+    // timeout / adapter disconnect that the app→bootloader reset produces.
+    let bl_dev_type = wait_bootloader_active(client, cfg)?;
+    progress_cb(Progress::BootloaderReentered {
+        device_type: bl_dev_type,
+    });
 
     progress_cb(Progress::State("SetSignature"));
     client.write_u8(OBJ_PROGRAM_CONTROL, cfg.program_number, CMD_SET_SIGNATURE)?;
@@ -330,16 +364,16 @@ pub fn run_firmware_download(
 
     // ── 8. Final start — app is now permanent ────────────────────────────────
     progress_cb(Progress::State("FinalStartApp"));
-    client.write_u8(OBJ_PROGRAM_CONTROL, cfg.program_number, CMD_START_APP)?;
+    write_control_expect_reset(client, cfg, CMD_START_APP)?;
 
     progress_cb(Progress::State("DelayFinalCheckApp"));
     thread::sleep(dur_100us(cfg.delay_check_app_100us));
 
     progress_cb(Progress::State("FinalCheckApp"));
-    let final_running = !is_bootloader_active(client, cfg.action)?;
-    if !final_running {
-        return Err(DownloadError::AppStartFailed);
-    }
+    let final_dev_type = wait_app_running(client, cfg)?;
+    progress_cb(Progress::AppWorking {
+        device_type: final_dev_type,
+    });
 
     progress_cb(Progress::State("Done"));
     Ok(summary)
@@ -350,14 +384,97 @@ pub fn run_firmware_download(
 /// Return `true` if the target device type indicates a bootloader (or blupdate-app).
 fn is_bootloader_active(client: &mut SdoClient, action: ActionType) -> Result<bool, DownloadError> {
     let dev_type = client.read_u32(OBJ_DEVICE_TYPE, 0)?;
-    Ok(match action {
+    Ok(device_type_is_bootloader(dev_type, action))
+}
+
+/// Classify a raw object-0x1000 device-type value as bootloader (or blupdate-app)
+/// versus a running application, without performing any SDO I/O.
+fn device_type_is_bootloader(dev_type: u32, action: ActionType) -> bool {
+    match action {
         ActionType::UpdateFirmware | ActionType::LoadBlupdateApp => {
             dev_type == BOOTLOADER_DEVICE_TYPE
         }
         ActionType::UpdateBootloader => {
             dev_type == BLUPDATE_APP_DEVICE_TYPE || dev_type == BOOTLOADER_DEVICE_TYPE
         }
-    })
+    }
+}
+
+/// Maximum wall-clock time to wait for the application to start responding on
+/// object 0x1000 after a start command.
+const APP_START_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// Issue a program-control command (0x1F51) that is expected to trigger a mode
+/// change on the node — starting the application or returning to the bootloader.
+///
+/// The node frequently resets and re-initialises its CAN controller *before* it
+/// acknowledges the SDO write, so the write can come back as an SDO timeout or a
+/// transient adapter error (a bus-off/error burst that the PEAK backend reports
+/// as `Disconnected`). Those are the *expected* result of a successful mode
+/// switch, not a failure — the caller confirms the new mode by polling 0x1000.
+/// A real SDO abort or protocol error is still surfaced.
+fn write_control_expect_reset(
+    client: &mut SdoClient,
+    cfg: &DownloadConfig,
+    command: u8,
+) -> Result<(), DownloadError> {
+    match client.write_u8(OBJ_PROGRAM_CONTROL, cfg.program_number, command) {
+        Ok(()) => Ok(()),
+        Err(SdoError::Timeout) | Err(SdoError::Adapter(_)) => Ok(()),
+        Err(e) => Err(DownloadError::Sdo(e)),
+    }
+}
+
+/// Poll object 0x1000 until the bootloader (or blupdate-app) answers again — i.e.
+/// the node has returned from the application to the bootloader — and return the
+/// raw value. Tolerates the transient SDO timeout / adapter disconnect produced
+/// by the application→bootloader reset, retrying until the deadline.
+fn wait_bootloader_active(
+    client: &mut SdoClient,
+    cfg: &DownloadConfig,
+) -> Result<u32, DownloadError> {
+    let deadline = std::time::Instant::now() + APP_START_TIMEOUT;
+    loop {
+        if let Ok(dev_type) = client.read_u32(OBJ_DEVICE_TYPE, 0) {
+            if device_type_is_bootloader(dev_type, cfg.action) {
+                return Ok(dev_type);
+            }
+            // Application still running — the reset has not completed yet.
+        }
+        if std::time::Instant::now() >= deadline {
+            return Err(DownloadError::BootloaderTimeout(
+                "bootloader did not re-enter after starting the application".into(),
+            ));
+        }
+        thread::sleep(dur_100us(cfg.poll_delay_100us));
+    }
+}
+
+/// Poll object 0x1000 until it reports a non-bootloader device type — i.e. the
+/// application is running — and return that raw value.
+///
+/// The bootloader→application handover briefly makes the node unreachable (the
+/// app re-initialises the CAN controller, which can surface as an SDO timeout or
+/// even a momentary adapter disconnect). Those transient errors are treated as
+/// "not up yet, keep polling" rather than a hard failure. Any value other than
+/// the bootloader device type counts as the application working, so this works
+/// for every application built on this bootloader — not just one.
+fn wait_app_running(client: &mut SdoClient, cfg: &DownloadConfig) -> Result<u32, DownloadError> {
+    let deadline = std::time::Instant::now() + APP_START_TIMEOUT;
+    loop {
+        if let Ok(dev_type) = client.read_u32(OBJ_DEVICE_TYPE, 0) {
+            if !device_type_is_bootloader(dev_type, cfg.action) {
+                return Ok(dev_type);
+            }
+            // Still the bootloader — the app has not taken over yet.
+        }
+        // Otherwise a transient timeout/abort/protocol/adapter error during the
+        // handover — fall through and retry until the deadline.
+        if std::time::Instant::now() >= deadline {
+            return Err(DownloadError::AppStartFailed);
+        }
+        thread::sleep(dur_100us(cfg.poll_delay_100us));
+    }
 }
 
 /// Send `CMD_START_BOOTLOADER` and wait until the bootloader reports active.
@@ -435,7 +552,7 @@ fn wait_flash_status(
                 // Still erasing/verifying — keep polling.
             }
             FlashStatus::Error(code) => {
-                return Err(DownloadError::Sdo(SdoError::Abort(code)));
+                return Err(DownloadError::FlashStatus(code));
             }
         }
     }

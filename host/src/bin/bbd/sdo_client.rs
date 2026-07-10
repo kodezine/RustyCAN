@@ -19,9 +19,9 @@ use rustycan::canopen::sdo::{
     calculate_crc16, decode_block_download_end_response, decode_block_download_initiate_response,
     decode_block_download_subblock_response, decode_segmented_upload_initiate,
     decode_upload_segment_response, encode_abort, encode_block_download_end,
-    encode_block_download_initiate, encode_block_download_subblock, encode_download_expedited,
-    encode_download_initiate_segmented, encode_download_segment, encode_upload_request,
-    encode_upload_segment_ack, is_download_initiate_ack, is_download_segment_ack,
+    encode_block_download_initiate, encode_download_expedited, encode_download_initiate_segmented,
+    encode_download_segment, encode_upload_request, encode_upload_segment_ack,
+    is_download_initiate_ack, is_download_segment_ack,
 };
 
 // ─── Constants ───────────────────────────────────────────────────────────────
@@ -139,11 +139,43 @@ impl SdoClient {
         self.adapter.send(&frame).map_err(SdoError::Adapter)
     }
 
+    /// Discard any buffered frames left over from a previous transaction.
+    ///
+    /// `recv_response` matches replies only by COB-ID, so a late or duplicate
+    /// response (for example a flash-status upload reply that arrived after its
+    /// `read_u32` poll already timed out during `WaitClear`) can linger in the
+    /// adapter's RX queue and then be mistaken for the reply to the *next*
+    /// request. Call this immediately before sending the initiating request of
+    /// a new logical SDO transaction so every request is answered by its own
+    /// response. Any frame already queued at this point is by definition stale.
+    fn drain_rx(&mut self) {
+        // A short, non-accumulating poll: we only clear frames already buffered
+        // — no new request has been sent yet, so nothing legitimate is inbound.
+        while self.adapter.recv(Duration::from_millis(2)).is_ok() {
+            // discard stale frame and keep draining until the queue is empty
+        }
+    }
+
     /// Wait for a CAN frame from the node's SDO response COB-ID.
     ///
     /// Frames from other COB-IDs are silently discarded. Returns the 8-byte
     /// data payload of the matching frame, or [`SdoError::Timeout`].
     fn recv_response(&mut self) -> Result<[u8; 8], SdoError> {
+        self.recv_response_matching(|_| true)
+    }
+
+    /// Wait for an SDO response frame that satisfies `accept`.
+    ///
+    /// Frames from other COB-IDs are ignored, as are matching-COB-ID frames
+    /// that `accept` rejects — those are treated as stale/late replies from a
+    /// previous transaction (for example a flash-status upload response that
+    /// arrived after its poll timed out during `WaitClear`) and skipped until
+    /// the real reply arrives or the timeout elapses. SDO aborts (CS = 0x80)
+    /// and malformed frames are surfaced immediately regardless of `accept`.
+    fn recv_response_matching<F>(&mut self, accept: F) -> Result<[u8; 8], SdoError>
+    where
+        F: Fn(&[u8; 8]) -> bool,
+    {
         let expected_cob = self.response_cob_id();
         let deadline = Instant::now() + self.cfg.timeout;
 
@@ -176,6 +208,11 @@ impl SdoClient {
                     }
                     let mut out = [0u8; 8];
                     out.copy_from_slice(&raw[..8]);
+                    if !accept(&out) {
+                        // Stale/late reply from an earlier transaction — discard
+                        // and keep waiting for the response we actually expect.
+                        continue;
+                    }
                     return Ok(out);
                 }
                 Err(AdapterError::Timeout) => {
@@ -197,8 +234,12 @@ impl SdoClient {
     /// responses. Some bootloaders respond with a segmented initiate even for
     /// UNSIGNED32 objects, so both paths are handled transparently.
     pub fn read_u32(&mut self, index: u16, subindex: u8) -> Result<u32, SdoError> {
+        self.drain_rx();
         self.send(encode_upload_request(index, subindex))?;
-        let resp = self.recv_response()?;
+        // Accept only an upload initiate response (SCS=2); skip stale replies
+        // (e.g. a leftover 0xA2 block ack or 0x43 status reply from a prior
+        // interrupted transfer) until the real reply arrives or we time out.
+        let resp = self.recv_response_matching(|r| r[0] & 0xE0 == 0x40)?;
         let cs = resp[0];
 
         // Expedited: SCS=2 (bits 7-5 = 010), e=1 (bit 1 set)
@@ -243,8 +284,10 @@ impl SdoClient {
     /// Handles both expedited (short strings ≤4 bytes) and segmented responses.
     /// Returns the string with any trailing NUL bytes stripped.
     pub fn read_string(&mut self, index: u16, subindex: u8) -> Result<String, SdoError> {
+        self.drain_rx();
         self.send(encode_upload_request(index, subindex))?;
-        let resp = self.recv_response()?;
+        // Accept only an upload initiate response (SCS=2); skip stale replies.
+        let resp = self.recv_response_matching(|r| r[0] & 0xE0 == 0x40)?;
         let cs = resp[0];
 
         // Expedited: e=1 (bit 1 set)
@@ -301,10 +344,11 @@ impl SdoClient {
     /// Use this for objects whose CANopen data type is UNSIGNED8 (e.g. 0x1F51
     /// Program Control) to avoid SDO abort 0x06070012 "length too high".
     pub fn write_u8(&mut self, index: u16, subindex: u8, value: u8) -> Result<(), SdoError> {
+        self.drain_rx();
         let frame = encode_download_expedited(index, subindex, &[value])
             .ok_or_else(|| SdoError::Protocol("expedited download data > 4 bytes".into()))?;
         self.send(frame)?;
-        let resp = self.recv_response()?;
+        let resp = self.recv_response_matching(|r| is_download_initiate_ack(r))?;
         if !is_download_initiate_ack(&resp) {
             return Err(SdoError::Protocol(format!(
                 "expected download ack (0x60), got 0x{:02X}",
@@ -322,12 +366,13 @@ impl SdoClient {
         data: &[u8],
     ) -> Result<(), SdoError> {
         // Initiate
+        self.drain_rx();
         self.send(encode_download_initiate_segmented(
             index,
             subindex,
             data.len() as u32,
         ))?;
-        let resp = self.recv_response()?;
+        let resp = self.recv_response_matching(|r| is_download_initiate_ack(r))?;
         if !is_download_initiate_ack(&resp) {
             return Err(SdoError::Protocol(format!(
                 "segmented initiate ack expected (0x60), got 0x{:02X}",
@@ -343,7 +388,7 @@ impl SdoClient {
             let chunk = &data[offset..end];
             let is_last = end == data.len();
             self.send(encode_download_segment(chunk, toggle, is_last))?;
-            let resp = self.recv_response()?;
+            let resp = self.recv_response_matching(|r| is_download_segment_ack(r, toggle))?;
             if !is_download_segment_ack(&resp, toggle) {
                 return Err(SdoError::Protocol(format!(
                     "segment ack mismatch at offset {offset}: got 0x{:02X}",
@@ -364,56 +409,64 @@ impl SdoClient {
         data: &[u8],
     ) -> Result<(), SdoError> {
         // ── Initiate ─────────────────────────────────────────────────────────
+        self.drain_rx();
         self.send(encode_block_download_initiate(
             index,
             subindex,
             data.len() as u32,
             true, // CRC enabled
         ))?;
-        let resp = self.recv_response()?;
-        let mut blksize = decode_block_download_initiate_response(&resp).ok_or_else(|| {
-            SdoError::Protocol(format!(
-                "expected block initiate response (0xA4), got 0x{:02X}",
-                resp[0]
-            ))
-        })?;
+        let resp =
+            self.recv_response_matching(|r| decode_block_download_initiate_response(r).is_some())?;
+        let (mut blksize, crc_supported) = decode_block_download_initiate_response(&resp)
+            .ok_or_else(|| {
+                SdoError::Protocol(format!(
+                    "expected block initiate response (0xA0/0xA4), got 0x{:02X}",
+                    resp[0]
+                ))
+            })?;
         if blksize == 0 {
             blksize = DEFAULT_BLOCK_SIZE;
         }
 
         // ── Sub-blocks ───────────────────────────────────────────────────────
+        // Send the payload as a sequence of sub-blocks of up to `blksize`
+        // segments (7 bytes each). After each sub-block the server acknowledges
+        // the sequence number of the last segment it received correctly; if that
+        // is fewer than we sent, the missing segments are retransmitted starting
+        // from the first un-acknowledged one.
         let mut offset = 0;
-        let mut seqno: u8 = 1;
+        let mut stall_count: u32 = 0;
 
         while offset < data.len() {
-            // Send up to `blksize` segments of 7 bytes each
             let block_start = offset;
             let block_end_data = (block_start + blksize as usize * 7).min(data.len());
-            let is_last_block = block_end_data == data.len();
 
-            while offset < block_end_data {
-                let seg_end = (offset + 7).min(data.len());
-                let chunk = &data[offset..seg_end];
+            // Send up to `blksize` segments for this sub-block.
+            let mut seqno: u8 = 1;
+            let mut seg_offset = block_start;
+            while seg_offset < block_end_data {
+                let seg_end = (seg_offset + 7).min(data.len());
+                let chunk = &data[seg_offset..seg_end];
                 let is_last_seg = seg_end == data.len();
 
-                // For block download sub-blocks, seqno is 1-127.
-                // The last segment of the last sub-block has bit 7 set.
+                // seqno is 1-127; the very last segment of the transfer sets bit 7.
                 let cs_seqno = if is_last_seg { seqno | 0x80 } else { seqno };
                 let mut frame_data = [0u8; 8];
                 frame_data[0] = cs_seqno;
                 for (i, &b) in chunk.iter().enumerate().take(7) {
                     frame_data[1 + i] = b;
                 }
-                // Use the helper to build the frame (ignores is_last — we set the bit manually above)
-                let _ = encode_block_download_subblock(seqno, chunk, false);
                 self.send(frame_data)?;
 
                 seqno += 1;
-                offset = seg_end;
+                seg_offset = seg_end;
             }
+            let segs_sent = seqno - 1;
 
-            // Wait for sub-block acknowledgement
-            let resp = self.recv_response()?;
+            // Wait for sub-block acknowledgement.
+            let resp = self
+                .recv_response_matching(|r| decode_block_download_subblock_response(r).is_some())?;
             let (ackseq, new_blksize) =
                 decode_block_download_subblock_response(&resp).ok_or_else(|| {
                     SdoError::Protocol(format!(
@@ -422,14 +475,28 @@ impl SdoClient {
                     ))
                 })?;
 
-            // If ackseq < seqno-1 some segments were lost — retransmit from ackseq+1.
-            // For simplicity (and matching the C implementation) we treat any ack < seqno-1
-            // as a protocol error. A more robust implementation would retransmit.
-            let expected_ack = seqno - 1;
-            if ackseq != expected_ack {
+            if ackseq > segs_sent {
                 return Err(SdoError::Protocol(format!(
-                    "block ack mismatch: expected {expected_ack}, got {ackseq}"
+                    "block ack out of range: sent {segs_sent} segments, server acked {ackseq}"
                 )));
+            }
+
+            // Advance past the segments the server confirmed. When `ackseq` is
+            // less than we sent, the remaining segments were lost on the wire and
+            // are retransmitted on the next iteration from this offset.
+            offset = block_start + ackseq as usize * 7;
+
+            // Guard against a livelock where the server keeps acknowledging zero
+            // segments (nothing is getting through).
+            if ackseq == 0 {
+                stall_count += 1;
+                if stall_count > 16 {
+                    return Err(SdoError::Protocol(
+                        "block download stalled: server repeatedly acknowledged 0 segments".into(),
+                    ));
+                }
+            } else {
+                stall_count = 0;
             }
 
             blksize = if new_blksize > 0 {
@@ -437,11 +504,6 @@ impl SdoClient {
             } else {
                 DEFAULT_BLOCK_SIZE
             };
-            seqno = 1;
-
-            if is_last_block {
-                break;
-            }
         }
 
         // ── End ──────────────────────────────────────────────────────────────
@@ -452,10 +514,16 @@ impl SdoClient {
         } else {
             (7 - last_seg_data) as u8
         };
-        let crc = calculate_crc16(data);
+        // Only send a real CRC when the server negotiated CRC support; otherwise
+        // the CRC field is ignored, so send 0.
+        let crc = if crc_supported {
+            calculate_crc16(data)
+        } else {
+            0
+        };
         self.send(encode_block_download_end(n, crc))?;
 
-        let resp = self.recv_response()?;
+        let resp = self.recv_response_matching(|r| decode_block_download_end_response(r))?;
         if !decode_block_download_end_response(&resp) {
             return Err(SdoError::Protocol(format!(
                 "expected block end ack (0xA1), got 0x{:02X}",
@@ -476,10 +544,11 @@ impl SdoClient {
         mode: SdocType,
     ) -> Result<(), SdoError> {
         if data.len() <= 4 {
+            self.drain_rx();
             let frame = encode_download_expedited(index, subindex, data)
                 .ok_or_else(|| SdoError::Protocol("expedited data > 4 bytes".into()))?;
             self.send(frame)?;
-            let resp = self.recv_response()?;
+            let resp = self.recv_response_matching(|r| is_download_initiate_ack(r))?;
             if !is_download_initiate_ack(&resp) {
                 return Err(SdoError::Protocol(format!(
                     "expected download ack (0x60), got 0x{:02X}",
