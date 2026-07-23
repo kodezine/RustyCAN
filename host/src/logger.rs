@@ -462,6 +462,29 @@ impl EventLogger {
         self.write_text_line(&ts_str, "TX_ECHO", &cob_id_str, raw);
     }
 
+    /// Log a frame we transmitted (host-initiated Tx), marked `"type": "TX"`.
+    ///
+    /// Called at transmit time so Tx frames appear in the trace on every
+    /// adapter — including PEAK, which does not echo its own transmissions.
+    /// On KCAN a matching `TX_ECHO` (with the on-bus hardware timestamp) also
+    /// follows as confirmation.
+    pub fn log_tx(&mut self, ts: DateTime<Utc>, can_id: u32, raw: &[u8]) {
+        let ts_str = ts.to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
+        let cob_id_str = if can_id <= 0x7FF {
+            format!("0x{can_id:03X}")
+        } else {
+            format!("0x{can_id:08X}")
+        };
+        let entry = json!({
+            "ts": ts_str,
+            "type": "TX",
+            "cob_id": cob_id_str,
+            "raw": bytes_to_hex(raw),
+        });
+        self.log(entry);
+        self.write_text_line(&ts_str, "TX", &cob_id_str, raw);
+    }
+
     /// Log a raw CAN frame (fallback for frames not decoded by DBC or CANopen).
     pub fn log_raw_frame(&mut self, ts: DateTime<Utc>, can_id: u16, raw: &[u8]) {
         let ts_str = ts.to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
