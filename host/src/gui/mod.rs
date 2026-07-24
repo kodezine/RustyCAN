@@ -3183,7 +3183,7 @@ fn dbc_section(
                                     let is_first_for_id = last_shown_can_id != Some(entry.can_id);
                                     ui.label(format!(
                                         "0x{:03X} {}",
-                                        entry.can_id, &entry.message_name
+                                        entry.can_id, entry.message_name
                                     ))
                                     .on_hover_text(format!("CAN ID 0x{:03X}", entry.can_id));
                                     last_shown_can_id = Some(entry.can_id);
@@ -3355,7 +3355,7 @@ fn dbc_section(
                 // Compose window (floats above the panel).
                 if let Some(panel) = compose {
                     let can_id = panel.can_id;
-                    let title = format!("Compose 0x{:03X} {}", can_id, &panel.message_name);
+                    let title = format!("Compose 0x{:03X} {}", can_id, panel.message_name);
                     let mut keep_open = true;
                     egui::Window::new(&title)
                         .id(egui::Id::new("dbc_compose_window"))
