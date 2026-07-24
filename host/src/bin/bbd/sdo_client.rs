@@ -492,7 +492,11 @@ impl SdoClient {
             // "retransmission" means continuing from the acknowledged byte offset
             // in a fresh sub-block; sequence numbers are intentionally not
             // preserved across sub-blocks.
-            offset = block_start + ackseq as usize * 7;
+            //
+            // Clamp to `data.len()`: when the final segment is shorter than 7
+            // bytes, `ackseq * 7` can point past the end of the payload, so keep
+            // `offset` within range to make the loop invariant explicit.
+            offset = (block_start + ackseq as usize * 7).min(data.len());
 
             // Guard against a livelock where the server keeps acknowledging zero
             // segments (nothing is getting through).

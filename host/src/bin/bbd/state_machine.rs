@@ -16,6 +16,7 @@ use std::time::Duration;
 
 use crate::file::BinaryBlockIter;
 use crate::sdo_client::{SdoClient, SdoError, BLUPDATE_APP_DEVICE_TYPE, BOOTLOADER_DEVICE_TYPE};
+use rustycan::adapters::AdapterError;
 
 // ─── Object indices ──────────────────────────────────────────────────────────
 
@@ -422,7 +423,12 @@ fn write_control_expect_reset(
 ) -> Result<(), DownloadError> {
     match client.write_u8(OBJ_PROGRAM_CONTROL, cfg.program_number, command) {
         Ok(()) => Ok(()),
-        Err(SdoError::Timeout) | Err(SdoError::Adapter(_)) => Ok(()),
+        // The node resets and re-initialises its CAN controller before it ACKs,
+        // so a successful mode switch surfaces as an SDO timeout or the transient
+        // USB/bus disconnect the PEAK backend reports as `Disconnected`. The
+        // caller confirms the new mode by polling 0x1000. Any other adapter error
+        // (Io/Protocol/Fatal/NotFound) is a genuine failure and is propagated.
+        Err(SdoError::Timeout) | Err(SdoError::Adapter(AdapterError::Disconnected)) => Ok(()),
         Err(e) => Err(DownloadError::Sdo(e)),
     }
 }

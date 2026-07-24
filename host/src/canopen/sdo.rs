@@ -575,8 +575,10 @@ pub fn encode_block_download_end(n: u8, crc: u16) -> [u8; 8] {
 ///
 /// The server response has scs=101 (bits 7-5), ss=00 (bits 1-0); bit 2 is the
 /// server CRC-support flag: `0xA4` = CRC supported, `0xA0` = CRC not supported.
-/// Returns `Some((blksize, crc_supported))` where `blksize` is the number of
-/// segments per block (1-127).
+/// Returns `Some((blksize, crc_supported))` where `blksize` is the server's
+/// requested number of segments per block. Per CiA 301 this is 1-127, but some
+/// servers return `0` to mean "use your own default"; callers must treat a
+/// returned `0` as "choose a default block size" rather than an error.
 pub fn decode_block_download_initiate_response(data: &[u8]) -> Option<(u8, bool)> {
     if data.len() < 8 {
         return None;
