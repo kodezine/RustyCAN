@@ -1399,10 +1399,16 @@ fn recv_loop(
                                 data: init_data,
                                 crc_enabled,
                             } => {
-                                if let Some(blksize) = decode_block_download_initiate_response(data)
+                                if let Some((blksize, crc_supported)) =
+                                    decode_block_download_initiate_response(data)
                                 {
-                                    // Server accepted block transfer, start sending sub-block
-                                    let crc = calculate_crc16(&init_data);
+                                    // Server accepted block transfer, start sending sub-block.
+                                    // Only compute a CRC if the server negotiated CRC support.
+                                    let crc = if crc_supported {
+                                        calculate_crc16(&init_data)
+                                    } else {
+                                        0
+                                    };
                                     let mut remaining_data = init_data;
                                     let mut seqno = 1u8;
 

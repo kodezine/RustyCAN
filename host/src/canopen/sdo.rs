@@ -571,19 +571,28 @@ pub fn encode_block_download_end(n: u8, crc: u16) -> [u8; 8] {
     [cs, crc_lo, crc_hi, 0, 0, 0, 0, 0]
 }
 
-/// Parse block download initiate response from server (CS=0xA4).
-/// Returns `Some(blksize)` where blksize is the number of segments per block (1-127).
-pub fn decode_block_download_initiate_response(data: &[u8]) -> Option<u8> {
+/// Parse block download initiate response from server (CS=0xA0 or 0xA4).
+///
+/// The server response has scs=101 (bits 7-5), ss=00 (bits 1-0); bit 2 is the
+/// server CRC-support flag: `0xA4` = CRC supported, `0xA0` = CRC not supported.
+/// Returns `Some((blksize, crc_supported))` where `blksize` is the server's
+/// requested number of segments per block. Per CiA 301 this is 1-127, but some
+/// servers return `0` to mean "use your own default"; callers must treat a
+/// returned `0` as "choose a default block size" rather than an error.
+pub fn decode_block_download_initiate_response(data: &[u8]) -> Option<(u8, bool)> {
     if data.len() < 8 {
         return None;
     }
     let cs = data[0];
-    // scs=10100, server response to initiate download
-    if cs != 0xA4 {
+    // Match scs=101, reserved bits 4-3 = 0 and ss=00, ignoring only the
+    // CRC-support bit (bit 2). Mask 0xFB clears just bit 2, so 0xA0/0xA4 both
+    // match while reserved/invalid initiate responses are rejected.
+    if cs & 0xFB != 0xA0 {
         return None;
     }
+    let crc_supported = cs & 0x04 != 0;
     let blksize = data[4]; // Server's requested block size
-    Some(blksize)
+    Some((blksize, crc_supported))
 }
 
 /// Parse block download sub-block response from server (CS=0xA2).
@@ -1033,9 +1042,13 @@ mod tests {
 
     #[test]
     fn decode_block_download_initiate_response_valid() {
-        let data = [0xA4, 0, 0, 0, 64, 0, 0, 0]; // blksize=64
-        let blksize = decode_block_download_initiate_response(&data);
-        assert_eq!(blksize, Some(64));
+        let data = [0xA4, 0, 0, 0, 64, 0, 0, 0]; // blksize=64, CRC supported
+        let result = decode_block_download_initiate_response(&data);
+        assert_eq!(result, Some((64, true)));
+
+        let data_no_crc = [0xA0, 0, 0, 0, 16, 0, 0, 0]; // blksize=16, no CRC
+        let result_no_crc = decode_block_download_initiate_response(&data_no_crc);
+        assert_eq!(result_no_crc, Some((16, false)));
     }
 
     #[test]
