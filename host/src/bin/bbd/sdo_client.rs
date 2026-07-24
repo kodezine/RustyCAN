@@ -236,10 +236,16 @@ impl SdoClient {
     pub fn read_u32(&mut self, index: u16, subindex: u8) -> Result<u32, SdoError> {
         self.drain_rx();
         self.send(encode_upload_request(index, subindex))?;
-        // Accept only an upload initiate response (SCS=2); skip stale replies
-        // (e.g. a leftover 0xA2 block ack or 0x43 status reply from a prior
-        // interrupted transfer) until the real reply arrives or we time out.
-        let resp = self.recv_response_matching(|r| r[0] & 0xE0 == 0x40)?;
+        // Accept only an upload initiate response (SCS=2) for *this* object.
+        // Besides the SCS bits, match the echoed multiplexer (index in bytes
+        // 1-2, subindex in byte 3) so a stale reply for a different object on
+        // the same COB-ID (e.g. a leftover 0xA2 block ack or 0x43 status reply
+        // from a prior interrupted transfer) is skipped until the real reply
+        // arrives or we time out.
+        let [idx_lo, idx_hi] = index.to_le_bytes();
+        let resp = self.recv_response_matching(|r| {
+            r[0] & 0xE0 == 0x40 && r[1] == idx_lo && r[2] == idx_hi && r[3] == subindex
+        })?;
         let cs = resp[0];
 
         // Expedited: SCS=2 (bits 7-5 = 010), e=1 (bit 1 set)
@@ -286,8 +292,14 @@ impl SdoClient {
     pub fn read_string(&mut self, index: u16, subindex: u8) -> Result<String, SdoError> {
         self.drain_rx();
         self.send(encode_upload_request(index, subindex))?;
-        // Accept only an upload initiate response (SCS=2); skip stale replies.
-        let resp = self.recv_response_matching(|r| r[0] & 0xE0 == 0x40)?;
+        // Accept only an upload initiate response (SCS=2) for *this* object,
+        // matching the echoed multiplexer (index in bytes 1-2, subindex in
+        // byte 3) so a stale reply for a different object on the same COB-ID is
+        // skipped.
+        let [idx_lo, idx_hi] = index.to_le_bytes();
+        let resp = self.recv_response_matching(|r| {
+            r[0] & 0xE0 == 0x40 && r[1] == idx_lo && r[2] == idx_hi && r[3] == subindex
+        })?;
         let cs = resp[0];
 
         // Expedited: e=1 (bit 1 set)
