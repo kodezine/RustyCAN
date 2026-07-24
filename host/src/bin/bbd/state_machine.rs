@@ -443,11 +443,20 @@ fn wait_bootloader_active(
 ) -> Result<u32, DownloadError> {
     let deadline = std::time::Instant::now() + APP_START_TIMEOUT;
     loop {
-        if let Ok(dev_type) = client.read_u32(OBJ_DEVICE_TYPE, 0) {
-            if device_type_is_bootloader(dev_type, cfg.action) {
-                return Ok(dev_type);
+        match client.read_u32(OBJ_DEVICE_TYPE, 0) {
+            Ok(dev_type) => {
+                if device_type_is_bootloader(dev_type, cfg.action) {
+                    return Ok(dev_type);
+                }
+                // Application still running — the reset has not completed yet.
             }
-            // Application still running — the reset has not completed yet.
+            // Expected transients while the node resets and re-initialises its
+            // CAN controller: keep polling until the deadline.
+            Err(SdoError::Timeout) | Err(SdoError::Adapter(AdapterError::Disconnected)) => {}
+            // A real SDO abort / protocol / hard adapter error is not part of the
+            // reset handshake — surface it immediately instead of masking it
+            // behind the generic bootloader-timeout after the full window.
+            Err(e) => return Err(DownloadError::Sdo(e)),
         }
         if std::time::Instant::now() >= deadline {
             return Err(DownloadError::BootloaderTimeout(
@@ -470,14 +479,21 @@ fn wait_bootloader_active(
 fn wait_app_running(client: &mut SdoClient, cfg: &DownloadConfig) -> Result<u32, DownloadError> {
     let deadline = std::time::Instant::now() + APP_START_TIMEOUT;
     loop {
-        if let Ok(dev_type) = client.read_u32(OBJ_DEVICE_TYPE, 0) {
-            if !device_type_is_bootloader(dev_type, cfg.action) {
-                return Ok(dev_type);
+        match client.read_u32(OBJ_DEVICE_TYPE, 0) {
+            Ok(dev_type) => {
+                if !device_type_is_bootloader(dev_type, cfg.action) {
+                    return Ok(dev_type);
+                }
+                // Still the bootloader — the app has not taken over yet.
             }
-            // Still the bootloader — the app has not taken over yet.
+            // Expected transients during the bootloader→application handover:
+            // keep polling until the deadline.
+            Err(SdoError::Timeout) | Err(SdoError::Adapter(AdapterError::Disconnected)) => {}
+            // Any other error (SDO abort, protocol, hard adapter failure) is a
+            // genuine problem — propagate it immediately rather than hiding it
+            // behind the generic app-start timeout.
+            Err(e) => return Err(DownloadError::Sdo(e)),
         }
-        // Otherwise a transient timeout/abort/protocol/adapter error during the
-        // handover — fall through and retry until the deadline.
         if std::time::Instant::now() >= deadline {
             return Err(DownloadError::AppStartFailed);
         }
