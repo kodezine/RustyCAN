@@ -4959,7 +4959,14 @@ mod tests {
                 });
             });
             harness.run();
-            harness.snapshot("connect_adapter_selector_socketcan");
+            // Baselines are generated on Fedora; CI renders on Ubuntu. Text
+            // anti-aliasing (esp. the \u{2605} glyph) differs slightly between
+            // distros, so allow a small Linux-only pixel budget.
+            harness.snapshot_options(
+                "connect_adapter_selector_socketcan",
+                &egui_kittest::SnapshotOptions::new()
+                    .failed_pixel_count_threshold(egui_kittest::OsThreshold::new(0).linux(400)),
+            );
         }
 
         /// Port row as rendered when SocketCAN is the active adapter:
@@ -4982,7 +4989,13 @@ mod tests {
                     });
             });
             harness.run();
-            harness.snapshot("connect_port_row_socketcan");
+            // See adapter-selector test: tolerate minor cross-distro text AA
+            // differences between the Fedora baseline and the Ubuntu CI runner.
+            harness.snapshot_options(
+                "connect_port_row_socketcan",
+                &egui_kittest::SnapshotOptions::new()
+                    .failed_pixel_count_threshold(egui_kittest::OsThreshold::new(0).linux(100)),
+            );
         }
     }
 }

@@ -16,7 +16,7 @@ use crate::adapters::{open_adapter, probe_adapter_kind, AdapterKind};
 
 use crate::app::{CanEvent, SdoLogEntry};
 use crate::canopen::{
-    self, classify_frame, extract_cob_id,
+    self, classify_frame, extract_cob_id, full_can_id,
     nmt::{decode_heartbeat, decode_nmt_command, encode_nmt_command, NmtCommand},
     pdo::PdoDecoder,
     sdo::{
@@ -103,7 +103,7 @@ fn sniff_kind(cob_id: u16) -> &'static str {
         FrameType::Sync => "SYNC",
         FrameType::Emergency(_) => "EMCY",
         FrameType::Tpdo(_, _) | FrameType::Rpdo(_, _) => "PDO",
-        FrameType::SdoResponse(_) | FrameType::SdoRequest(_) => "SDO_READ",
+        FrameType::SdoResponse(_) | FrameType::SdoRequest(_) => "SDO",
         FrameType::Heartbeat(_) => "NMT_STATE",
         FrameType::Unknown(_) => "RAW_FRAME",
     }
@@ -1083,7 +1083,7 @@ fn recv_loop(
                 port: channel,
             });
             let _ = sniff_tx.try_send(SniffTap {
-                cob_id: cob_id as u32,
+                cob_id: full_can_id(&frame),
                 data: data.to_vec(),
                 is_tx: true,
                 kind: "TX",
@@ -1103,7 +1103,7 @@ fn recv_loop(
 
         // Live sniffer tap: every data frame, before decode (bounded, lossy).
         let _ = sniff_tx.try_send(SniffTap {
-            cob_id: cob_id as u32,
+            cob_id: full_can_id(&frame),
             data: data.to_vec(),
             is_tx: false,
             kind: sniff_kind(cob_id),

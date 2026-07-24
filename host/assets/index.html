@@ -667,11 +667,20 @@ function pushLogRow(ev) {
   row.dataset.detail = detail;
   row.dataset.raw = rawStr;
   const shown = activeFilter === 'RAW' ? rawStr : detail;
-  row.innerHTML =
-    `<span class="e-ts">${fmtTime(ev.ts)}</span>` +
-    `<span class="e-type">${ev.type}</span>` +
-    `<span class="e-node">${nodeLabel}</span>` +
-    `<span class="e-detail" title="${shown.replace(/"/g, '&quot;')}">${shown}</span>`;
+
+  // Build the row with DOM nodes and textContent so untrusted event fields
+  // (e.g. message/signal names in `detail`) can never inject markup (XSS).
+  const mkSpan = (cls, text, title) => {
+    const s = document.createElement('span');
+    s.className = cls;
+    s.textContent = text;
+    if (title !== undefined) s.title = title;
+    return s;
+  };
+  row.appendChild(mkSpan('e-ts', fmtTime(ev.ts)));
+  row.appendChild(mkSpan('e-type', ev.type));
+  row.appendChild(mkSpan('e-node', nodeLabel));
+  row.appendChild(mkSpan('e-detail', shown, shown));
 
   eventLog.prepend(row);
   totalLogRows++;

@@ -174,8 +174,9 @@ impl SnifferModel {
         if let Some(now) = highlight_now {
             let n = bytes.len().min(MAX_BYTES);
             for (i, &nb) in bytes.iter().take(n).enumerate() {
-                let old = row.bytes.get(i).copied().unwrap_or(0);
-                if old != nb {
+                // Compare as Option so a first-seen byte (no prior value) is
+                // always highlighted, including a new value of 0x00.
+                if row.bytes.get(i).copied() != Some(nb) {
                     row.changed[i] = now;
                 }
             }
@@ -453,7 +454,7 @@ pub fn parse_byte_fields(fields: &[String]) -> Result<Vec<u8>, String> {
         if t.is_empty() {
             break;
         }
-        let b = u8::from_str_radix(t.trim_start_matches("0x"), 16)
+        let b = u8::from_str_radix(t.trim_start_matches("0x").trim_start_matches("0X"), 16)
             .map_err(|_| format!("invalid byte '{t}'"))?;
         out.push(b);
     }

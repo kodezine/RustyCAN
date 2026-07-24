@@ -47,7 +47,7 @@ The GUI window opens immediately. See [Building from Source](.readme/building.md
 - ⏱️ **Hardware timestamps** — 100 ns-precision timestamps latched at frame SOF by FDCAN RXTS hardware (KCAN only)
 - 💓 **NMT monitoring & control** — Live node states with broadcast/per-node commands
 - 📊 **PDO & SDO decoding** — Live signal values with EDS support (optional)
-- 🔎 **CAN Sniffer** — live aggregated-by-ID trace (Time · CAN ID · Type · DLC · bytes · count) with red change-highlighting, a decoded-value inspector, and a hex sender supporting multiple independent periodic messages (transmitted on a dedicated, jitter-free thread)
+- � **CAN Sniffer** — live aggregated-by-ID trace (Time · CAN ID · Type · DLC · bytes · count) with red change-highlighting, a decoded-value inspector, and a hex sender supporting multiple independent periodic messages (transmitted on a dedicated, jitter-free thread)
 - 📈 **Dockable plots** — real-time signal charts, either as an in-window tab or a detachable second window
 - 🚗 **DBC signal decoding** — Full DBC support alongside CANopen
 - 📝 **JSONL logging** — Every RX **and TX** frame logged with structured JSON
