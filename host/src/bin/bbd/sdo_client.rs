@@ -360,7 +360,13 @@ impl SdoClient {
         let frame = encode_download_expedited(index, subindex, &[value])
             .ok_or_else(|| SdoError::Protocol("expedited download data > 4 bytes".into()))?;
         self.send(frame)?;
-        let resp = self.recv_response_matching(|r| is_download_initiate_ack(r))?;
+        // Match the echoed multiplexer (index in bytes 1-2, subindex in byte 3)
+        // as well as the 0x60 command specifier so a stale download-ack for a
+        // different object on the same COB-ID is not mis-associated.
+        let [idx_lo, idx_hi] = index.to_le_bytes();
+        let resp = self.recv_response_matching(|r| {
+            is_download_initiate_ack(r) && r[1] == idx_lo && r[2] == idx_hi && r[3] == subindex
+        })?;
         if !is_download_initiate_ack(&resp) {
             return Err(SdoError::Protocol(format!(
                 "expected download ack (0x60), got 0x{:02X}",
@@ -384,7 +390,12 @@ impl SdoClient {
             subindex,
             data.len() as u32,
         ))?;
-        let resp = self.recv_response_matching(|r| is_download_initiate_ack(r))?;
+        // Match the echoed multiplexer as well as the 0x60 command specifier so
+        // a stale ack for a different object on the same COB-ID is skipped.
+        let [idx_lo, idx_hi] = index.to_le_bytes();
+        let resp = self.recv_response_matching(|r| {
+            is_download_initiate_ack(r) && r[1] == idx_lo && r[2] == idx_hi && r[3] == subindex
+        })?;
         if !is_download_initiate_ack(&resp) {
             return Err(SdoError::Protocol(format!(
                 "segmented initiate ack expected (0x60), got 0x{:02X}",
@@ -572,7 +583,12 @@ impl SdoClient {
             let frame = encode_download_expedited(index, subindex, data)
                 .ok_or_else(|| SdoError::Protocol("expedited data > 4 bytes".into()))?;
             self.send(frame)?;
-            let resp = self.recv_response_matching(|r| is_download_initiate_ack(r))?;
+            // Match the echoed multiplexer as well as the 0x60 command specifier
+            // so a stale ack for a different object on the same COB-ID is skipped.
+            let [idx_lo, idx_hi] = index.to_le_bytes();
+            let resp = self.recv_response_matching(|r| {
+                is_download_initiate_ack(r) && r[1] == idx_lo && r[2] == idx_hi && r[3] == subindex
+            })?;
             if !is_download_initiate_ack(&resp) {
                 return Err(SdoError::Protocol(format!(
                     "expected download ack (0x60), got 0x{:02X}",
