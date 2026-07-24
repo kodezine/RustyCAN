@@ -439,8 +439,18 @@ impl SdoClient {
             data.len() as u32,
             true, // CRC enabled
         ))?;
-        let resp =
-            self.recv_response_matching(|r| decode_block_download_initiate_response(r).is_some())?;
+        // The block-initiate response echoes the multiplexer (index in bytes
+        // 1-2, subindex in byte 3); match it alongside the CS so a stale
+        // initiate response for a different object on the same COB-ID is
+        // skipped. (The later sub-block/end responses carry only ackseq/blksize
+        // /CRC, so there is no multiplexer to match on those.)
+        let [idx_lo, idx_hi] = index.to_le_bytes();
+        let resp = self.recv_response_matching(|r| {
+            decode_block_download_initiate_response(r).is_some()
+                && r[1] == idx_lo
+                && r[2] == idx_hi
+                && r[3] == subindex
+        })?;
         let (mut blksize, crc_supported) = decode_block_download_initiate_response(&resp)
             .ok_or_else(|| {
                 SdoError::Protocol(format!(
