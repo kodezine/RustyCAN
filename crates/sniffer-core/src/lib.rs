@@ -200,8 +200,9 @@ impl SnifferModel {
         self.apply(id, bytes, "TX", "sent", Some(now), true);
         self.tx_count += 1;
         self.status = Some(format!(
-            "TX #{} 0x{id:03X} [{}]",
+            "TX #{} {} [{}]",
             self.tx_count,
+            fmt_can_id(id),
             hex_join(bytes)
         ));
     }
@@ -226,7 +227,7 @@ impl SnifferModel {
             last_sent: 0.0,
             count: 0,
         });
-        self.status = Some(format!("Added periodic 0x{id:03X}"));
+        self.status = Some(format!("Added periodic {}", fmt_can_id(id)));
     }
 
     pub fn remove_periodic(&mut self, index: usize) {
@@ -434,6 +435,17 @@ pub fn short_type(typ: &str) -> &str {
         "ADAPTER_DISCONNECTED" => "DISC",
         "TX" => "TX",
         other => other,
+    }
+}
+
+/// Format a CAN identifier for display: 3-digit hex for standard (11-bit)
+/// IDs and 8-digit hex for extended (29-bit) IDs, so extended frames aren't
+/// shown with a misleading COB-ID-style width.
+pub fn fmt_can_id(id: u32) -> String {
+    if id <= 0x7FF {
+        format!("0x{id:03X}")
+    } else {
+        format!("0x{id:08X}")
     }
 }
 

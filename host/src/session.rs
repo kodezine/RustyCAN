@@ -1009,6 +1009,19 @@ fn recv_loop(
                                     // Log the transmit so Tx frames appear in the
                                     // trace even on adapters that don't echo (PEAK).
                                     logger.log_tx(Utc::now(), can_id, payload);
+                                    // Echoing adapters (KCAN) re-surface this frame
+                                    // to the sniffer via the TX-echo recv branch;
+                                    // for non-echoing adapters (PEAK, SocketCAN)
+                                    // emit the tap here so live aggregation still
+                                    // sees host-initiated TX. Keyed by the full ID.
+                                    if !adapter.echoes_tx() {
+                                        let _ = sniff_tx.try_send(SniffTap {
+                                            cob_id: can_id,
+                                            data: payload.to_vec(),
+                                            is_tx: true,
+                                            kind: "TX",
+                                        });
+                                    }
                                 }
                                 Err(e) => {
                                     eprintln!("SendRaw error (CAN ID 0x{can_id:X}): {e:?}");
@@ -1102,11 +1115,17 @@ fn recv_loop(
         logger.set_hw_timestamp(hardware_timestamp_ns);
 
         // Live sniffer tap: every data frame, before decode (bounded, lossy).
+        // Extended IDs carry no CANopen meaning, so classify them as RAW rather
+        // than mislabelling based on their lower 11 bits.
+        let sniff_type = match frame.id() {
+            embedded_can::Id::Standard(_) => sniff_kind(cob_id),
+            embedded_can::Id::Extended(_) => "RAW_FRAME",
+        };
         let _ = sniff_tx.try_send(SniffTap {
             cob_id: full_can_id(&frame),
             data: data.to_vec(),
             is_tx: false,
-            kind: sniff_kind(cob_id),
+            kind: sniff_type,
         });
 
         // Track whether this frame was logged by any path

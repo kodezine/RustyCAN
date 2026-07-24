@@ -7,7 +7,7 @@
 
 use egui::Color32;
 use sniffer_core::{
-    parse_byte_fields, parse_hex_u32, short_type, PeriodicMsg, Replay, SnifferBackend,
+    fmt_can_id, parse_byte_fields, parse_hex_u32, short_type, PeriodicMsg, Replay, SnifferBackend,
     SnifferModel, HIGHLIGHT_SECS,
 };
 
@@ -20,7 +20,7 @@ const BIT_ON: Color32 = Color32::from_rgb(0x3d, 0xd6, 0x8c);
 const FONT: f32 = 12.0;
 const HFONT: f32 = 12.0; // header font (same size as body)
 const COL_TIME: f32 = 90.0; // fits "HH:MM:SS.mmm"
-const COL_ID: f32 = 48.0;
+const COL_ID: f32 = 88.0; // fits extended "0x1FFFFFFF" (10 chars)
 const COL_TYPE: f32 = 42.0;
 const COL_DLC: f32 = 20.0;
 const COL_BYTE: f32 = 22.0;
@@ -212,9 +212,7 @@ pub fn table(ui: &mut egui::Ui, model: &mut SnifferModel, now: f64) {
                         .truncate(),
                     );
 
-                    let id_txt = egui::RichText::new(format!("0x{id:03X}"))
-                        .monospace()
-                        .size(FONT);
+                    let id_txt = egui::RichText::new(fmt_can_id(id)).monospace().size(FONT);
                     let id_txt = if row.is_tx {
                         id_txt.color(TX_COLOR)
                     } else {
@@ -334,7 +332,7 @@ pub fn inspector(ui: &mut egui::Ui, model: &mut SnifferModel, replay: Option<&Re
         .spacing([12.0, 4.0])
         .show(ui, |ui| {
             ui.label("Selected");
-            ui.monospace(format!("0x{:03X}  B{}", d.id, d.byte_index));
+            ui.monospace(format!("{}  B{}", fmt_can_id(d.id), d.byte_index));
             ui.end_row();
             ui.label("Binary byte");
             ui.monospace(format!("{:08b}", d.byte));
@@ -416,7 +414,7 @@ pub fn send_bar(
             ui.horizontal(|ui| {
                 let m: &mut PeriodicMsg = &mut model.periodics[i];
                 ui.checkbox(&mut m.enabled, "");
-                ui.monospace(format!("0x{:03X}", m.id));
+                ui.monospace(fmt_can_id(m.id));
                 ui.monospace(format!("[{}]", hex8(&m.bytes)));
                 ui.add(
                     egui::DragValue::new(&mut m.period_ms)
