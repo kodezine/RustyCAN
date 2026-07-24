@@ -400,8 +400,10 @@ fn device_type_is_bootloader(dev_type: u32, action: ActionType) -> bool {
     }
 }
 
-/// Maximum wall-clock time to wait for the application to start responding on
-/// object 0x1000 after a start command.
+/// Maximum wall-clock time to wait for a node to start responding on object
+/// 0x1000 after a program-control command. Used both when waiting for the
+/// application to come up and when waiting for the bootloader to re-enter
+/// (both poll 0x1000).
 const APP_START_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// Issue a program-control command (0x1F51) that is expected to trigger a mode

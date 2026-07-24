@@ -428,6 +428,9 @@ impl SdoClient {
         if blksize == 0 {
             blksize = DEFAULT_BLOCK_SIZE;
         }
+        // Per CiA 301, blksize is 1-127 segments. Clamp defensively so a
+        // misbehaving server cannot push us to emit invalid sequence numbers.
+        blksize = blksize.min(127);
 
         // ── Sub-blocks ───────────────────────────────────────────────────────
         // Send the payload as a sequence of sub-blocks of up to `blksize`
@@ -484,6 +487,11 @@ impl SdoClient {
             // Advance past the segments the server confirmed. When `ackseq` is
             // less than we sent, the remaining segments were lost on the wire and
             // are retransmitted on the next iteration from this offset.
+            //
+            // Per CiA 301 every sub-block is numbered starting at seqno 1, so
+            // "retransmission" means continuing from the acknowledged byte offset
+            // in a fresh sub-block; sequence numbers are intentionally not
+            // preserved across sub-blocks.
             offset = block_start + ackseq as usize * 7;
 
             // Guard against a livelock where the server keeps acknowledging zero
@@ -500,7 +508,7 @@ impl SdoClient {
             }
 
             blksize = if new_blksize > 0 {
-                new_blksize
+                new_blksize.min(127)
             } else {
                 DEFAULT_BLOCK_SIZE
             };

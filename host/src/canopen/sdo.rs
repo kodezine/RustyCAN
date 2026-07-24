@@ -582,8 +582,10 @@ pub fn decode_block_download_initiate_response(data: &[u8]) -> Option<(u8, bool)
         return None;
     }
     let cs = data[0];
-    // Match scs=101 and ss=00, ignoring the CRC-support bit (bit 2).
-    if cs & 0xE3 != 0xA0 {
+    // Match scs=101, reserved bits 4-3 = 0 and ss=00, ignoring only the
+    // CRC-support bit (bit 2). Mask 0xFB clears just bit 2, so 0xA0/0xA4 both
+    // match while reserved/invalid initiate responses are rejected.
+    if cs & 0xFB != 0xA0 {
         return None;
     }
     let crc_supported = cs & 0x04 != 0;
