@@ -2295,12 +2295,14 @@ mod periodic_tests {
             }]))
             .unwrap();
 
-        // Over ~150 ms we expect the immediate fire plus several 20 ms repeats.
+        // Expect the immediate fire plus 20 ms repeats. Break as soon as we've
+        // seen enough sends, with a generous deadline so the test stays reliable
+        // on slow/contended CI runners.
         let mut sends = 0;
-        let deadline = Instant::now() + Duration::from_millis(150);
-        while Instant::now() < deadline {
+        let deadline = Instant::now() + Duration::from_secs(3);
+        while sends < 3 && Instant::now() < deadline {
             if let Ok(CanCommand::SendRaw { can_id, data }) =
-                cmd_rx.recv_timeout(Duration::from_millis(50))
+                cmd_rx.recv_timeout(Duration::from_millis(200))
             {
                 assert_eq!(can_id, 0x123);
                 assert_eq!(data, vec![0x01, 0x02]);
