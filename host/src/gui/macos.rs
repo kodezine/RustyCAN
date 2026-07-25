@@ -82,8 +82,11 @@ extern "C-unwind" fn noop_remove_observer(
 /// Install no-op KVO overrides on the `WinitView` class to prevent the
 /// `_NSTouchBarFinder` `NSRangeException` crash.
 ///
-/// A no-op if the `WinitView` class is not (yet) registered. Safe to call more
-/// than once: `class_addMethod` leaves an already-installed override untouched.
+/// If the `WinitView` class is not (yet) registered the crash mitigation cannot
+/// be installed: this panics in debug builds (via `debug_assert!`) so the
+/// regression is caught during development, and is a no-op in release builds.
+/// Safe to call more than once: `class_addMethod` leaves an already-installed
+/// override untouched.
 pub(super) fn suppress_touch_bar_kvo() {
     // SAFETY: we look up the `WinitView` class by name and, if present, attach
     // no-op method implementations whose signatures match the standard KVO
@@ -91,6 +94,14 @@ pub(super) fn suppress_touch_bar_kvo() {
     // the no-ops never dereference.
     unsafe {
         let cls = objc_getClass(c"WinitView".as_ptr()) as *mut AnyClass;
+        // If `WinitView` is renamed or not yet registered when this runs, the
+        // crash mitigation is silently skipped. Fail loudly in debug builds so
+        // such a regression is caught during development, while leaving release
+        // behavior unchanged (early return below).
+        debug_assert!(
+            !cls.is_null(),
+            "WinitView class not found; Touch Bar KVO crash mitigation not installed"
+        );
         if cls.is_null() {
             return;
         }
