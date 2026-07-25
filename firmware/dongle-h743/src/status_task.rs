@@ -7,17 +7,13 @@
 
 use embassy_futures::join::join;
 use embassy_stm32::gpio::Output;
-use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
-use embassy_sync::channel::Channel;
 use embassy_time::{Duration, Timer};
-
-use kcan_protocol::frame::KCanFrame;
 
 #[embassy_executor::task]
 pub async fn status_task(
     mut led_heartbeat: Output<'static>,
     mut led_usb: Output<'static>,
-    _can_to_usb: &'static Channel<CriticalSectionRawMutex, KCanFrame, 32>,
+    _can_to_usb: &'static crate::CanToUsbChannel,
 ) {
     lcd_terminal::boot_log!(
         crate::display_task::LOG_CHANNEL,

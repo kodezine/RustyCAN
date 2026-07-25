@@ -165,5 +165,35 @@ fn format_event(event: &CanEvent) -> Option<String> {
         }
         CanEvent::AdapterReconnected => Some("ADAPTER RECONNECTED — session resumed".into()),
         CanEvent::FirmwareVersion(maj, min, pat) => Some(format!("FW VERSION  v{maj}.{min}.{pat}")),
+        CanEvent::Xcp(entry) => {
+            let detail = entry
+                .detail
+                .as_ref()
+                .map(|d| format!("  [{d}]"))
+                .unwrap_or_default();
+            Some(format!("XCP    {:?}  {}{detail}", entry.dir, entry.summary))
+        }
+        CanEvent::XcpDaq { pid, samples } => {
+            let sigs: Vec<_> = samples
+                .iter()
+                .map(|s| {
+                    let label = s
+                        .name
+                        .clone()
+                        .unwrap_or_else(|| format!("0x{:08X}", s.address));
+                    let v = s.value.clone().unwrap_or_else(|| "?".into());
+                    format!("{label}={v}")
+                })
+                .collect();
+            Some(format!("XCPDAQ pid 0x{pid:02X}  {}", sigs.join("  ")))
+        }
+        CanEvent::XcpConnected(connected) => Some(format!(
+            "XCP    {}",
+            if *connected {
+                "CONNECTED"
+            } else {
+                "DISCONNECTED"
+            }
+        )),
     }
 }
