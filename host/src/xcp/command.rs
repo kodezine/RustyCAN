@@ -128,13 +128,23 @@ pub fn encode_short_upload(n: u8, address: u32, addr_ext: u8, byte_order: ByteOr
 
 /// Encode a `DOWNLOAD` command writing `data` to the current MTA.
 ///
-/// The element count is `data.len()`; the caller is responsible for keeping the
-/// payload within the negotiated `MAX_CTO` (typically ≤ 6 data bytes on
-/// classic CAN).
+/// The element count is `data.len()` (i.e. byte address granularity); the caller
+/// is responsible for keeping the payload within the negotiated `MAX_CTO`
+/// (typically ≤ 6 data bytes on classic CAN). For WORD/DWORD granularity slaves
+/// use [`encode_download_n`] with an explicit element count.
 pub fn encode_download(data: &[u8]) -> Vec<u8> {
+    encode_download_n(data.len() as u8, data)
+}
+
+/// Encode a `DOWNLOAD` command with an explicit element count `n`.
+///
+/// XCP counts `DOWNLOAD` payloads in address-granularity *elements*, not bytes;
+/// callers on WORD/DWORD-granularity slaves must pass the element count (bytes /
+/// AG) so the length field matches the slave's expectation.
+pub fn encode_download_n(n: u8, data: &[u8]) -> Vec<u8> {
     let mut v = Vec::with_capacity(2 + data.len());
     v.push(DOWNLOAD);
-    v.push(data.len() as u8);
+    v.push(n);
     v.extend_from_slice(data);
     v
 }
@@ -494,6 +504,15 @@ mod tests {
     #[test]
     fn download_prefixes_length() {
         assert_eq!(encode_download(&[0xAA, 0xBB]), vec![0xF0, 0x02, 0xAA, 0xBB]);
+    }
+
+    #[test]
+    fn download_n_uses_explicit_element_count() {
+        // WORD granularity: 4 bytes = 2 elements, so n = 2 (not 4).
+        assert_eq!(
+            encode_download_n(2, &[0xAA, 0xBB, 0xCC, 0xDD]),
+            vec![0xF0, 0x02, 0xAA, 0xBB, 0xCC, 0xDD]
+        );
     }
 
     #[test]

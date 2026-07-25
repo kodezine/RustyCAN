@@ -744,12 +744,18 @@ fn handle_xcp_frame(
     pending_xcp: &mut Option<PendingXcp>,
     xcp_byte_order: &mut XcpByteOrder,
     xcp_max_cto: &mut u8,
+    xcp_ag: &mut u8,
     xcp_daq: &mut DaqTracker,
     xcp_daq_start_pending: &mut Option<u16>,
 ) {
     let cro_id = xr.config.cro_id;
+    // Number of address-granularity elements to request in one UPLOAD so the
+    // response fits MAX_CTO. `remaining` is a byte count; UPLOAD `n` is elements.
     let upload_chunk = |remaining: u16| -> u8 {
-        remaining.min((xcp_max_cto.saturating_sub(1)).max(1) as u16) as u8
+        let ag = (*xcp_ag).max(1) as u16;
+        let max_elems = (((*xcp_max_cto).saturating_sub(1)).max(1) as u16 / ag).max(1);
+        let elems_remaining = remaining.div_ceil(ag);
+        elems_remaining.min(max_elems) as u8
     };
     match ft {
         // ── Command (master → slave): passive decode + DAQ config tracking ──
@@ -797,13 +803,16 @@ fn handle_xcp_frame(
                     if let Some(cr) = xcpcmd::decode_connect_response(data) {
                         *xcp_byte_order = cr.byte_order;
                         *xcp_max_cto = cr.max_cto.max(1);
+                        *xcp_ag = cr.address_granularity.bytes();
                         let _ = tx.send(CanEvent::XcpConnected(true));
                         let _ = tx.send(CanEvent::Xcp(XcpLogEntry {
                             ts,
                             dir: XcpDir::Response,
                             summary: format!(
-                                "CONNECT ok (max_cto={}, {:?})",
-                                cr.max_cto, cr.byte_order
+                                "CONNECT ok (max_cto={}, ag={}B, {:?})",
+                                cr.max_cto,
+                                cr.address_granularity.bytes(),
+                                cr.byte_order
                             ),
                             detail: None,
                         }));
@@ -839,24 +848,32 @@ fn handle_xcp_frame(
                 XcpStep::MtaThen(next) => match *next {
                     XcpStep::SendUpload { acc, remaining } => {
                         let n = upload_chunk(remaining);
-                        send_xcp(adapter, cro_id, &xcpcmd::encode_upload(n), logger, sniff_tx);
-                        *pending_xcp = Some(PendingXcp {
-                            step: XcpStep::Upload { acc, remaining },
-                            started_at: Instant::now(),
-                        });
+                        if send_xcp(adapter, cro_id, &xcpcmd::encode_upload(n), logger, sniff_tx) {
+                            *pending_xcp = Some(PendingXcp {
+                                step: XcpStep::Upload { acc, remaining },
+                                started_at: Instant::now(),
+                            });
+                        } else {
+                            xcp_send_failed(tx, ts, "UPLOAD");
+                        }
                     }
                     XcpStep::SendDownload { data: dl } => {
-                        send_xcp(
+                        let ag = (*xcp_ag).max(1) as usize;
+                        let n = dl.len().div_ceil(ag) as u8;
+                        if send_xcp(
                             adapter,
                             cro_id,
-                            &xcpcmd::encode_download(&dl),
+                            &xcpcmd::encode_download_n(n, &dl),
                             logger,
                             sniff_tx,
-                        );
-                        *pending_xcp = Some(PendingXcp {
-                            step: XcpStep::DownloadAck,
-                            started_at: Instant::now(),
-                        });
+                        ) {
+                            *pending_xcp = Some(PendingXcp {
+                                step: XcpStep::DownloadAck,
+                                started_at: Instant::now(),
+                            });
+                        } else {
+                            xcp_send_failed(tx, ts, "DOWNLOAD");
+                        }
                     }
                     _ => {}
                 },
@@ -867,14 +884,17 @@ fn handle_xcp_frame(
                     let rem = remaining - take as u16;
                     if rem > 0 && take > 0 {
                         let n = upload_chunk(rem);
-                        send_xcp(adapter, cro_id, &xcpcmd::encode_upload(n), logger, sniff_tx);
-                        *pending_xcp = Some(PendingXcp {
-                            step: XcpStep::Upload {
-                                acc,
-                                remaining: rem,
-                            },
-                            started_at: Instant::now(),
-                        });
+                        if send_xcp(adapter, cro_id, &xcpcmd::encode_upload(n), logger, sniff_tx) {
+                            *pending_xcp = Some(PendingXcp {
+                                step: XcpStep::Upload {
+                                    acc,
+                                    remaining: rem,
+                                },
+                                started_at: Instant::now(),
+                            });
+                        } else {
+                            xcp_send_failed(tx, ts, "UPLOAD");
+                        }
                     } else {
                         let detail = hex_join(&acc);
                         let _ = tx.send(CanEvent::Xcp(XcpLogEntry {
@@ -963,6 +983,17 @@ fn hex_join(bytes: &[u8]) -> String {
         .join(" ")
 }
 
+/// Emit an XCP error log entry when a follow-up master command could not be
+/// transmitted, so the transaction ends visibly instead of appearing to time out.
+fn xcp_send_failed(tx: &mpsc::Sender<CanEvent>, ts: chrono::DateTime<Utc>, cmd: &str) {
+    let _ = tx.send(CanEvent::Xcp(XcpLogEntry {
+        ts,
+        dir: XcpDir::Error,
+        summary: format!("{cmd} send failed"),
+        detail: None,
+    }));
+}
+
 #[allow(clippy::too_many_arguments)]
 #[allow(unused_assignments)]
 fn recv_loop(
@@ -1049,6 +1080,8 @@ fn recv_loop(
     let mut pending_xcp: Option<PendingXcp> = None;
     let mut xcp_byte_order = XcpByteOrder::default();
     let mut xcp_max_cto: u8 = 8;
+    // Address granularity (bytes per element) negotiated in the CONNECT response.
+    let mut xcp_ag: u8 = 1;
     let mut xcp_daq = DaqTracker::new();
     // A DAQ list awaiting its `first_pid` in the next positive response.
     let mut xcp_daq_start_pending: Option<u16> = None;
@@ -1703,6 +1736,7 @@ fn recv_loop(
                 &mut pending_xcp,
                 &mut xcp_byte_order,
                 &mut xcp_max_cto,
+                &mut xcp_ag,
                 &mut xcp_daq,
                 &mut xcp_daq_start_pending,
             );

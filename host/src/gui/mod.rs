@@ -1712,6 +1712,23 @@ fn render_connect(
                     .filter(|(_, count)| *count > 1)
                     .map(|(id, _)| format!("Node ID {} is used more than once", id))
                     .collect();
+
+                // XCP is enabled but the CRO/DTO IDs are unusable — surface why
+                // decoding will be silently disabled instead of leaving the user
+                // to wonder why no XCP frames appear.
+                if form.xcp_enabled
+                    && build_xcp_config(
+                        form.xcp_enabled,
+                        &form.xcp_cro_str,
+                        &form.xcp_dto_str,
+                        &form.xcp_a2l_path,
+                    )
+                    .is_none()
+                {
+                    form.warnings.push(
+                        "XCP is enabled but the CRO/DTO IDs are invalid (must parse, be \u{2264} 0x1FFFFFFF, and differ); XCP decoding will be disabled".to_string(),
+                    );
+                }
                 form.warnings.sort();
             }
 
