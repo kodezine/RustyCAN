@@ -89,6 +89,10 @@ pub struct SniffTap {
     pub is_tx: bool,
     /// Coarse CANopen classification for the sniffer's Type column.
     pub kind: &'static str,
+    /// Wall-clock capture/transmit time, stamped on the recv/send thread so the
+    /// sniffer's Time column reflects when the frame actually occurred rather
+    /// than when the UI happened to drain the channel.
+    pub ts: chrono::DateTime<Utc>,
 }
 
 /// Bounded capacity for the sniff channel. When full, frames are dropped: the
@@ -1008,7 +1012,8 @@ fn recv_loop(
                                 Ok(()) => {
                                     // Log the transmit so Tx frames appear in the
                                     // trace even on adapters that don't echo (PEAK).
-                                    logger.log_tx(Utc::now(), can_id, payload);
+                                    let ts = Utc::now();
+                                    logger.log_tx(ts, can_id, payload);
                                     // Echoing adapters (KCAN) re-surface this frame
                                     // to the sniffer via the TX-echo recv branch;
                                     // for non-echoing adapters (PEAK, SocketCAN)
@@ -1020,6 +1025,7 @@ fn recv_loop(
                                             data: payload.to_vec(),
                                             is_tx: true,
                                             kind: "TX",
+                                            ts,
                                         });
                                     }
                                 }
@@ -1100,6 +1106,7 @@ fn recv_loop(
                 data: data.to_vec(),
                 is_tx: true,
                 kind: "TX",
+                ts,
             });
             continue;
         }
@@ -1126,6 +1133,7 @@ fn recv_loop(
             data: data.to_vec(),
             is_tx: false,
             kind: sniff_type,
+            ts,
         });
 
         // Track whether this frame was logged by any path

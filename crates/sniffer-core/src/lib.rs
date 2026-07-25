@@ -518,21 +518,41 @@ pub mod jsonl {
     }
 
     /// Parse `"2026-06-24T13:21:02.416Z"` → (monotonic secs, `"13:21:02.416"`).
+    ///
+    /// The seconds value is UTC seconds since the Unix epoch, computed with
+    /// real month lengths and leap years, so it stays monotonic across month
+    /// and year boundaries — it drives [`super::Replay::advance`] ordering and
+    /// timing.
     pub fn parse_ts(s: &str) -> (f64, String) {
         let Some((date, time)) = s.split_once('T') else {
             return (0.0, s.to_string());
         };
         let time = time.trim_end_matches('Z');
         let mut dp = date.split('-');
-        let _y = dp.next();
-        let mo = dp.next().and_then(|x| x.parse::<f64>().ok()).unwrap_or(0.0);
-        let day = dp.next().and_then(|x| x.parse::<f64>().ok()).unwrap_or(0.0);
+        let y = dp
+            .next()
+            .and_then(|x| x.parse::<i64>().ok())
+            .unwrap_or(1970);
+        let mo = dp.next().and_then(|x| x.parse::<i64>().ok()).unwrap_or(1);
+        let day = dp.next().and_then(|x| x.parse::<i64>().ok()).unwrap_or(1);
         let mut tp = time.split(':');
         let hh = tp.next().and_then(|x| x.parse::<f64>().ok()).unwrap_or(0.0);
         let mm = tp.next().and_then(|x| x.parse::<f64>().ok()).unwrap_or(0.0);
         let ss = tp.next().and_then(|x| x.parse::<f64>().ok()).unwrap_or(0.0);
-        let secs = ((mo * 31.0 + day) * 24.0 + hh) * 3600.0 + mm * 60.0 + ss;
+        let secs = days_from_civil(y, mo, day) as f64 * 86_400.0 + hh * 3600.0 + mm * 60.0 + ss;
         (secs, time.to_string())
+    }
+
+    /// Days since 1970-01-01 for a proleptic-Gregorian date (Howard Hinnant's
+    /// `days_from_civil`). Correctly accounts for month lengths and leap years
+    /// without pulling in a date/time dependency.
+    fn days_from_civil(y: i64, m: i64, d: i64) -> i64 {
+        let y = if m <= 2 { y - 1 } else { y };
+        let era = if y >= 0 { y } else { y - 399 } / 400;
+        let yoe = y - era * 400; // [0, 399]
+        let doy = (153 * (if m > 2 { m - 3 } else { m + 9 }) + 2) / 5 + d - 1; // [0, 365]
+        let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy; // [0, 146096]
+        era * 146097 + doe - 719468
     }
 
     /// Parse one JSONL line into a [`SniffFrame`] (None for non-frame records).
@@ -681,6 +701,32 @@ mod tests {
     fn skips_session_start() {
         let line = r#"{"ts":"2026-06-24T13:21:02.389Z","type":"session_start","adapter":"PEAK","baud":250000}"#;
         assert!(jsonl::parse_line(line).is_none());
+    }
+
+    #[test]
+    fn parse_ts_monotonic_across_month_and_leap_boundaries() {
+        let secs = |s: &str| jsonl::parse_ts(s).0;
+        let day = 86_400.0;
+        // Consecutive days across a 31→next-month boundary differ by exactly 1 day.
+        assert_eq!(
+            secs("2026-02-01T00:00:00.000Z") - secs("2026-01-31T00:00:00.000Z"),
+            day
+        );
+        // Non-leap February: Feb 28 → Mar 1 is a single day.
+        assert_eq!(
+            secs("2026-03-01T00:00:00.000Z") - secs("2026-02-28T00:00:00.000Z"),
+            day
+        );
+        // Leap year: Feb 29 exists, so Feb 28 → Mar 1 spans two days.
+        assert_eq!(
+            secs("2024-03-01T00:00:00.000Z") - secs("2024-02-28T00:00:00.000Z"),
+            2.0 * day
+        );
+        // Year boundary stays monotonic.
+        assert_eq!(
+            secs("2026-01-01T00:00:00.000Z") - secs("2025-12-31T00:00:00.000Z"),
+            day
+        );
     }
 
     #[test]

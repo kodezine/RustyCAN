@@ -2091,12 +2091,18 @@ fn render_monitor(
     // ── Drain the live sniffer tap into the aggregated sniffer model ──────
     {
         let now = ui.input(|i| i.time);
-        // One wall-clock stamp for the whole batch (frames arrived this frame).
-        let disp = chrono::Local::now().format("%H:%M:%S%.3f").to_string();
         while let Ok(tap) = view.sniff_rx.try_recv() {
+            // Display the frame's own capture/transmit time (stamped on the
+            // recv thread), not the UI-drain time, so the Time column stays
+            // accurate under UI load and gives each frame a distinct stamp.
+            let disp = tap
+                .ts
+                .with_timezone(&chrono::Local)
+                .format("%H:%M:%S%.3f")
+                .to_string();
             let f = sniffer_core::SniffFrame {
                 ts: now,
-                ts_disp: disp.clone(),
+                ts_disp: disp,
                 id: tap.cob_id,
                 typ: tap.kind.to_string(),
                 bytes: tap.data,
