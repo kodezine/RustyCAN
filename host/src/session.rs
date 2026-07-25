@@ -747,6 +747,7 @@ fn handle_xcp_frame(
     xcp_ag: &mut u8,
     xcp_daq: &mut DaqTracker,
     xcp_daq_start_pending: &mut Option<u16>,
+    xcp_passive_connect: &mut bool,
 ) {
     let cro_id = xr.config.cro_id;
     // Number of address-granularity elements to request in one UPLOAD so the
@@ -762,6 +763,12 @@ fn handle_xcp_frame(
         xcp::XcpFrameType::Command => {
             let _ = full_id;
             if let Some(cmd) = xcpcmd::decode_command(data, *xcp_byte_order) {
+                // Remember an observed CONNECT so the following RES can be
+                // decoded as a CONNECT response even when another master on the
+                // bus initiated it (passive negotiation of byte order / AG).
+                if matches!(cmd, xcpcmd::XcpCommand::Connect { .. }) {
+                    *xcp_passive_connect = true;
+                }
                 if let Some(daq) = xcp_daq.on_command(&cmd) {
                     *xcp_daq_start_pending = Some(daq);
                 }
@@ -790,6 +797,30 @@ fn handle_xcp_frame(
                 return;
             }
             let Some(pending) = pending_xcp.take() else {
+                // No transaction of ours is in flight. If we just saw a CONNECT
+                // command on the bus, decode this RES as the CONNECT response so
+                // byte order / address granularity / MAX_CTO are captured for
+                // passive decoding of subsequent multi-byte fields.
+                if *xcp_passive_connect {
+                    *xcp_passive_connect = false;
+                    if let Some(cr) = xcpcmd::decode_connect_response(data) {
+                        *xcp_byte_order = cr.byte_order;
+                        *xcp_max_cto = cr.max_cto.max(1);
+                        *xcp_ag = cr.address_granularity.bytes();
+                        let _ = tx.send(CanEvent::Xcp(XcpLogEntry {
+                            ts,
+                            dir: XcpDir::Response,
+                            summary: format!(
+                                "CONNECT observed (max_cto={}, ag={}B, {:?})",
+                                cr.max_cto,
+                                cr.address_granularity.bytes(),
+                                cr.byte_order
+                            ),
+                            detail: None,
+                        }));
+                        return;
+                    }
+                }
                 let _ = tx.send(CanEvent::Xcp(XcpLogEntry {
                     ts,
                     dir: XcpDir::Response,
@@ -800,6 +831,7 @@ fn handle_xcp_frame(
             };
             match pending.step {
                 XcpStep::Connect => {
+                    *xcp_passive_connect = false;
                     if let Some(cr) = xcpcmd::decode_connect_response(data) {
                         *xcp_byte_order = cr.byte_order;
                         *xcp_max_cto = cr.max_cto.max(1);
@@ -815,6 +847,15 @@ fn handle_xcp_frame(
                                 cr.byte_order
                             ),
                             detail: None,
+                        }));
+                    } else {
+                        // A RES that isn't a well-formed CONNECT response — report
+                        // it so the CONNECT failure is visible rather than silent.
+                        let _ = tx.send(CanEvent::Xcp(XcpLogEntry {
+                            ts,
+                            dir: XcpDir::Error,
+                            summary: "CONNECT failed: malformed response".into(),
+                            detail: Some(hex_join(data)),
                         }));
                     }
                 }
@@ -1100,6 +1141,8 @@ fn recv_loop(
     let mut xcp_daq = DaqTracker::new();
     // A DAQ list awaiting its `first_pid` in the next positive response.
     let mut xcp_daq_start_pending: Option<u16> = None;
+    // A CONNECT command was observed; the next RES is its CONNECT response.
+    let mut xcp_passive_connect = false;
 
     // Monotonic hardware timestamp tracker.
     // The KCAN dongle encodes timestamps as 100 ns units in a u32 that wraps
@@ -1766,6 +1809,7 @@ fn recv_loop(
                 &mut xcp_ag,
                 &mut xcp_daq,
                 &mut xcp_daq_start_pending,
+                &mut xcp_passive_connect,
             );
             continue;
         }
