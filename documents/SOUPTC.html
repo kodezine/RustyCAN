@@ -234,6 +234,41 @@
                     data-bs-placement="left"
                     title="SOUPTC025">3.2 Code Review: EDS and DBC Format Compliance (SOUPTC025)</a>
                 </li>
+                <li>
+                  <a class="dropdown-item text-truncate"
+                    href="#SOUPTC027"
+                    data-bs-toggle="tooltip"
+                    data-bs-placement="left"
+                    title="SOUPTC027">3.3 XCP Transport Routing Decode (SOUPTC027)</a>
+                </li>
+                <li>
+                  <a class="dropdown-item text-truncate"
+                    href="#SOUPTC028"
+                    data-bs-toggle="tooltip"
+                    data-bs-placement="left"
+                    title="SOUPTC028">3.4 XCP Command Codec (SOUPTC028)</a>
+                </li>
+                <li>
+                  <a class="dropdown-item text-truncate"
+                    href="#SOUPTC029"
+                    data-bs-toggle="tooltip"
+                    data-bs-placement="left"
+                    title="SOUPTC029">3.5 XCP DAQ Tracker (SOUPTC029)</a>
+                </li>
+                <li>
+                  <a class="dropdown-item text-truncate"
+                    href="#SOUPTC030"
+                    data-bs-toggle="tooltip"
+                    data-bs-placement="left"
+                    title="SOUPTC030">3.6 A2L Parser (SOUPTC030)</a>
+                </li>
+                <li>
+                  <a class="dropdown-item text-truncate"
+                    href="#SOUPTC031"
+                    data-bs-toggle="tooltip"
+                    data-bs-placement="left"
+                    title="SOUPTC031">3.7 Dongle DAQ-Readiness Build Check (SOUPTC031)</a>
+                </li>
                 </ul>
                 </ul>
             </ul>
@@ -1001,6 +1036,124 @@
 <tr>
 <td>method</td>
 <td>review</td>
+</tr>
+</tbody>
+</table>
+<h2 id="SOUPTC027">3.3 XCP Transport Routing Decode <small>(SOUPTC027)</small></h2>
+<p><strong>Objective:</strong> Verify XCP CRO/DTO classification and slave byte-order handling.</p>
+<p><strong>Test suite:</strong> <code>host/src/xcp/mod.rs</code> unit tests.</p>
+<p><strong>Pass criteria:</strong> All tests pass with exit code 0.</p>
+<p><em>Parent links:</em> <a href="SOUP.html#SOUP026">SOUP026 XCP-on-CAN Transport and CRO/DTO Routing</a></p>
+<table>
+<thead>
+<tr>
+<th>Attribute</th>
+<th>Value</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>method</td>
+<td>automated</td>
+</tr>
+<tr>
+<td>test-command</td>
+<td>cargo test -p rustycan -- xcp::tests</td>
+</tr>
+</tbody>
+</table>
+<h2 id="SOUPTC028">3.4 XCP Command Codec <small>(SOUPTC028)</small></h2>
+<p><strong>Objective:</strong> Verify encoding of XCP master commands and decoding of CONNECT and error responses.</p>
+<p><strong>Test suite:</strong> <code>host/src/xcp/command.rs</code> unit tests.</p>
+<p><strong>Pass criteria:</strong> All tests pass with exit code 0.</p>
+<p><em>Parent links:</em> <a href="SOUP.html#SOUP027">SOUP027 XCP Master Command Set</a></p>
+<table>
+<thead>
+<tr>
+<th>Attribute</th>
+<th>Value</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>method</td>
+<td>automated</td>
+</tr>
+<tr>
+<td>test-command</td>
+<td>cargo test -p rustycan -- xcp::command</td>
+</tr>
+</tbody>
+</table>
+<h2 id="SOUPTC029">3.5 XCP DAQ Tracker <small>(SOUPTC029)</small></h2>
+<p><strong>Objective:</strong> Verify dynamic DAQ configuration tracking and DTO DAQ frame decode.</p>
+<p><strong>Test suite:</strong> <code>host/src/xcp/daq.rs</code> unit tests.</p>
+<p><strong>Pass criteria:</strong> All tests pass with exit code 0.</p>
+<p><em>Parent links:</em> <a href="SOUP.html#SOUP028">SOUP028 XCP DAQ Measurement Capture</a></p>
+<table>
+<thead>
+<tr>
+<th>Attribute</th>
+<th>Value</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>method</td>
+<td>automated</td>
+</tr>
+<tr>
+<td>test-command</td>
+<td>cargo test -p rustycan -- xcp::daq</td>
+</tr>
+</tbody>
+</table>
+<h2 id="SOUPTC030">3.6 A2L Parser <small>(SOUPTC030)</small></h2>
+<p><strong>Objective:</strong> Verify A2L MEASUREMENT/CHARACTERISTIC parsing and raw value decode.</p>
+<p><strong>Test suite:</strong> <code>host/src/xcp/a2l.rs</code> unit tests.</p>
+<p><strong>Pass criteria:</strong> All tests pass with exit code 0.</p>
+<p><em>Parent links:</em> <a href="SOUP.html#SOUP029">SOUP029 A2L Measurement and Characteristic Resolution</a></p>
+<table>
+<thead>
+<tr>
+<th>Attribute</th>
+<th>Value</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>method</td>
+<td>automated</td>
+</tr>
+<tr>
+<td>test-command</td>
+<td>cargo test -p rustycan -- xcp::a2l</td>
+</tr>
+</tbody>
+</table>
+<h2 id="SOUPTC031">3.7 Dongle DAQ-Readiness Build Check <small>(SOUPTC031)</small></h2>
+<p><strong>Objective:</strong> Verify the dongle firmware compiles with the &gt;=256-entry CAN-RX buffer and RX drop counter.</p>
+<p><strong>Pass criteria:</strong> Clippy passes with no warnings for the thumbv7em target.</p>
+<p><em>Parent links:</em> <a href="SOUP.html#SOUP030">SOUP030 Dongle CAN-RX Buffering for High-Rate DAQ</a></p>
+<table>
+<thead>
+<tr>
+<th>Attribute</th>
+<th>Value</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>method</td>
+<td>manual</td>
+</tr>
+<tr>
+<td>test-command</td>
+<td>cargo clippy --manifest-path firmware/Cargo.toml -p dongle-h743 --target thumbv7em-none-eabihf -- -D warnings</td>
+</tr>
+<tr>
+<td></td>
+<td></td>
 </tr>
 </tbody>
 </table>

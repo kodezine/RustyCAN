@@ -94,6 +94,13 @@
                     data-bs-placement="left"
                     title="SOUPANOM006">1.6 KCAN Bulk IN Timeout Must Exceed Frame Interval (SOUPANOM006)</a>
                 </li>
+                <li>
+                  <a class="dropdown-item text-truncate"
+                    href="#SOUPANOM007"
+                    data-bs-toggle="tooltip"
+                    data-bs-placement="left"
+                    title="SOUPANOM007">1.7 XCP Seed and Key Requires Manual Unlock (SOUPANOM007)</a>
+                </li>
                 </ul>
                 </ul>
             </ul>
@@ -264,6 +271,28 @@
 <p><strong>Workaround:</strong> The application sets the bulk IN read timeout to at least 200 ms (2× the expected maximum inter-frame interval). This value must be reviewed if the firmware frame interval changes.</p>
 <p><strong>Impact:</strong> Setting an insufficient timeout causes false <code>AdapterDisconnected</code> events. Setting an excessively large timeout delays stall detection. The current 200 ms value is a documented configuration constant.</p>
 <p><em>Parent links:</em> <a href="SOUP.html#SOUP003">SOUP003 KCAN Dongle Adapter Support</a></p>
+<table>
+<thead>
+<tr>
+<th>Attribute</th>
+<th>Value</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>type</td>
+<td>anomaly</td>
+</tr>
+<tr>
+<td>iec62304-clause</td>
+<td>8.1.3</td>
+</tr>
+</tbody>
+</table>
+<h2 id="SOUPANOM007">1.7 XCP Seed and Key Requires Manual Unlock <small>(SOUPANOM007)</small></h2>
+<p><strong>Description:</strong> RustyCAN XCP master does not embed a vendor seed-and-key algorithm. For slaves that lock resources, the GET_SEED value is surfaced and the operator must supply the corresponding UNLOCK key bytes manually.</p>
+<p><strong>Impact:</strong> Locked resources cannot be accessed without the externally-computed key. No impact on unlocked slaves.</p>
+<p><em>Parent links:</em> <a href="SOUP.html#SOUP027">SOUP027 XCP Master Command Set</a></p>
 <table>
 <thead>
 <tr>

@@ -227,6 +227,41 @@
                     data-bs-placement="left"
                     title="SOUP025">12.1 App Update Notification and Self-Update (SOUP025)</a>
                 </li>
+                <li>
+                  <a class="dropdown-item text-truncate"
+                    href="#SOUP026"
+                    data-bs-toggle="tooltip"
+                    data-bs-placement="left"
+                    title="SOUP026">12.2 XCP-on-CAN Transport and CRO/DTO Routing (SOUP026)</a>
+                </li>
+                <li>
+                  <a class="dropdown-item text-truncate"
+                    href="#SOUP027"
+                    data-bs-toggle="tooltip"
+                    data-bs-placement="left"
+                    title="SOUP027">12.3 XCP Master Command Set (SOUP027)</a>
+                </li>
+                <li>
+                  <a class="dropdown-item text-truncate"
+                    href="#SOUP028"
+                    data-bs-toggle="tooltip"
+                    data-bs-placement="left"
+                    title="SOUP028">12.4 XCP DAQ Measurement Capture (SOUP028)</a>
+                </li>
+                <li>
+                  <a class="dropdown-item text-truncate"
+                    href="#SOUP029"
+                    data-bs-toggle="tooltip"
+                    data-bs-placement="left"
+                    title="SOUP029">12.5 A2L Measurement and Characteristic Resolution (SOUP029)</a>
+                </li>
+                <li>
+                  <a class="dropdown-item text-truncate"
+                    href="#SOUP030"
+                    data-bs-toggle="tooltip"
+                    data-bs-placement="left"
+                    title="SOUP030">12.6 Dongle CAN-RX Buffering for High-Rate DAQ (SOUP030)</a>
+                </li>
                 </ul>
                 </ul>
             </ul>
@@ -291,7 +326,7 @@
 </tr>
 <tr>
 <td><strong>Version</strong></td>
-<td>v0.2.8</td>
+<td>v0.2.9</td>
 </tr>
 <tr>
 <td><strong>License</strong></td>
@@ -859,6 +894,111 @@
 <p>The version check <strong>shall</strong> be non-blocking; any failure to reach the GitHub API (network unavailable, rate-limit, parse error) <strong>shall</strong> be silently ignored and <strong>shall not</strong> prevent normal operation.</p>
 <p>The version comparison <strong>shall</strong> parse Git tags of the form <code>vMAJOR.MINOR.PATCH</code> (with an optional <code>-N-gHASH</code> describe suffix) and compare them against the build-time version embedded at compile time.</p>
 <p><em>Child links:</em> <a href="SOUPTC.html#SOUPTC026">SOUPTC026 App Update: Version Tag Parsing</a></p>
+<table>
+<thead>
+<tr>
+<th>Attribute</th>
+<th>Value</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>type</td>
+<td>functional</td>
+</tr>
+<tr>
+<td>iec62304-clause</td>
+<td>8.1.2</td>
+</tr>
+</tbody>
+</table>
+<h2 id="SOUP026">12.2 XCP-on-CAN Transport and CRO/DTO Routing <small>(SOUP026)</small></h2>
+<p>RustyCAN <strong>shall</strong> decode ASAM MCD-1 XCP-on-CAN traffic on operator-configured CRO (master to slave) and DTO (slave to master) CAN identifiers, classifying each DTO packet as command response, error, event, service request, or DAQ data, and <strong>shall</strong> recognise XCP frames only on the configured identifiers so that the overlapping CANopen SDO identifier range is not misclassified.</p>
+<p><em>Child links:</em> <a href="SOUPTC.html#SOUPTC027">SOUPTC027 XCP Transport Routing Decode</a></p>
+<table>
+<thead>
+<tr>
+<th>Attribute</th>
+<th>Value</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>type</td>
+<td>interface</td>
+</tr>
+<tr>
+<td>iec62304-clause</td>
+<td>8.1.2</td>
+</tr>
+</tbody>
+</table>
+<h2 id="SOUP027">12.3 XCP Master Command Set <small>(SOUP027)</small></h2>
+<p>RustyCAN <strong>shall</strong> provide an XCP master capable of issuing CONNECT, DISCONNECT, GET_SEED, UNLOCK, SET_MTA, UPLOAD, and DOWNLOAD commands over CAN, tracking a single in-flight transaction and honouring the slave byte order and MAX_CTO negotiated in the CONNECT response.</p>
+<p><em>Child links:</em> <a href="SOUPANOM.html#SOUPANOM007">SOUPANOM007 XCP Seed and Key Requires Manual Unlock</a>, <a href="SOUPTC.html#SOUPTC028">SOUPTC028 XCP Command Codec</a></p>
+<table>
+<thead>
+<tr>
+<th>Attribute</th>
+<th>Value</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>type</td>
+<td>functional</td>
+</tr>
+<tr>
+<td>iec62304-clause</td>
+<td>8.1.2</td>
+</tr>
+</tbody>
+</table>
+<h2 id="SOUP028">12.4 XCP DAQ Measurement Capture <small>(SOUP028)</small></h2>
+<p>RustyCAN <strong>shall</strong> reconstruct XCP DAQ measurement layouts by observing the dynamic DAQ configuration command sequence (SET_DAQ_PTR, WRITE_DAQ, START_STOP_DAQ_LIST) and <strong>shall</strong> decode DTO DAQ frames into address-keyed measurement values using the resulting PID-to-ODT map.</p>
+<p><em>Child links:</em> <a href="SOUPTC.html#SOUPTC029">SOUPTC029 XCP DAQ Tracker</a></p>
+<table>
+<thead>
+<tr>
+<th>Attribute</th>
+<th>Value</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>type</td>
+<td>functional</td>
+</tr>
+<tr>
+<td>iec62304-clause</td>
+<td>8.1.2</td>
+</tr>
+</tbody>
+</table>
+<h2 id="SOUP029">12.5 A2L Measurement and Characteristic Resolution <small>(SOUP029)</small></h2>
+<p>RustyCAN <strong>shall</strong> parse a subset of ASAM MCD-2 MC (A2L) description files sufficient to resolve MEASUREMENT and CHARACTERISTIC name, ECU address, and datatype, and <strong>shall</strong> present decoded XCP UPLOAD and DAQ values as raw (non-engineering-unit) quantities.</p>
+<p><em>Child links:</em> <a href="SOUPTC.html#SOUPTC030">SOUPTC030 A2L Parser</a></p>
+<table>
+<thead>
+<tr>
+<th>Attribute</th>
+<th>Value</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>type</td>
+<td>interface</td>
+</tr>
+<tr>
+<td>iec62304-clause</td>
+<td>8.1.2</td>
+</tr>
+</tbody>
+</table>
+<h2 id="SOUP030">12.6 Dongle CAN-RX Buffering for High-Rate DAQ <small>(SOUP030)</small></h2>
+<p>The RustyCAN dongle firmware <strong>shall</strong> buffer received CAN frames in a queue of at least 256 entries between the CAN-RX path and the USB transmit path, and <strong>shall</strong> maintain a cumulative counter of frames dropped due to queue saturation, so that sustained high-rate XCP DAQ capture does not silently lose frames.</p>
+<p><em>Child links:</em> <a href="SOUPTC.html#SOUPTC031">SOUPTC031 Dongle DAQ-Readiness Build Check</a></p>
 <table>
 <thead>
 <tr>
