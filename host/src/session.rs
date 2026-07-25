@@ -882,7 +882,30 @@ fn handle_xcp_frame(
                     let take = (remaining as usize).min(chunk.len());
                     acc.extend_from_slice(&chunk[..take]);
                     let rem = remaining - take as u16;
-                    if rem > 0 && take > 0 {
+                    if rem == 0 {
+                        // All requested bytes received.
+                        let detail = hex_join(&acc);
+                        let _ = tx.send(CanEvent::Xcp(XcpLogEntry {
+                            ts,
+                            dir: XcpDir::Response,
+                            summary: format!("UPLOAD {}B", acc.len()),
+                            detail: Some(detail),
+                        }));
+                    } else if take == 0 {
+                        // Response carried no data but bytes remain — a short or
+                        // malformed frame. Report it instead of silently
+                        // truncating the read to whatever arrived so far.
+                        let _ = tx.send(CanEvent::Xcp(XcpLogEntry {
+                            ts,
+                            dir: XcpDir::Error,
+                            summary: format!(
+                                "UPLOAD truncated ({}B received, {rem}B missing)",
+                                acc.len()
+                            ),
+                            detail: None,
+                        }));
+                    } else {
+                        // More data to read: issue the next UPLOAD.
                         let n = upload_chunk(rem);
                         if send_xcp(adapter, cro_id, &xcpcmd::encode_upload(n), logger, sniff_tx) {
                             *pending_xcp = Some(PendingXcp {
@@ -895,14 +918,6 @@ fn handle_xcp_frame(
                         } else {
                             xcp_send_failed(tx, ts, "UPLOAD");
                         }
-                    } else {
-                        let detail = hex_join(&acc);
-                        let _ = tx.send(CanEvent::Xcp(XcpLogEntry {
-                            ts,
-                            dir: XcpDir::Response,
-                            summary: format!("UPLOAD {}B", acc.len()),
-                            detail: Some(detail),
-                        }));
                     }
                 }
                 XcpStep::DownloadAck => {
@@ -1164,21 +1179,33 @@ fn recv_loop(
                         len,
                     } => {
                         if let Some(xr) = xcp {
-                            let payload = xcpcmd::encode_set_mta(address, addr_ext, xcp_byte_order);
-                            if send_xcp(
-                                adapter.as_mut(),
-                                xr.config.cro_id,
-                                &payload,
-                                logger,
-                                &sniff_tx,
-                            ) {
-                                pending_xcp = Some(PendingXcp {
-                                    step: XcpStep::MtaThen(Box::new(XcpStep::SendUpload {
-                                        acc: Vec::new(),
-                                        remaining: len,
-                                    })),
-                                    started_at: Instant::now(),
-                                });
+                            if len == 0 {
+                                // A zero-length UPLOAD would emit an invalid
+                                // element count (n = 0); reject it up front.
+                                let _ = tx.send(CanEvent::Xcp(XcpLogEntry {
+                                    ts: Utc::now(),
+                                    dir: XcpDir::Error,
+                                    summary: "UPLOAD rejected: length must be > 0".into(),
+                                    detail: None,
+                                }));
+                            } else {
+                                let payload =
+                                    xcpcmd::encode_set_mta(address, addr_ext, xcp_byte_order);
+                                if send_xcp(
+                                    adapter.as_mut(),
+                                    xr.config.cro_id,
+                                    &payload,
+                                    logger,
+                                    &sniff_tx,
+                                ) {
+                                    pending_xcp = Some(PendingXcp {
+                                        step: XcpStep::MtaThen(Box::new(XcpStep::SendUpload {
+                                            acc: Vec::new(),
+                                            remaining: len,
+                                        })),
+                                        started_at: Instant::now(),
+                                    });
+                                }
                             }
                         }
                     }

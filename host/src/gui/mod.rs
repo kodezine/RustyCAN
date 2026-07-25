@@ -4850,11 +4850,15 @@ fn xcp_section(
                 parse_u32_auto(&panel.upload_addr),
                 panel.upload_len.trim().parse::<u16>(),
             ) {
-                let _ = cmd_tx.send(CanCommand::XcpUpload {
-                    address,
-                    addr_ext: 0,
-                    len,
-                });
+                // A zero-length UPLOAD is an invalid XCP request (element count
+                // 0); ignore the click rather than sending malformed traffic.
+                if len > 0 {
+                    let _ = cmd_tx.send(CanCommand::XcpUpload {
+                        address,
+                        addr_ext: 0,
+                        len,
+                    });
+                }
             }
         }
     });
