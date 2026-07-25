@@ -331,6 +331,12 @@ impl CanAdapter for KCanAdapter {
     fn firmware_version(&self) -> Option<(u8, u8, u8)> {
         Some(self.fw_version)
     }
+
+    fn echoes_tx(&self) -> bool {
+        // The dongle firmware echoes every transmitted frame back as a
+        // TX-echo report, so the recv path already surfaces host TX.
+        true
+    }
 }
 
 // ─── Background IO thread ─────────────────────────────────────────────────────

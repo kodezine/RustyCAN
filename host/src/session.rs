@@ -16,7 +16,7 @@ use crate::adapters::{open_adapter, probe_adapter_kind, AdapterKind};
 
 use crate::app::{CanEvent, SdoLogEntry};
 use crate::canopen::{
-    self, classify_frame, extract_cob_id,
+    self, classify_frame, extract_cob_id, full_can_id,
     nmt::{decode_heartbeat, decode_nmt_command, encode_nmt_command, NmtCommand},
     pdo::PdoDecoder,
     sdo::{
@@ -79,6 +79,141 @@ pub enum CanCommand {
     SendRaw { can_id: u32, data: Vec<u8> },
 }
 
+/// A raw CAN frame tapped for the live sniffer view (separate bounded channel).
+///
+/// Emitted once per received or transmitted frame, *before* CANopen decode, so
+/// the sniffer sees every frame regardless of whether a decoder matched.
+pub struct SniffTap {
+    pub cob_id: u32,
+    pub data: Vec<u8>,
+    pub is_tx: bool,
+    /// Coarse CANopen classification for the sniffer's Type column.
+    pub kind: &'static str,
+    /// Wall-clock capture/transmit time, stamped on the recv/send thread so the
+    /// sniffer's Time column reflects when the frame actually occurred rather
+    /// than when the UI happened to drain the channel.
+    pub ts: chrono::DateTime<Utc>,
+}
+
+/// Bounded capacity for the sniff channel. When full, frames are dropped: the
+/// aggregated table only cares about the latest payload per ID, so the recv
+/// thread must never block on a slow UI.
+const SNIFF_CHANNEL_CAP: usize = 8192;
+
+/// Coarse classification of a COB-ID for the sniffer's Type column.
+fn sniff_kind(cob_id: u16) -> &'static str {
+    match classify_frame(cob_id) {
+        FrameType::NmtCommand => "NMT_COMMAND",
+        FrameType::Sync => "SYNC",
+        FrameType::Emergency(_) => "EMCY",
+        FrameType::Tpdo(_, _) | FrameType::Rpdo(_, _) => "PDO",
+        FrameType::SdoResponse(_) | FrameType::SdoRequest(_) => "SDO",
+        FrameType::Heartbeat(_) => "NMT_STATE",
+        FrameType::Unknown(_) => "RAW_FRAME",
+    }
+}
+
+// ─── Periodic transmit scheduler (dedicated thread) ─────────────────────────
+
+/// One periodic message the scheduler transmits on its own timer.
+#[derive(Clone)]
+pub struct PeriodicSpec {
+    pub id: u32,
+    pub data: Vec<u8>,
+    pub period_ms: f64,
+    pub enabled: bool,
+}
+
+/// Control messages to the periodic-TX thread.
+pub enum PeriodicCtrl {
+    /// Replace the entire schedule (sent by the UI whenever it changes).
+    SetAll(Vec<PeriodicSpec>),
+}
+
+/// Handle to a running periodic-TX thread.
+pub struct PeriodicHandle {
+    pub ctrl_tx: mpsc::Sender<PeriodicCtrl>,
+    /// Each transmitted frame `(id, data)` — so the UI can echo/count it.
+    pub fired_rx: mpsc::Receiver<(u32, Vec<u8>)>,
+}
+
+/// Spawn a thread that transmits periodic frames on their own timers,
+/// independent of the UI frame rate (so they keep firing even when the window
+/// is unfocused). Frames are sent via [`CanCommand::SendRaw`] to the session
+/// recv thread, which owns the adapter.
+pub fn spawn_periodic_tx(cmd_tx: mpsc::Sender<CanCommand>, listen_only: bool) -> PeriodicHandle {
+    let (ctrl_tx, ctrl_rx) = mpsc::channel::<PeriodicCtrl>();
+    let (fired_tx, fired_rx) = mpsc::channel::<(u32, Vec<u8>)>();
+    thread::spawn(move || periodic_loop(cmd_tx, listen_only, ctrl_rx, fired_tx));
+    PeriodicHandle { ctrl_tx, fired_rx }
+}
+
+struct PeriodicEntry {
+    id: u32,
+    data: Vec<u8>,
+    period: Duration,
+    enabled: bool,
+    next: std::time::Instant,
+}
+
+fn periodic_loop(
+    cmd_tx: mpsc::Sender<CanCommand>,
+    listen_only: bool,
+    ctrl_rx: mpsc::Receiver<PeriodicCtrl>,
+    fired_tx: mpsc::Sender<(u32, Vec<u8>)>,
+) {
+    use std::time::Instant;
+    let mut entries: Vec<PeriodicEntry> = Vec::new();
+
+    loop {
+        // Wait until the nearest due entry (cap at 250 ms when idle).
+        let now = Instant::now();
+        let mut wait = Duration::from_millis(250);
+        for e in &entries {
+            if e.enabled {
+                wait = wait.min(e.next.saturating_duration_since(now));
+            }
+        }
+
+        match ctrl_rx.recv_timeout(wait) {
+            Ok(PeriodicCtrl::SetAll(specs)) => {
+                let start = Instant::now();
+                entries = specs
+                    .into_iter()
+                    .map(|s| PeriodicEntry {
+                        id: s.id,
+                        data: s.data,
+                        period: Duration::from_secs_f64(s.period_ms.max(1.0) / 1000.0),
+                        enabled: s.enabled,
+                        next: start, // fire immediately, then every period
+                    })
+                    .collect();
+            }
+            Err(mpsc::RecvTimeoutError::Timeout) => {}
+            Err(mpsc::RecvTimeoutError::Disconnected) => return, // UI gone
+        }
+
+        // Fire any entries that are now due.
+        let now = Instant::now();
+        for e in &mut entries {
+            if e.enabled && now >= e.next {
+                if !listen_only {
+                    let _ = cmd_tx.send(CanCommand::SendRaw {
+                        can_id: e.id,
+                        data: e.data.clone(),
+                    });
+                }
+                let _ = fired_tx.send((e.id, e.data.clone()));
+                e.next += e.period;
+                if e.next <= now {
+                    // Fell behind (long stall) — resync to avoid a catch-up burst.
+                    e.next = now + e.period;
+                }
+            }
+        }
+    }
+}
+
 // ─── Public API ───────────────────────────────────────────────────────────────
 
 /// Configuration collected from the Connect form.
@@ -132,6 +267,7 @@ pub type SessionResult = Result<
     (
         mpsc::Receiver<CanEvent>,
         mpsc::Sender<CanCommand>,
+        mpsc::Receiver<SniffTap>,
         Vec<(u8, String)>,
         String,         // Actual log file path with timestamp
         Option<String>, // Startup notice (e.g. log location fallback)
@@ -286,6 +422,7 @@ pub fn start(config: SessionConfig) -> SessionResult {
     // ── Channels ──────────────────────────────────────────────────────────────
     let (tx, rx) = mpsc::channel::<CanEvent>();
     let (cmd_tx, cmd_rx) = mpsc::channel::<CanCommand>();
+    let (sniff_tx, sniff_rx) = mpsc::sync_channel::<SniffTap>(SNIFF_CHANNEL_CAP);
 
     // ── Spawn recv thread ─────────────────────────────────────────────────────
     // The adapter is opened inside the thread: host-can does not guarantee the
@@ -325,6 +462,7 @@ pub fn start(config: SessionConfig) -> SessionResult {
             &pdo_decoders,
             dbc_database.as_ref(),
             tx.clone(),
+            sniff_tx.clone(),
             &cmd_rx,
             &mut logger,
             listen_only,
@@ -369,6 +507,7 @@ pub fn start(config: SessionConfig) -> SessionResult {
                         &pdo_decoders,
                         dbc_database.as_ref(),
                         tx.clone(),
+                        sniff_tx.clone(),
                         &cmd_rx,
                         &mut logger,
                         listen_only,
@@ -415,6 +554,7 @@ pub fn start(config: SessionConfig) -> SessionResult {
     Ok((
         rx,
         cmd_tx,
+        sniff_rx,
         node_labels,
         actual_log_path,
         log_fallback_notice,
@@ -431,6 +571,7 @@ fn recv_loop(
     pdo_decoders: &[(u8, PdoDecoder)],
     dbc_database: Option<&DbcDatabase>,
     tx: mpsc::Sender<CanEvent>,
+    sniff_tx: mpsc::SyncSender<SniffTap>,
     cmd_rx: &mpsc::Receiver<CanCommand>,
     logger: &mut EventLogger,
     listen_only: bool,
@@ -867,8 +1008,30 @@ fn recv_loop(
                                 .and_then(|id| CanFrame::new(id, payload))
                         };
                         if let Some(frame) = frame_opt {
-                            if let Err(e) = adapter.send(&frame) {
-                                eprintln!("SendRaw error (CAN ID 0x{can_id:X}): {e:?}");
+                            match adapter.send(&frame) {
+                                Ok(()) => {
+                                    // Log the transmit so Tx frames appear in the
+                                    // trace even on adapters that don't echo (PEAK).
+                                    let ts = Utc::now();
+                                    logger.log_tx(ts, can_id, payload);
+                                    // Echoing adapters (KCAN) re-surface this frame
+                                    // to the sniffer via the TX-echo recv branch;
+                                    // for non-echoing adapters (PEAK, SocketCAN)
+                                    // emit the tap here so live aggregation still
+                                    // sees host-initiated TX. Keyed by the full ID.
+                                    if !adapter.echoes_tx() {
+                                        let _ = sniff_tx.try_send(SniffTap {
+                                            cob_id: can_id,
+                                            data: payload.to_vec(),
+                                            is_tx: true,
+                                            kind: "TX",
+                                            ts,
+                                        });
+                                    }
+                                }
+                                Err(e) => {
+                                    eprintln!("SendRaw error (CAN ID 0x{can_id:X}): {e:?}");
+                                }
                             }
                         }
                     }
@@ -938,6 +1101,13 @@ fn recv_loop(
                 data: data.to_vec(),
                 port: channel,
             });
+            let _ = sniff_tx.try_send(SniffTap {
+                cob_id: full_can_id(&frame),
+                data: data.to_vec(),
+                is_tx: true,
+                kind: "TX",
+                ts,
+            });
             continue;
         }
 
@@ -950,6 +1120,21 @@ fn recv_loop(
         let ts = Utc::now();
         // Pass hardware timestamp to logger for this frame (None for PEAK).
         logger.set_hw_timestamp(hardware_timestamp_ns);
+
+        // Live sniffer tap: every data frame, before decode (bounded, lossy).
+        // Extended IDs carry no CANopen meaning, so classify them as RAW rather
+        // than mislabelling based on their lower 11 bits.
+        let sniff_type = match frame.id() {
+            embedded_can::Id::Standard(_) => sniff_kind(cob_id),
+            embedded_can::Id::Extended(_) => "RAW_FRAME",
+        };
+        let _ = sniff_tx.try_send(SniffTap {
+            cob_id: full_can_id(&frame),
+            data: data.to_vec(),
+            is_tx: false,
+            kind: sniff_type,
+            ts,
+        });
 
         // Track whether this frame was logged by any path
         let mut logged = false;
@@ -2116,4 +2301,100 @@ fn raw_pdo_signals(data: &[u8]) -> Vec<crate::canopen::pdo::PdoValue> {
             value: PdoRawValue::Bytes(vec![*b]),
         })
         .collect()
+}
+
+#[cfg(test)]
+mod periodic_tests {
+    use super::*;
+    use std::time::{Duration, Instant};
+
+    #[test]
+    fn periodic_thread_transmits_on_schedule() {
+        let (cmd_tx, cmd_rx) = mpsc::channel::<CanCommand>();
+        let handle = spawn_periodic_tx(cmd_tx, false);
+        handle
+            .ctrl_tx
+            .send(PeriodicCtrl::SetAll(vec![PeriodicSpec {
+                id: 0x123,
+                data: vec![0x01, 0x02],
+                period_ms: 20.0,
+                enabled: true,
+            }]))
+            .unwrap();
+
+        // Expect the immediate fire plus 20 ms repeats. Break as soon as we've
+        // seen enough sends, with a generous deadline so the test stays reliable
+        // on slow/contended CI runners.
+        let mut sends = 0;
+        let deadline = Instant::now() + Duration::from_secs(3);
+        while sends < 3 && Instant::now() < deadline {
+            if let Ok(CanCommand::SendRaw { can_id, data }) =
+                cmd_rx.recv_timeout(Duration::from_millis(200))
+            {
+                assert_eq!(can_id, 0x123);
+                assert_eq!(data, vec![0x01, 0x02]);
+                sends += 1;
+            }
+        }
+        assert!(sends >= 3, "expected >=3 periodic sends, got {sends}");
+        // The thread sends the SendRaw command before the fired feedback, so a
+        // bare try_recv() would race; wait briefly for the feedback to arrive.
+        assert!(
+            handle
+                .fired_rx
+                .recv_timeout(Duration::from_millis(200))
+                .is_ok(),
+            "no fired feedback"
+        );
+    }
+
+    #[test]
+    fn listen_only_suppresses_tx_but_still_reports() {
+        let (cmd_tx, cmd_rx) = mpsc::channel::<CanCommand>();
+        let handle = spawn_periodic_tx(cmd_tx, true); // listen_only
+        handle
+            .ctrl_tx
+            .send(PeriodicCtrl::SetAll(vec![PeriodicSpec {
+                id: 0x200,
+                data: vec![0xAA],
+                period_ms: 10.0,
+                enabled: true,
+            }]))
+            .unwrap();
+
+        std::thread::sleep(Duration::from_millis(60));
+        // No frames may be transmitted in listen-only mode…
+        assert!(
+            cmd_rx.recv_timeout(Duration::from_millis(30)).is_err(),
+            "listen_only must not transmit"
+        );
+        // …but the UI still gets fire feedback for counting/echo.
+        assert!(
+            handle
+                .fired_rx
+                .recv_timeout(Duration::from_millis(200))
+                .is_ok(),
+            "expected fired feedback"
+        );
+    }
+
+    #[test]
+    fn disabled_periodic_does_not_fire() {
+        let (cmd_tx, cmd_rx) = mpsc::channel::<CanCommand>();
+        let handle = spawn_periodic_tx(cmd_tx, false);
+        handle
+            .ctrl_tx
+            .send(PeriodicCtrl::SetAll(vec![PeriodicSpec {
+                id: 0x300,
+                data: vec![0x01],
+                period_ms: 10.0,
+                enabled: false,
+            }]))
+            .unwrap();
+        std::thread::sleep(Duration::from_millis(50));
+        assert!(
+            cmd_rx.recv_timeout(Duration::from_millis(20)).is_err(),
+            "disabled periodic must not fire"
+        );
+    }
 }

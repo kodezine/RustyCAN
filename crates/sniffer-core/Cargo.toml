@@ -1,0 +1,7 @@
+[package]
+name = "sniffer-core"
+version = "0.1.0"
+edition = "2021"
+description = "Headless CAN sniffer model: aggregation, replay, filtering, periodic TX scheduling — UI-independent."
+
+[dependencies]

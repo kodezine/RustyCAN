@@ -443,7 +443,7 @@ pub fn run_from_config(
     let _stderr_guard = StderrGuard::redirect(&stderr_log_path);
 
     let baud = session_cfg.baud;
-    let (rx, cmd_tx, node_labels, log_path, _startup_notice) =
+    let (rx, cmd_tx, _sniff_rx, node_labels, log_path, _startup_notice) =
         crate::session::start(session_cfg)
             .map_err(|e| io::Error::other(format!("Session start failed: {e}")))?;
 

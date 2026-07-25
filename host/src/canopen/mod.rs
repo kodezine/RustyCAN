@@ -40,6 +40,19 @@ pub fn extract_cob_id(frame: &CanFrame) -> u16 {
     }
 }
 
+/// Extract the full CAN identifier (11-bit standard or 29-bit extended).
+///
+/// Unlike [`extract_cob_id`], this preserves the entire identifier so that
+/// extended-ID frames are not aliased onto their lower 11 bits — used for
+/// keying the sniffer's aggregated-by-ID table.
+pub fn full_can_id(frame: &CanFrame) -> u32 {
+    use embedded_can::Frame;
+    match frame.id() {
+        Id::Standard(sid) => sid.as_raw() as u32,
+        Id::Extended(eid) => eid.as_raw() & 0x1FFF_FFFF,
+    }
+}
+
 /// Classify a COB-ID into the corresponding CANopen service.
 pub fn classify_frame(cob_id: u16) -> FrameType {
     let node = (cob_id & 0x7F) as u8;

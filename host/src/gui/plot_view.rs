@@ -226,15 +226,16 @@ pub fn render(
                 .show(ui.ctx(), |ui| render_inner(ui, state, node_labels));
         }
         _ => {
-            egui::CentralPanel::default()
-                .show_inside(ui, |ui| render_inner(ui, state, node_labels));
+            egui::CentralPanel::default().show(ui, |ui| render_inner(ui, state, node_labels));
         }
     }
 }
 
 // ─── Inner layout ─────────────────────────────────────────────────────────────
 
-fn render_inner(ui: &mut egui::Ui, state: &mut PlotState, node_labels: &[(u8, String)]) {
+pub fn render_inner(ui: &mut egui::Ui, state: &mut PlotState, node_labels: &[(u8, String)]) {
+    // Uniform compact font, matching the rest of the app.
+    sniffer_egui::apply_compact_text(ui);
     // ── Tab strip ─────────────────────────────────────────────────────────
     ui.horizontal(|ui| {
         for i in 0..NUM_CHARTS {
@@ -293,7 +294,7 @@ fn render_inner(ui: &mut egui::Ui, state: &mut PlotState, node_labels: &[(u8, St
         egui::Panel::right("signal_picker")
             .resizable(true)
             .default_size(220.0)
-            .show_inside(ui, |ui| {
+            .show(ui, |ui| {
                 render_picker(
                     ui,
                     &mut state.charts[state.active_chart],

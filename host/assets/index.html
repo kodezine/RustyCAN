@@ -629,13 +629,26 @@ function formatDetail(ev) {
   }
 }
 
+// Every event that carries CAN payload bytes (used by the Raw/Trace tab).
+function isFrameType(t) {
+  return t === 'NMT_STATE' || t === 'NMT_COMMAND' || t === 'NMT_COMMAND_SENT' ||
+    t === 'PDO' || t === 'SDO_READ' || t === 'SDO_WRITE' ||
+    t === 'RAW_FRAME' || t === 'DBC_SIGNAL' || t === 'TX' || t === 'TX_ECHO';
+}
+
+// Raw byte view of any frame: `cob_id=0x201  raw=[2B 00 00 00]`.
+function rawDetail(ev) {
+  const rawHex = Array.isArray(ev.raw) ? ev.raw.join(' ') : (ev.raw ?? '');
+  return `cob_id=${ev.cob_id ?? '\u2014'}  raw=[${rawHex}]`;
+}
+
 function matchesFilter(type) {
   if (activeFilter === 'ALL') return true;
   if (activeFilter === 'NMT') return type?.startsWith('NMT');
   if (activeFilter === 'SDO') return type?.startsWith('SDO');
   if (activeFilter === 'PDO') return type === 'PDO';
   if (activeFilter === 'DBC') return type === 'DBC_SIGNAL';
-  if (activeFilter === 'RAW') return type === 'RAW_FRAME';
+  if (activeFilter === 'RAW') return isFrameType(type);
   return true;
 }
 
@@ -650,11 +663,24 @@ function pushLogRow(ev) {
     ? `node ${ev.node}` : (ev.type === 'NMT_COMMAND_SENT' ? 'master' : '—');
 
   const detail = formatDetail(ev);
-  row.innerHTML =
-    `<span class="e-ts">${fmtTime(ev.ts)}</span>` +
-    `<span class="e-type">${ev.type}</span>` +
-    `<span class="e-node">${nodeLabel}</span>` +
-    `<span class="e-detail" title="${detail.replace(/"/g, '&quot;')}">${detail}</span>`;
+  const rawStr = rawDetail(ev);
+  row.dataset.detail = detail;
+  row.dataset.raw = rawStr;
+  const shown = activeFilter === 'RAW' ? rawStr : detail;
+
+  // Build the row with DOM nodes and textContent so untrusted event fields
+  // (e.g. message/signal names in `detail`) can never inject markup (XSS).
+  const mkSpan = (cls, text, title) => {
+    const s = document.createElement('span');
+    s.className = cls;
+    s.textContent = text;
+    if (title !== undefined) s.title = title;
+    return s;
+  };
+  row.appendChild(mkSpan('e-ts', fmtTime(ev.ts)));
+  row.appendChild(mkSpan('e-type', ev.type));
+  row.appendChild(mkSpan('e-node', nodeLabel));
+  row.appendChild(mkSpan('e-detail', shown, shown));
 
   eventLog.prepend(row);
   totalLogRows++;
@@ -675,7 +701,8 @@ function processEvent(ev) {
   else if (ev.type?.startsWith('SDO')) counts.sdo++;
   else if (ev.type === 'PDO')          counts.pdo++;
   else if (ev.type === 'DBC_SIGNAL')   counts.dbc++;
-  else if (ev.type === 'RAW_FRAME')    counts.raw++;
+  // Raw counts every frame that carries payload bytes (matches the Raw tab).
+  if (isFrameType(ev.type))            counts.raw++;
 
   document.getElementById('s-nmt').textContent   = counts.nmt;
   document.getElementById('s-sdo').textContent   = counts.sdo;
@@ -745,6 +772,12 @@ document.querySelectorAll('.filter-btn').forEach(btn => {
     // Re-render visible rows according to new filter
     document.querySelectorAll('#event-log .log-entry').forEach(row => {
       row.style.display = matchesFilter(row.dataset.type) ? '' : 'none';
+      const span = row.querySelector('.e-detail');
+      if (span) {
+        const txt = activeFilter === 'RAW' ? (row.dataset.raw || '') : (row.dataset.detail || '');
+        span.textContent = txt;
+        span.title = txt;
+      }
     });
   });
 });

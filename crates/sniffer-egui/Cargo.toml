@@ -1,0 +1,16 @@
+[package]
+name = "sniffer-egui"
+version = "0.1.0"
+edition = "2021"
+description = "egui view for the RustyCAN sniffer model (reusable across the dev harness and the live app)."
+
+[dependencies]
+egui = "0.35"
+sniffer-core = { path = "../sniffer-core" }
+
+[dev-dependencies]
+eframe = "0.35"
+
+[[example]]
+name = "dev_sniffer"
+path = "examples/dev_sniffer.rs"

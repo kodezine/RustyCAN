@@ -120,6 +120,17 @@ pub trait CanAdapter {
     fn firmware_version(&self) -> Option<(u8, u8, u8)> {
         None
     }
+
+    /// Whether the adapter reports its own transmitted frames back through
+    /// [`Self::recv`] as TX echoes (`ReceivedFrame::is_tx_echo == true`).
+    ///
+    /// KCAN dongles echo TX; PEAK and SocketCAN do not. Callers use this to
+    /// decide whether a host-initiated transmit will re-enter the receive path
+    /// (and thus be surfaced to the live sniffer there) or must be reported at
+    /// the send site instead.
+    fn echoes_tx(&self) -> bool {
+        false
+    }
 }
 
 // ─── Factory ──────────────────────────────────────────────────────────────────
