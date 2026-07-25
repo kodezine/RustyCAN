@@ -210,6 +210,11 @@ impl DaqTracker {
 
         let mut samples = Vec::with_capacity(odt.entries.len());
         for entry in &odt.entries {
+            // Skip placeholder / unconfigured entries (size 0) so they neither
+            // emit empty samples nor stall the offset for following entries.
+            if entry.size == 0 {
+                continue;
+            }
             let end = offset + entry.size as usize;
             if end > data.len() {
                 break;
@@ -289,6 +294,31 @@ mod tests {
     fn decode_unknown_pid_is_none() {
         let t = configure_two_u16();
         assert!(t.decode(&[0x99, 0x00, 0x00]).is_none());
+    }
+
+    #[test]
+    fn decode_skips_zero_size_placeholder_entries() {
+        // Point at ODT entry index 1, leaving index 0 as a size-0 placeholder.
+        let mut t = DaqTracker::new();
+        t.on_command(&XcpCommand::SetDaqPtr {
+            daq: 0,
+            odt: 0,
+            odt_entry: 1,
+        });
+        t.on_command(&XcpCommand::WriteDaq {
+            bit_offset: 0xFF,
+            size: 2,
+            addr_ext: 0,
+            address: 0x2000_0010,
+        });
+        t.on_command(&XcpCommand::StartStopDaqList { mode: 0x01, daq: 0 });
+        t.on_start_pid(0, 0x10);
+        // The placeholder (index 0, size 0) must be skipped, and the real entry
+        // decoded from offset 1 — not shifted or duplicated.
+        let samples = t.decode(&[0x10, 0xAA, 0xBB]).unwrap();
+        assert_eq!(samples.len(), 1);
+        assert_eq!(samples[0].address, 0x2000_0010);
+        assert_eq!(samples[0].raw, vec![0xAA, 0xBB]);
     }
 
     #[test]

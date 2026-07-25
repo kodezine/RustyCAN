@@ -462,6 +462,12 @@ fn build_xcp_config(
     }
     let cro_id = parse_u32_auto(cro)?;
     let dto_id = parse_u32_auto(dto)?;
+    // Reject identifiers that cannot be a valid CAN ID (> 29-bit) and the
+    // ambiguous CRO == DTO case, which would make frame direction undecidable.
+    const MAX_EXT_ID: u32 = 0x1FFF_FFFF;
+    if cro_id > MAX_EXT_ID || dto_id > MAX_EXT_ID || cro_id == dto_id {
+        return None;
+    }
     let a2l_path = {
         let t = a2l.trim();
         if t.is_empty() {
@@ -4882,9 +4888,11 @@ fn xcp_section(
             .clicked()
         {
             if let Some(resource) = parse_u32_auto(&panel.seed_resource) {
-                let _ = cmd_tx.send(CanCommand::XcpGetSeed {
-                    resource: resource as u8,
-                });
+                // The XCP resource mask is a single byte; ignore out-of-range
+                // input rather than silently wrapping to the wrong resource.
+                if let Ok(resource) = u8::try_from(resource) {
+                    let _ = cmd_tx.send(CanCommand::XcpGetSeed { resource });
+                }
             }
         }
         ui.separator();
@@ -4917,7 +4925,7 @@ fn xcp_section(
             ui.label("No DAQ values yet.");
         } else {
             let mut rows: Vec<_> = state.xcp_daq_values.values().collect();
-            rows.sort_by_key(|s| s.address);
+            rows.sort_by_key(|s| (s.addr_ext, s.address));
             for s in rows {
                 ui.horizontal(|ui| {
                     let label = s
@@ -5318,9 +5326,10 @@ mod tests {
         let mut state = AppState::new("test.jsonl".into(), 250_000);
         state.xcp_connected = true;
         state.xcp_daq_values.insert(
-            0x2000_0000,
+            (0, 0x2000_0000),
             XcpDaqSample {
                 address: 0x2000_0000,
+                addr_ext: 0,
                 name: Some("engine_speed".into()),
                 raw: vec![0x10, 0x27],
                 value: Some("10000".into()),

@@ -667,20 +667,25 @@ struct PendingXcp {
 }
 
 /// Build a CAN frame for an arbitrary identifier (standard or extended).
+///
+/// Returns `None` for a payload that does not fit a classic CAN frame
+/// (> 8 bytes) rather than truncating it, so a caller can never emit a CTO
+/// whose length byte disagrees with the on-bus DLC.
 fn build_xcp_frame(can_id: u32, payload: &[u8]) -> Option<CanFrame> {
-    let dlc = payload.len().min(8);
-    let p = &payload[..dlc];
+    if payload.len() > 8 {
+        return None;
+    }
     if can_id <= 0x7FF {
-        host_can::id::new_standard(can_id as u16).and_then(|id| CanFrame::new(id, p))
+        host_can::id::new_standard(can_id as u16).and_then(|id| CanFrame::new(id, payload))
     } else {
         embedded_can::ExtendedId::new(can_id)
             .map(embedded_can::Id::Extended)
-            .and_then(|id| CanFrame::new(id, p))
+            .and_then(|id| CanFrame::new(id, payload))
     }
 }
 
 /// Transmit an XCP CRO frame, logging and (for non-echoing adapters) tapping the
-/// sniffer. Returns `true` on success.
+/// sniffer with the *actual* bytes placed on the bus. Returns `true` on success.
 fn send_xcp(
     adapter: &mut dyn crate::adapters::CanAdapter,
     cro_id: u32,
@@ -689,16 +694,22 @@ fn send_xcp(
     sniff_tx: &mpsc::SyncSender<SniffTap>,
 ) -> bool {
     let Some(frame) = build_xcp_frame(cro_id, payload) else {
+        eprintln!(
+            "XCP send error: payload too long for a classic CAN frame ({} bytes)",
+            payload.len()
+        );
         return false;
     };
+    // Log / tap the frame's own data so the trace always matches the wire.
+    let sent = frame.data().to_vec();
     match adapter.send(&frame) {
         Ok(()) => {
             let ts = Utc::now();
-            logger.log_tx(ts, cro_id, payload);
+            logger.log_tx(ts, cro_id, &sent);
             if !adapter.echoes_tx() {
                 let _ = sniff_tx.try_send(SniffTap {
                     cob_id: cro_id,
-                    data: payload.to_vec(),
+                    data: sent,
                     is_tx: true,
                     kind: "XCP",
                     ts,
@@ -928,6 +939,7 @@ fn handle_xcp_frame(
                             .map(|v| v.to_string());
                         XcpDaqSample {
                             address: s.address,
+                            addr_ext: s.addr_ext,
                             name,
                             raw: s.raw,
                             value,

@@ -149,12 +149,14 @@ fn apply_event_xcp_daq_values_keyed_by_address() {
             samples: vec![
                 XcpDaqSample {
                     address: 0x2000_0000,
+                    addr_ext: 0,
                     name: Some("engine_speed".into()),
                     raw: vec![0x10, 0x27],
                     value: Some("10000".into()),
                 },
                 XcpDaqSample {
                     address: 0x2000_0002,
+                    addr_ext: 0,
                     name: None,
                     raw: vec![0xD0, 0x07],
                     value: None,
@@ -164,7 +166,7 @@ fn apply_event_xcp_daq_values_keyed_by_address() {
     );
     assert_eq!(state.xcp_daq_values.len(), 2);
     assert_eq!(
-        state.xcp_daq_values[&0x2000_0000].name.as_deref(),
+        state.xcp_daq_values[&(0, 0x2000_0000)].name.as_deref(),
         Some("engine_speed")
     );
     // A later frame for the same address updates the live value in place.
@@ -174,6 +176,7 @@ fn apply_event_xcp_daq_values_keyed_by_address() {
             pid: 0x10,
             samples: vec![XcpDaqSample {
                 address: 0x2000_0000,
+                addr_ext: 0,
                 name: Some("engine_speed".into()),
                 raw: vec![0x20, 0x4E],
                 value: Some("20000".into()),
@@ -186,7 +189,27 @@ fn apply_event_xcp_daq_values_keyed_by_address() {
         "same address must not duplicate"
     );
     assert_eq!(
-        state.xcp_daq_values[&0x2000_0000].value.as_deref(),
+        state.xcp_daq_values[&(0, 0x2000_0000)].value.as_deref(),
         Some("20000")
+    );
+
+    // A different address extension with the same base address is distinct.
+    apply_event(
+        &mut state,
+        CanEvent::XcpDaq {
+            pid: 0x11,
+            samples: vec![XcpDaqSample {
+                address: 0x2000_0000,
+                addr_ext: 1,
+                name: None,
+                raw: vec![0x00, 0x00],
+                value: Some("0".into()),
+            }],
+        },
+    );
+    assert_eq!(
+        state.xcp_daq_values.len(),
+        3,
+        "same base address under a different addr_ext must not collide"
     );
 }

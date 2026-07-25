@@ -101,10 +101,12 @@ pub struct XcpLogEntry {
     pub detail: Option<String>,
 }
 
-/// One live XCP DAQ measurement element (address-keyed).
+/// One live XCP DAQ measurement element (keyed by address extension + address).
 #[derive(Debug, Clone)]
 pub struct XcpDaqSample {
     pub address: u32,
+    /// Address extension / page selector the element was sampled from.
+    pub addr_ext: u8,
     /// A2L name when resolved, otherwise `None`.
     pub name: Option<String>,
     /// Raw bytes as received on the bus.
@@ -208,7 +210,7 @@ pub struct AppState {
     /// Ring buffer of recent XCP command / response entries.
     pub xcp_log: VecDeque<XcpLogEntry>,
     /// Live XCP DAQ values keyed by ECU address.
-    pub xcp_daq_values: HashMap<u32, XcpDaqSample>,
+    pub xcp_daq_values: HashMap<(u8, u32), XcpDaqSample>,
     /// Whether an XCP connection is currently established.
     pub xcp_connected: bool,
     // Internal FPS tracking.
@@ -395,7 +397,7 @@ pub fn apply_event(state: &mut AppState, ev: CanEvent) {
         }
         CanEvent::XcpDaq { pid: _, samples } => {
             for s in samples {
-                state.xcp_daq_values.insert(s.address, s);
+                state.xcp_daq_values.insert((s.addr_ext, s.address), s);
             }
         }
         CanEvent::XcpConnected(connected) => {
