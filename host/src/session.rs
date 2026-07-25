@@ -2337,7 +2337,15 @@ mod periodic_tests {
             }
         }
         assert!(sends >= 3, "expected >=3 periodic sends, got {sends}");
-        assert!(handle.fired_rx.try_recv().is_ok(), "no fired feedback");
+        // The thread sends the SendRaw command before the fired feedback, so a
+        // bare try_recv() would race; wait briefly for the feedback to arrive.
+        assert!(
+            handle
+                .fired_rx
+                .recv_timeout(Duration::from_millis(200))
+                .is_ok(),
+            "no fired feedback"
+        );
     }
 
     #[test]
@@ -2362,7 +2370,10 @@ mod periodic_tests {
         );
         // …but the UI still gets fire feedback for counting/echo.
         assert!(
-            handle.fired_rx.try_recv().is_ok(),
+            handle
+                .fired_rx
+                .recv_timeout(Duration::from_millis(200))
+                .is_ok(),
             "expected fired feedback"
         );
     }
