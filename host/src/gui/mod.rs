@@ -5302,6 +5302,55 @@ mod tests {
         harness.snapshot("bus_load_bar_85pct");
     }
 
+    // ── XCP tab render test ───────────────────────────────────────────────────
+    //
+    // Renders the real `xcp_section` widget with a populated AppState and asserts
+    // the key controls and log/DAQ content are present in the accessibility tree.
+    // Deliberately *not* a pixel snapshot: the text-heavy panel varies across OS
+    // font rendering, so this asserts on the widget tree instead (CI-portable,
+    // no per-OS baseline image required).
+    #[test]
+    fn xcp_tab_renders_expected_controls() {
+        use crate::app::{XcpDaqSample, XcpDir, XcpLogEntry};
+        use egui_kittest::kittest::Queryable;
+
+        let (cmd_tx, _cmd_rx) = mpsc::channel::<CanCommand>();
+        let mut state = AppState::new("test.jsonl".into(), 250_000);
+        state.xcp_connected = true;
+        state.xcp_daq_values.insert(
+            0x2000_0000,
+            XcpDaqSample {
+                address: 0x2000_0000,
+                name: Some("engine_speed".into()),
+                raw: vec![0x10, 0x27],
+                value: Some("10000".into()),
+            },
+        );
+        state.push_xcp(XcpLogEntry {
+            ts: chrono::Utc::now(),
+            dir: XcpDir::Response,
+            summary: "CONNECT ok".into(),
+            detail: None,
+        });
+        let mut panel = XcpPanel::default();
+
+        let mut harness = egui_kittest::Harness::new_ui(move |ui| {
+            xcp_section(ui, &state, &cmd_tx, false, &mut panel);
+        });
+        harness.run();
+
+        // Master-command controls render (panics if a label is absent/ambiguous).
+        harness.get_by_label("Connect");
+        harness.get_by_label("Disconnect");
+        harness.get_by_label("Read");
+        harness.get_by_label("Write");
+        harness.get_by_label("Get Seed");
+        harness.get_by_label("Unlock");
+        // The connection status and the decoded DAQ measurement name are shown.
+        harness.get_by_label("CONNECTED");
+        harness.get_by_label("engine_speed");
+    }
+
     // ── Linux-specific: SocketCAN connect-form snapshots ─────────────────────
     //
     // These run only on Linux (cfg guard mirrors the production #[cfg] gate).

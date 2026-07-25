@@ -104,3 +104,89 @@ fn snapshot_connect_screen_dongle_detected() {
 fn snapshot_monitor_nmt_three_nodes() {
     todo!()
 }
+
+// ─── XCP AppState mutations (rustycan::app::apply_event) ──────────────────────
+//
+// Verify the events emitted by the XCP session layer drive AppState correctly —
+// the same state the GUI XCP tab and TUI render from.
+
+#[test]
+fn apply_event_xcp_connected_toggles_flag() {
+    use rustycan::app::{apply_event, AppState, CanEvent};
+    let mut state = AppState::new("test.jsonl".into(), 250_000);
+    assert!(!state.xcp_connected);
+    apply_event(&mut state, CanEvent::XcpConnected(true));
+    assert!(state.xcp_connected);
+    apply_event(&mut state, CanEvent::XcpConnected(false));
+    assert!(!state.xcp_connected);
+}
+
+#[test]
+fn apply_event_xcp_log_entry_is_recorded() {
+    use rustycan::app::{apply_event, AppState, CanEvent, XcpDir, XcpLogEntry};
+    let mut state = AppState::new("test.jsonl".into(), 250_000);
+    apply_event(
+        &mut state,
+        CanEvent::Xcp(XcpLogEntry {
+            ts: chrono::Utc::now(),
+            dir: XcpDir::Response,
+            summary: "CONNECT ok".into(),
+            detail: None,
+        }),
+    );
+    assert_eq!(state.xcp_log.len(), 1);
+    assert_eq!(state.xcp_log[0].summary, "CONNECT ok");
+}
+
+#[test]
+fn apply_event_xcp_daq_values_keyed_by_address() {
+    use rustycan::app::{apply_event, AppState, CanEvent, XcpDaqSample};
+    let mut state = AppState::new("test.jsonl".into(), 250_000);
+    apply_event(
+        &mut state,
+        CanEvent::XcpDaq {
+            pid: 0x10,
+            samples: vec![
+                XcpDaqSample {
+                    address: 0x2000_0000,
+                    name: Some("engine_speed".into()),
+                    raw: vec![0x10, 0x27],
+                    value: Some("10000".into()),
+                },
+                XcpDaqSample {
+                    address: 0x2000_0002,
+                    name: None,
+                    raw: vec![0xD0, 0x07],
+                    value: None,
+                },
+            ],
+        },
+    );
+    assert_eq!(state.xcp_daq_values.len(), 2);
+    assert_eq!(
+        state.xcp_daq_values[&0x2000_0000].name.as_deref(),
+        Some("engine_speed")
+    );
+    // A later frame for the same address updates the live value in place.
+    apply_event(
+        &mut state,
+        CanEvent::XcpDaq {
+            pid: 0x10,
+            samples: vec![XcpDaqSample {
+                address: 0x2000_0000,
+                name: Some("engine_speed".into()),
+                raw: vec![0x20, 0x4E],
+                value: Some("20000".into()),
+            }],
+        },
+    );
+    assert_eq!(
+        state.xcp_daq_values.len(),
+        2,
+        "same address must not duplicate"
+    );
+    assert_eq!(
+        state.xcp_daq_values[&0x2000_0000].value.as_deref(),
+        Some("20000")
+    );
+}
