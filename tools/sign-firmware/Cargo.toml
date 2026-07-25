@@ -9,6 +9,6 @@ name = "sign-firmware"
 path = "src/main.rs"
 
 [dependencies]
-ed25519-dalek = { version = "2", features = ["rand_core"] }
-rand_core = { version = "0.6", features = ["getrandom"] }
+ed25519-dalek = "3"
+getrandom = "0.4"
 sha2 = "0.11"

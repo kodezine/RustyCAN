@@ -27,7 +27,6 @@ use std::path::PathBuf;
 use std::process;
 
 use ed25519_dalek::{Signature, Signer, SigningKey, Verifier, VerifyingKey};
-use rand_core::OsRng;
 use sha2::{Digest, Sha512};
 
 // ---------------------------------------------------------------------------
@@ -68,8 +67,9 @@ fn parse_args() -> Cmd {
 // ---------------------------------------------------------------------------
 
 fn cmd_generate() {
-    let mut csprng = OsRng;
-    let signing_key = SigningKey::generate(&mut csprng);
+    let mut secret = [0u8; 32];
+    getrandom::fill(&mut secret).expect("failed to read OS entropy for key generation");
+    let signing_key = SigningKey::from_bytes(&secret);
     let verifying_key = signing_key.verifying_key();
 
     let sk_hex = hex_encode(signing_key.to_bytes().as_ref());
