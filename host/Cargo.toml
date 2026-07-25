@@ -54,6 +54,11 @@ tokio-stream = { version = "0.1", features = ["sync"] }
 # background eprintln!/panic output from corrupting the terminal display.
 libc = "0.2"
 
+# macOS: install no-op KVO overrides on winit's `WinitView` at runtime to avoid
+# the `_NSTouchBarFinder` `NSRangeException` crash (see host/src/gui/macos.rs).
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = "0.6"
+
 # host-can: pcan feature is only available on macOS and Windows.
 # On Linux, PEAK hardware uses SocketCAN (kernel driver) and the proprietary
 # libPCBUSB library does not support Linux — enabling pcan there causes a
