@@ -1,6 +1,6 @@
 # RustyCAN
 
-[![Release](https://github.com/kodezine/RustyCAN/actions/workflows/release.yml/badge.svg)](https://github.com/kodezine/RustyCAN/actions/workflows/release.yml)
+[![CI](https://github.com/kodezine/RustyCAN/actions/workflows/ci.yml/badge.svg)](https://github.com/kodezine/RustyCAN/actions/workflows/ci.yml)
 [![Latest release](https://img.shields.io/github/v/release/kodezine/RustyCAN)](https://github.com/kodezine/RustyCAN/releases/latest)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Windows%20%7C%20Linux-lightgrey)](#installation)
