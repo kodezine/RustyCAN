@@ -14,7 +14,7 @@ use host_can::frame::CanFrame;
 
 use crate::adapters::{open_adapter, probe_adapter_kind, AdapterKind};
 
-use crate::app::{CanEvent, SdoLogEntry};
+use crate::app::{CanEvent, SdoLogEntry, XcpDaqSample, XcpDir, XcpLogEntry};
 use crate::canopen::{
     self, classify_frame, extract_cob_id, full_can_id,
     nmt::{decode_heartbeat, decode_nmt_command, encode_nmt_command, NmtCommand},
@@ -36,6 +36,9 @@ use crate::canopen::{
 use crate::dbc::{self, DbcDatabase};
 use crate::eds::{parse_eds, types::ObjectDictionary};
 use crate::logger::EventLogger;
+use crate::xcp::{
+    self, a2l::A2lDatabase, command as xcpcmd, daq::DaqTracker, ByteOrder as XcpByteOrder,
+};
 
 // ─── Constants ─────────────────────────────────────────────────────────────────
 
@@ -77,6 +80,27 @@ pub enum CanCommand {
     /// Used by the DBC write UI to set signal values.  Standard IDs (≤ 0x7FF)
     /// and extended IDs (≤ 0x1FFF_FFFF) are both supported.
     SendRaw { can_id: u32, data: Vec<u8> },
+
+    /// Establish an XCP connection (sends `CONNECT` on the CRO identifier).
+    XcpConnect,
+    /// Tear down the XCP connection (sends `DISCONNECT`).
+    XcpDisconnect,
+    /// Read `len` bytes from `address` via XCP (`SET_MTA` then `UPLOAD`).
+    XcpUpload {
+        address: u32,
+        addr_ext: u8,
+        len: u16,
+    },
+    /// Write `data` to `address` via XCP (`SET_MTA` then `DOWNLOAD`).
+    XcpDownload {
+        address: u32,
+        addr_ext: u8,
+        data: Vec<u8>,
+    },
+    /// Request the seed for a protected resource (`GET_SEED`).
+    XcpGetSeed { resource: u8 },
+    /// Submit the computed key bytes to unlock a resource (`UNLOCK`).
+    XcpUnlock { key: Vec<u8> },
 }
 
 /// A raw CAN frame tapped for the live sniffer view (separate bounded channel).
@@ -257,6 +281,27 @@ pub struct SessionConfig {
     /// browser clients via the live HTTP dashboard at `http://localhost:7878/`.
     /// Pass `Some(server.tx.clone())` from the GUI after starting the server.
     pub sse_tx: Option<tokio::sync::broadcast::Sender<String>>,
+    /// Optional XCP-on-CAN configuration. When `Some`, frames on the configured
+    /// CRO/DTO identifiers are decoded as XCP (taking precedence over the
+    /// CANopen classifier, whose SDO range overlaps the default XCP IDs).
+    pub xcp: Option<XcpSessionConfig>,
+}
+
+/// XCP-on-CAN session configuration collected from the Connect form.
+#[derive(Debug, Clone)]
+pub struct XcpSessionConfig {
+    /// CRO identifier — master → slave command frames.
+    pub cro_id: u32,
+    /// DTO identifier — slave → master response / event / DAQ frames.
+    pub dto_id: u32,
+    /// Optional A2L file for measurement / characteristic name resolution.
+    pub a2l_path: Option<PathBuf>,
+}
+
+/// Runtime XCP state built once per session from [`XcpSessionConfig`].
+struct XcpRuntime {
+    config: xcp::XcpConfig,
+    a2l: A2lDatabase,
 }
 
 /// Load EDS files, open the log, spawn the recv thread.
@@ -419,6 +464,28 @@ pub fn start(config: SessionConfig) -> SessionResult {
         .filter_map(|p| p.file_stem().map(|s| s.to_string_lossy().into_owned()))
         .collect();
 
+    // ── Build XCP runtime (if configured) ─────────────────────────────────────
+    let xcp_runtime: Option<XcpRuntime> = match &config.xcp {
+        Some(x) => {
+            let a2l = match &x.a2l_path {
+                Some(p) => {
+                    let src = std::fs::read_to_string(p)
+                        .map_err(|e| format!("Failed to read A2L {}: {e}", p.display()))?;
+                    A2lDatabase::parse(&src)
+                }
+                None => A2lDatabase::default(),
+            };
+            Some(XcpRuntime {
+                config: xcp::XcpConfig {
+                    cro_id: x.cro_id,
+                    dto_id: x.dto_id,
+                },
+                a2l,
+            })
+        }
+        None => None,
+    };
+
     // ── Channels ──────────────────────────────────────────────────────────────
     let (tx, rx) = mpsc::channel::<CanEvent>();
     let (cmd_tx, cmd_rx) = mpsc::channel::<CanCommand>();
@@ -461,6 +528,7 @@ pub fn start(config: SessionConfig) -> SessionResult {
             &node_ods,
             &pdo_decoders,
             dbc_database.as_ref(),
+            xcp_runtime.as_ref(),
             tx.clone(),
             sniff_tx.clone(),
             &cmd_rx,
@@ -506,6 +574,7 @@ pub fn start(config: SessionConfig) -> SessionResult {
                         &node_ods,
                         &pdo_decoders,
                         dbc_database.as_ref(),
+                        xcp_runtime.as_ref(),
                         tx.clone(),
                         sniff_tx.clone(),
                         &cmd_rx,
@@ -563,6 +632,424 @@ pub fn start(config: SessionConfig) -> SessionResult {
 
 // ─── Receive loop ─────────────────────────────────────────────────────────────
 
+// ─── XCP master transaction state (module scope for the recv-loop helper) ────
+
+/// One step of an in-flight XCP master transaction.
+enum XcpStep {
+    Connect,
+    Disconnect,
+    GetSeed,
+    Unlock,
+    /// Awaiting the `SET_MTA` ack, then run the boxed follow-up step.
+    MtaThen(Box<XcpStep>),
+    /// After `SET_MTA`: issue `UPLOAD` and wait for data.
+    SendUpload {
+        acc: Vec<u8>,
+        remaining: u16,
+    },
+    /// Waiting for `UPLOAD` data; `remaining` bytes still to read.
+    Upload {
+        acc: Vec<u8>,
+        remaining: u16,
+    },
+    /// After `SET_MTA`: issue `DOWNLOAD` with these bytes.
+    SendDownload {
+        data: Vec<u8>,
+    },
+    /// Waiting for the `DOWNLOAD` ack.
+    DownloadAck,
+}
+
+/// One outstanding XCP transaction (XCP is single-master, single in-flight).
+struct PendingXcp {
+    step: XcpStep,
+    started_at: Instant,
+}
+
+/// Build a CAN frame for an arbitrary identifier (standard or extended).
+///
+/// Returns `None` for a payload that does not fit a classic CAN frame
+/// (> 8 bytes) rather than truncating it, so a caller can never emit a CTO
+/// whose length byte disagrees with the on-bus DLC.
+fn build_xcp_frame(can_id: u32, payload: &[u8]) -> Option<CanFrame> {
+    if payload.len() > 8 {
+        return None;
+    }
+    if can_id <= 0x7FF {
+        host_can::id::new_standard(can_id as u16).and_then(|id| CanFrame::new(id, payload))
+    } else {
+        embedded_can::ExtendedId::new(can_id)
+            .map(embedded_can::Id::Extended)
+            .and_then(|id| CanFrame::new(id, payload))
+    }
+}
+
+/// Transmit an XCP CRO frame, logging and (for non-echoing adapters) tapping the
+/// sniffer with the *actual* bytes placed on the bus. Returns `true` on success.
+fn send_xcp(
+    adapter: &mut dyn crate::adapters::CanAdapter,
+    cro_id: u32,
+    payload: &[u8],
+    logger: &mut EventLogger,
+    sniff_tx: &mpsc::SyncSender<SniffTap>,
+) -> bool {
+    let Some(frame) = build_xcp_frame(cro_id, payload) else {
+        eprintln!(
+            "XCP send error: payload too long for a classic CAN frame ({} bytes)",
+            payload.len()
+        );
+        return false;
+    };
+    // Log / tap the frame's own data so the trace always matches the wire.
+    let sent = frame.data().to_vec();
+    match adapter.send(&frame) {
+        Ok(()) => {
+            let ts = Utc::now();
+            logger.log_tx(ts, cro_id, &sent);
+            if !adapter.echoes_tx() {
+                let _ = sniff_tx.try_send(SniffTap {
+                    cob_id: cro_id,
+                    data: sent,
+                    is_tx: true,
+                    kind: "XCP",
+                    ts,
+                });
+            }
+            true
+        }
+        Err(e) => {
+            eprintln!("XCP send error: {e:?}");
+            false
+        }
+    }
+}
+
+/// Handle one XCP frame (CRO command or DTO response/event/DAQ).
+///
+/// Passive command frames feed the DAQ tracker; positive responses advance the
+/// master transaction state machine (issuing follow-up `UPLOAD`/`DOWNLOAD`
+/// frames as needed); DAQ frames are decoded and, when an A2L is loaded,
+/// labelled with measurement names.
+#[allow(clippy::too_many_arguments)]
+fn handle_xcp_frame(
+    ft: &xcp::XcpFrameType,
+    data: &[u8],
+    full_id: u32,
+    ts: chrono::DateTime<Utc>,
+    xr: &XcpRuntime,
+    adapter: &mut dyn crate::adapters::CanAdapter,
+    tx: &mpsc::Sender<CanEvent>,
+    sniff_tx: &mpsc::SyncSender<SniffTap>,
+    logger: &mut EventLogger,
+    pending_xcp: &mut Option<PendingXcp>,
+    xcp_byte_order: &mut XcpByteOrder,
+    xcp_max_cto: &mut u8,
+    xcp_ag: &mut u8,
+    xcp_daq: &mut DaqTracker,
+    xcp_daq_start_pending: &mut Option<u16>,
+    xcp_passive_connect: &mut bool,
+) {
+    let cro_id = xr.config.cro_id;
+    // Number of address-granularity elements to request in one UPLOAD so the
+    // response fits MAX_CTO. `remaining` is a byte count; UPLOAD `n` is elements.
+    let upload_chunk = |remaining: u16| -> u8 {
+        let ag = (*xcp_ag).max(1) as u16;
+        let max_elems = (((*xcp_max_cto).saturating_sub(1)).max(1) as u16 / ag).max(1);
+        let elems_remaining = remaining.div_ceil(ag);
+        elems_remaining.min(max_elems) as u8
+    };
+    match ft {
+        // ── Command (master → slave): passive decode + DAQ config tracking ──
+        xcp::XcpFrameType::Command => {
+            let _ = full_id;
+            if let Some(cmd) = xcpcmd::decode_command(data, *xcp_byte_order) {
+                // Remember an observed CONNECT so the following RES can be
+                // decoded as a CONNECT response even when another master on the
+                // bus initiated it (passive negotiation of byte order / AG).
+                if matches!(cmd, xcpcmd::XcpCommand::Connect { .. }) {
+                    *xcp_passive_connect = true;
+                }
+                if let Some(daq) = xcp_daq.on_command(&cmd) {
+                    *xcp_daq_start_pending = Some(daq);
+                }
+            }
+            let summary = xcpcmd::command_name(data.first().copied().unwrap_or(0)).to_string();
+            let _ = tx.send(CanEvent::Xcp(XcpLogEntry {
+                ts,
+                dir: XcpDir::Command,
+                summary,
+                detail: None,
+            }));
+        }
+
+        // ── Positive response (RES) ────────────────────────────────────────
+        xcp::XcpFrameType::Response => {
+            // A pending DAQ-list start consumes this response's first_pid.
+            if let Some(daq) = xcp_daq_start_pending.take() {
+                let first_pid = data.get(1).copied().unwrap_or(0);
+                xcp_daq.on_start_pid(daq, first_pid);
+                let _ = tx.send(CanEvent::Xcp(XcpLogEntry {
+                    ts,
+                    dir: XcpDir::Response,
+                    summary: format!("START_DAQ first_pid={first_pid:#04X}"),
+                    detail: None,
+                }));
+                return;
+            }
+            let Some(pending) = pending_xcp.take() else {
+                // No transaction of ours is in flight. If we just saw a CONNECT
+                // command on the bus, decode this RES as the CONNECT response so
+                // byte order / address granularity / MAX_CTO are captured for
+                // passive decoding of subsequent multi-byte fields.
+                if *xcp_passive_connect {
+                    *xcp_passive_connect = false;
+                    if let Some(cr) = xcpcmd::decode_connect_response(data) {
+                        *xcp_byte_order = cr.byte_order;
+                        *xcp_max_cto = cr.max_cto.max(1);
+                        *xcp_ag = cr.address_granularity.bytes();
+                        let _ = tx.send(CanEvent::Xcp(XcpLogEntry {
+                            ts,
+                            dir: XcpDir::Response,
+                            summary: format!(
+                                "CONNECT observed (max_cto={}, ag={}B, {:?})",
+                                cr.max_cto,
+                                cr.address_granularity.bytes(),
+                                cr.byte_order
+                            ),
+                            detail: None,
+                        }));
+                        return;
+                    }
+                }
+                let _ = tx.send(CanEvent::Xcp(XcpLogEntry {
+                    ts,
+                    dir: XcpDir::Response,
+                    summary: format!("RES {}B", data.len()),
+                    detail: None,
+                }));
+                return;
+            };
+            match pending.step {
+                XcpStep::Connect => {
+                    *xcp_passive_connect = false;
+                    if let Some(cr) = xcpcmd::decode_connect_response(data) {
+                        *xcp_byte_order = cr.byte_order;
+                        *xcp_max_cto = cr.max_cto.max(1);
+                        *xcp_ag = cr.address_granularity.bytes();
+                        let _ = tx.send(CanEvent::XcpConnected(true));
+                        let _ = tx.send(CanEvent::Xcp(XcpLogEntry {
+                            ts,
+                            dir: XcpDir::Response,
+                            summary: format!(
+                                "CONNECT ok (max_cto={}, ag={}B, {:?})",
+                                cr.max_cto,
+                                cr.address_granularity.bytes(),
+                                cr.byte_order
+                            ),
+                            detail: None,
+                        }));
+                    } else {
+                        // A RES that isn't a well-formed CONNECT response — report
+                        // it so the CONNECT failure is visible rather than silent.
+                        let _ = tx.send(CanEvent::Xcp(XcpLogEntry {
+                            ts,
+                            dir: XcpDir::Error,
+                            summary: "CONNECT failed: malformed response".into(),
+                            detail: Some(hex_join(data)),
+                        }));
+                    }
+                }
+                XcpStep::Disconnect => {
+                    let _ = tx.send(CanEvent::XcpConnected(false));
+                    let _ = tx.send(CanEvent::Xcp(XcpLogEntry {
+                        ts,
+                        dir: XcpDir::Response,
+                        summary: "DISCONNECT ok".into(),
+                        detail: None,
+                    }));
+                }
+                XcpStep::GetSeed => {
+                    let seed = if data.len() > 2 { &data[2..] } else { &[][..] };
+                    let detail = hex_join(seed);
+                    let _ = tx.send(CanEvent::Xcp(XcpLogEntry {
+                        ts,
+                        dir: XcpDir::Response,
+                        summary: format!("SEED {}B", seed.len()),
+                        detail: Some(detail),
+                    }));
+                }
+                XcpStep::Unlock => {
+                    let _ = tx.send(CanEvent::Xcp(XcpLogEntry {
+                        ts,
+                        dir: XcpDir::Response,
+                        summary: "UNLOCK ok".into(),
+                        detail: None,
+                    }));
+                }
+                XcpStep::MtaThen(next) => match *next {
+                    XcpStep::SendUpload { acc, remaining } => {
+                        let n = upload_chunk(remaining);
+                        if send_xcp(adapter, cro_id, &xcpcmd::encode_upload(n), logger, sniff_tx) {
+                            *pending_xcp = Some(PendingXcp {
+                                step: XcpStep::Upload { acc, remaining },
+                                started_at: Instant::now(),
+                            });
+                        } else {
+                            xcp_send_failed(tx, ts, "UPLOAD");
+                        }
+                    }
+                    XcpStep::SendDownload { data: dl } => {
+                        let ag = (*xcp_ag).max(1) as usize;
+                        let n = dl.len().div_ceil(ag) as u8;
+                        if send_xcp(
+                            adapter,
+                            cro_id,
+                            &xcpcmd::encode_download_n(n, &dl),
+                            logger,
+                            sniff_tx,
+                        ) {
+                            *pending_xcp = Some(PendingXcp {
+                                step: XcpStep::DownloadAck,
+                                started_at: Instant::now(),
+                            });
+                        } else {
+                            xcp_send_failed(tx, ts, "DOWNLOAD");
+                        }
+                    }
+                    _ => {}
+                },
+                XcpStep::Upload { mut acc, remaining } => {
+                    let chunk = if data.len() > 1 { &data[1..] } else { &[][..] };
+                    let take = (remaining as usize).min(chunk.len());
+                    acc.extend_from_slice(&chunk[..take]);
+                    let rem = remaining - take as u16;
+                    if rem == 0 {
+                        // All requested bytes received.
+                        let detail = hex_join(&acc);
+                        let _ = tx.send(CanEvent::Xcp(XcpLogEntry {
+                            ts,
+                            dir: XcpDir::Response,
+                            summary: format!("UPLOAD {}B", acc.len()),
+                            detail: Some(detail),
+                        }));
+                    } else if take == 0 {
+                        // Response carried no data but bytes remain — a short or
+                        // malformed frame. Report it instead of silently
+                        // truncating the read to whatever arrived so far.
+                        let _ = tx.send(CanEvent::Xcp(XcpLogEntry {
+                            ts,
+                            dir: XcpDir::Error,
+                            summary: format!(
+                                "UPLOAD truncated ({}B received, {rem}B missing)",
+                                acc.len()
+                            ),
+                            detail: None,
+                        }));
+                    } else {
+                        // More data to read: issue the next UPLOAD.
+                        let n = upload_chunk(rem);
+                        if send_xcp(adapter, cro_id, &xcpcmd::encode_upload(n), logger, sniff_tx) {
+                            *pending_xcp = Some(PendingXcp {
+                                step: XcpStep::Upload {
+                                    acc,
+                                    remaining: rem,
+                                },
+                                started_at: Instant::now(),
+                            });
+                        } else {
+                            xcp_send_failed(tx, ts, "UPLOAD");
+                        }
+                    }
+                }
+                XcpStep::DownloadAck => {
+                    let _ = tx.send(CanEvent::Xcp(XcpLogEntry {
+                        ts,
+                        dir: XcpDir::Response,
+                        summary: "DOWNLOAD ok".into(),
+                        detail: None,
+                    }));
+                }
+                XcpStep::SendUpload { .. } | XcpStep::SendDownload { .. } => {}
+            }
+        }
+
+        // ── Error / negative response (ERR) ────────────────────────────────
+        xcp::XcpFrameType::Error => {
+            let code = data.get(1).copied().unwrap_or(0);
+            *pending_xcp = None;
+            *xcp_daq_start_pending = None;
+            let _ = tx.send(CanEvent::Xcp(XcpLogEntry {
+                ts,
+                dir: XcpDir::Error,
+                summary: format!("ERR {}", xcpcmd::error_code_name(code)),
+                detail: None,
+            }));
+        }
+
+        // ── Event / service request ─────────────────────────────────────────
+        xcp::XcpFrameType::Event | xcp::XcpFrameType::ServiceRequest => {
+            let kind = if matches!(ft, xcp::XcpFrameType::Event) {
+                "EV"
+            } else {
+                "SERV"
+            };
+            let _ = tx.send(CanEvent::Xcp(XcpLogEntry {
+                ts,
+                dir: XcpDir::Event,
+                summary: kind.into(),
+                detail: None,
+            }));
+        }
+
+        // ── DAQ measurement data ────────────────────────────────────────────
+        xcp::XcpFrameType::Daq(_) => {
+            if let Some(samples) = xcp_daq.decode(data) {
+                let pid = data.first().copied().unwrap_or(0);
+                let out: Vec<XcpDaqSample> = samples
+                    .into_iter()
+                    .map(|s| {
+                        let name = xr.a2l.name_for_address(s.address).map(|n| n.to_string());
+                        let value = xr
+                            .a2l
+                            .decode_at(s.address, &s.raw, *xcp_byte_order)
+                            .map(|v| v.to_string());
+                        XcpDaqSample {
+                            address: s.address,
+                            addr_ext: s.addr_ext,
+                            name,
+                            raw: s.raw,
+                            value,
+                        }
+                    })
+                    .collect();
+                if !out.is_empty() {
+                    let _ = tx.send(CanEvent::XcpDaq { pid, samples: out });
+                }
+            }
+        }
+    }
+}
+
+/// Format bytes as space-separated uppercase hex.
+fn hex_join(bytes: &[u8]) -> String {
+    bytes
+        .iter()
+        .map(|b| format!("{b:02X}"))
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+/// Emit an XCP error log entry when a follow-up master command could not be
+/// transmitted, so the transaction ends visibly instead of appearing to time out.
+fn xcp_send_failed(tx: &mpsc::Sender<CanEvent>, ts: chrono::DateTime<Utc>, cmd: &str) {
+    let _ = tx.send(CanEvent::Xcp(XcpLogEntry {
+        ts,
+        dir: XcpDir::Error,
+        summary: format!("{cmd} send failed"),
+        detail: None,
+    }));
+}
+
 #[allow(clippy::too_many_arguments)]
 #[allow(unused_assignments)]
 fn recv_loop(
@@ -570,6 +1057,7 @@ fn recv_loop(
     ods: &[(u8, Option<ObjectDictionary>)],
     pdo_decoders: &[(u8, PdoDecoder)],
     dbc_database: Option<&DbcDatabase>,
+    xcp: Option<&XcpRuntime>,
     tx: mpsc::Sender<CanEvent>,
     sniff_tx: mpsc::SyncSender<SniffTap>,
     cmd_rx: &mpsc::Receiver<CanCommand>,
@@ -644,6 +1132,18 @@ fn recv_loop(
     // Track nodes that don't support block transfers (for auto-fallback)
     let mut nodes_no_block: HashSet<u8> = HashSet::new();
 
+    // ── XCP master state (single in-flight transaction) ──────────────────────
+    let mut pending_xcp: Option<PendingXcp> = None;
+    let mut xcp_byte_order = XcpByteOrder::default();
+    let mut xcp_max_cto: u8 = 8;
+    // Address granularity (bytes per element) negotiated in the CONNECT response.
+    let mut xcp_ag: u8 = 1;
+    let mut xcp_daq = DaqTracker::new();
+    // A DAQ list awaiting its `first_pid` in the next positive response.
+    let mut xcp_daq_start_pending: Option<u16> = None;
+    // A CONNECT command was observed; the next RES is its CONNECT response.
+    let mut xcp_passive_connect = false;
+
     // Monotonic hardware timestamp tracker.
     // The KCAN dongle encodes timestamps as 100 ns units in a u32 that wraps
     // every ~429 s.  Detect wraps and extend to a u64 nanosecond counter that
@@ -678,6 +1178,134 @@ fn recv_loop(
                                 eprintln!("NMT send error: {e:?}");
                             } else {
                                 logger.log_nmt_sent(Utc::now(), command, target_node, &payload);
+                            }
+                        }
+                    }
+
+                    CanCommand::XcpConnect => {
+                        if let Some(xr) = xcp {
+                            let payload = xcpcmd::encode_connect(0);
+                            if send_xcp(
+                                adapter.as_mut(),
+                                xr.config.cro_id,
+                                &payload,
+                                logger,
+                                &sniff_tx,
+                            ) {
+                                pending_xcp = Some(PendingXcp {
+                                    step: XcpStep::Connect,
+                                    started_at: Instant::now(),
+                                });
+                            }
+                        }
+                    }
+                    CanCommand::XcpDisconnect => {
+                        if let Some(xr) = xcp {
+                            let payload = xcpcmd::encode_disconnect();
+                            if send_xcp(
+                                adapter.as_mut(),
+                                xr.config.cro_id,
+                                &payload,
+                                logger,
+                                &sniff_tx,
+                            ) {
+                                pending_xcp = Some(PendingXcp {
+                                    step: XcpStep::Disconnect,
+                                    started_at: Instant::now(),
+                                });
+                            }
+                        }
+                    }
+                    CanCommand::XcpUpload {
+                        address,
+                        addr_ext,
+                        len,
+                    } => {
+                        if let Some(xr) = xcp {
+                            if len == 0 {
+                                // A zero-length UPLOAD would emit an invalid
+                                // element count (n = 0); reject it up front.
+                                let _ = tx.send(CanEvent::Xcp(XcpLogEntry {
+                                    ts: Utc::now(),
+                                    dir: XcpDir::Error,
+                                    summary: "UPLOAD rejected: length must be > 0".into(),
+                                    detail: None,
+                                }));
+                            } else {
+                                let payload =
+                                    xcpcmd::encode_set_mta(address, addr_ext, xcp_byte_order);
+                                if send_xcp(
+                                    adapter.as_mut(),
+                                    xr.config.cro_id,
+                                    &payload,
+                                    logger,
+                                    &sniff_tx,
+                                ) {
+                                    pending_xcp = Some(PendingXcp {
+                                        step: XcpStep::MtaThen(Box::new(XcpStep::SendUpload {
+                                            acc: Vec::new(),
+                                            remaining: len,
+                                        })),
+                                        started_at: Instant::now(),
+                                    });
+                                }
+                            }
+                        }
+                    }
+                    CanCommand::XcpDownload {
+                        address,
+                        addr_ext,
+                        data,
+                    } => {
+                        if let Some(xr) = xcp {
+                            let payload = xcpcmd::encode_set_mta(address, addr_ext, xcp_byte_order);
+                            if send_xcp(
+                                adapter.as_mut(),
+                                xr.config.cro_id,
+                                &payload,
+                                logger,
+                                &sniff_tx,
+                            ) {
+                                pending_xcp = Some(PendingXcp {
+                                    step: XcpStep::MtaThen(Box::new(XcpStep::SendDownload {
+                                        data,
+                                    })),
+                                    started_at: Instant::now(),
+                                });
+                            }
+                        }
+                    }
+                    CanCommand::XcpGetSeed { resource } => {
+                        if let Some(xr) = xcp {
+                            let payload = xcpcmd::encode_get_seed(0, resource);
+                            if send_xcp(
+                                adapter.as_mut(),
+                                xr.config.cro_id,
+                                &payload,
+                                logger,
+                                &sniff_tx,
+                            ) {
+                                pending_xcp = Some(PendingXcp {
+                                    step: XcpStep::GetSeed,
+                                    started_at: Instant::now(),
+                                });
+                            }
+                        }
+                    }
+                    CanCommand::XcpUnlock { key } => {
+                        if let Some(xr) = xcp {
+                            let payload = xcpcmd::encode_unlock(key.len() as u8, &key);
+                            if send_xcp(
+                                adapter.as_mut(),
+                                xr.config.cro_id,
+                                &payload,
+                                logger,
+                                &sniff_tx,
+                            ) {
+                                pending_xcp = Some(PendingXcp {
+                                    step: XcpStep::Unlock,
+                                    started_at: Instant::now(),
+                                });
                             }
                         }
                     }
@@ -1117,19 +1745,28 @@ fn recv_loop(
 
         let data = frame.data();
         let cob_id = extract_cob_id(&frame);
+        let full_id = full_can_id(&frame);
         let ts = Utc::now();
         // Pass hardware timestamp to logger for this frame (None for PEAK).
         logger.set_hw_timestamp(hardware_timestamp_ns);
 
+        // Classify against the configured XCP CRO/DTO identifiers first — these
+        // overlap the CANopen SDO range, so XCP takes precedence when enabled.
+        let xcp_ft = xcp.and_then(|xr| xcp::classify(&xr.config, full_id, data));
+
         // Live sniffer tap: every data frame, before decode (bounded, lossy).
         // Extended IDs carry no CANopen meaning, so classify them as RAW rather
         // than mislabelling based on their lower 11 bits.
-        let sniff_type = match frame.id() {
-            embedded_can::Id::Standard(_) => sniff_kind(cob_id),
-            embedded_can::Id::Extended(_) => "RAW_FRAME",
+        let sniff_type = if xcp_ft.is_some() {
+            "XCP"
+        } else {
+            match frame.id() {
+                embedded_can::Id::Standard(_) => sniff_kind(cob_id),
+                embedded_can::Id::Extended(_) => "RAW_FRAME",
+            }
         };
         let _ = sniff_tx.try_send(SniffTap {
-            cob_id: full_can_id(&frame),
+            cob_id: full_id,
             data: data.to_vec(),
             is_tx: false,
             kind: sniff_type,
@@ -1152,6 +1789,29 @@ fn recv_loop(
                 }
                 logged = true;
             }
+        }
+
+        // ── XCP decode (takes precedence over CANopen on configured CRO/DTO) ──
+        if let (Some(xr), Some(ft)) = (xcp, xcp_ft.clone()) {
+            handle_xcp_frame(
+                &ft,
+                data,
+                full_id,
+                ts,
+                xr,
+                adapter.as_mut(),
+                &tx,
+                &sniff_tx,
+                logger,
+                &mut pending_xcp,
+                &mut xcp_byte_order,
+                &mut xcp_max_cto,
+                &mut xcp_ag,
+                &mut xcp_daq,
+                &mut xcp_daq_start_pending,
+                &mut xcp_passive_connect,
+            );
+            continue;
         }
 
         match classify_frame(cob_id) {
@@ -2257,6 +2917,19 @@ fn recv_loop(
                 if tx.send(CanEvent::Sdo(entry)).is_err() {
                     return false;
                 }
+            }
+        }
+
+        // ── XCP transaction timeout scan ─────────────────────────────────────
+        if let Some(p) = &pending_xcp {
+            if p.started_at.elapsed().as_millis() as u64 >= sdo_timeout_ms {
+                pending_xcp = None;
+                let _ = tx.send(CanEvent::Xcp(XcpLogEntry {
+                    ts: Utc::now(),
+                    dir: XcpDir::Error,
+                    summary: "XCP timeout".into(),
+                    detail: None,
+                }));
             }
         }
     }

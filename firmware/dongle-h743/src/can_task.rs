@@ -32,7 +32,7 @@ use defmt::*;
 #[embassy_executor::task]
 pub async fn can_task(
     can: Can<'static>,
-    can_to_usb: &'static Channel<CriticalSectionRawMutex, KCanFrame, 32>,
+    can_to_usb: &'static crate::CanToUsbChannel,
     usb_to_can: &'static Channel<CriticalSectionRawMutex, KCanFrame, 32>,
 ) {
     let (mut tx, mut rx, _) = can.split();
@@ -115,6 +115,8 @@ pub async fn can_task(
                         // channel; silently drop to avoid log spam.
                         #[cfg(not(feature = "periodic-echo"))]
                         if can_to_usb.try_send(kf).is_err() {
+                            // Audit #65: count silent drops instead of hiding them.
+                            crate::display_task::RX_DROP_COUNTER.fetch_add(1, Ordering::Relaxed);
                             trace!("can_to_usb channel full — RX frame dropped");
                         }
                         #[cfg(feature = "periodic-echo")]

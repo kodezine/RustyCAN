@@ -63,7 +63,7 @@ pub async fn kcan_io_task(
         'static,
         embassy_stm32::usb::Driver<'static, embassy_stm32::peripherals::USB_OTG_HS>,
     >,
-    can_to_usb: &'static Channel<CriticalSectionRawMutex, KCanFrame, 32>,
+    can_to_usb: &'static crate::CanToUsbChannel,
     usb_to_can: &'static Channel<CriticalSectionRawMutex, KCanFrame, 32>,
     usb_to_can2: &'static Channel<CriticalSectionRawMutex, KCanFrame, 32>,
 ) {

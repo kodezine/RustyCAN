@@ -67,6 +67,11 @@ pub static BAUD_KBPS: AtomicU32 = AtomicU32::new(250);
 /// swapped to zero by `display_task` each second to compute fps.
 pub static RX_FRAME_COUNTER: AtomicU32 = AtomicU32::new(0);
 
+/// RX drop counter (audit #65) — incremented by [`crate::can_task`] whenever a
+/// received frame cannot be queued because the CAN-RX → USB channel is full.
+/// Cumulative; never cleared, so a non-zero value flags sustained overrun.
+pub static RX_DROP_COUNTER: AtomicU32 = AtomicU32::new(0);
+
 /// Bitset of seen standard (11-bit) CAN IDs.  64 × u32 = 2048 bits, one per ID.
 /// Written by [`crate::can_task`] via `fetch_or`; never cleared (cumulative).
 pub static SEEN_IDS: [AtomicU32; 64] = {

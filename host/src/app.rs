@@ -75,6 +75,46 @@ pub struct PdoLogEntry {
     pub values: Vec<PdoValue>,
 }
 
+// ─── XCP state ────────────────────────────────────────────────────────────────
+
+/// Direction / kind of an XCP log entry.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum XcpDir {
+    /// Command frame sent/observed on the CRO identifier.
+    Command,
+    /// Positive command response (`RES`).
+    Response,
+    /// Error / negative response (`ERR`).
+    Error,
+    /// Asynchronous event / service packet (`EV` / `SERV`).
+    Event,
+}
+
+/// One XCP command / response entry kept in the ring buffer for display.
+#[derive(Debug, Clone)]
+pub struct XcpLogEntry {
+    pub ts: DateTime<Utc>,
+    pub dir: XcpDir,
+    /// Short summary (e.g. `"CONNECT"`, `"RES 6B"`, `"ERR ERR_ACCESS_LOCKED"`).
+    pub summary: String,
+    /// Optional detail (e.g. uploaded bytes / seed hex).
+    pub detail: Option<String>,
+}
+
+/// One live XCP DAQ measurement element (keyed by address extension + address).
+#[derive(Debug, Clone)]
+pub struct XcpDaqSample {
+    pub address: u32,
+    /// Address extension / page selector the element was sampled from.
+    pub addr_ext: u8,
+    /// A2L name when resolved, otherwise `None`.
+    pub name: Option<String>,
+    /// Raw bytes as received on the bus.
+    pub raw: Vec<u8>,
+    /// Decoded raw value display when the A2L datatype is known.
+    pub value: Option<String>,
+}
+
 /// Decoded CAN event passed from the recv thread to the UI thread.
 pub enum CanEvent {
     Nmt {
@@ -119,6 +159,15 @@ pub enum CanEvent {
         /// Source CAN channel: 0 = FDCAN1, 1 = FDCAN2.
         port: u8,
     },
+    /// A decoded XCP command / response / event entry for the XCP log.
+    Xcp(XcpLogEntry),
+    /// Live XCP DAQ measurement values decoded from a DTO DAQ frame.
+    XcpDaq {
+        pid: u8,
+        samples: Vec<XcpDaqSample>,
+    },
+    /// XCP connection state changed (`true` = connected after CONNECT `RES`).
+    XcpConnected(bool),
 }
 
 // ─── Application state ───────────────────────────────────────────────────────
@@ -158,6 +207,12 @@ pub struct AppState {
     pub device_fw_version: Option<(u8, u8, u8)>,
     /// Path of the JSONL log file for display.
     pub log_path: String,
+    /// Ring buffer of recent XCP command / response entries.
+    pub xcp_log: VecDeque<XcpLogEntry>,
+    /// Live XCP DAQ values keyed by ECU address.
+    pub xcp_daq_values: HashMap<(u8, u32), XcpDaqSample>,
+    /// Whether an XCP connection is currently established.
+    pub xcp_connected: bool,
     // Internal FPS tracking.
     fps_window_start: Instant,
     fps_window_count: u64,
@@ -165,6 +220,7 @@ pub struct AppState {
 
 const SDO_LOG_CAP: usize = 50;
 const PDO_LOG_CAP: usize = 100;
+const XCP_LOG_CAP: usize = 100;
 const FPS_WINDOW_SECS: f64 = 2.0;
 
 impl AppState {
@@ -184,6 +240,9 @@ impl AppState {
             baud_rate,
             device_fw_version: None,
             log_path,
+            xcp_log: VecDeque::with_capacity(XCP_LOG_CAP + 1),
+            xcp_daq_values: HashMap::new(),
+            xcp_connected: false,
             fps_window_start: Instant::now(),
             fps_window_count: 0,
         }
@@ -229,6 +288,13 @@ impl AppState {
             self.sdo_log.pop_front();
         }
         self.sdo_log.push_back(entry);
+    }
+
+    pub fn push_xcp(&mut self, entry: XcpLogEntry) {
+        if self.xcp_log.len() >= XCP_LOG_CAP {
+            self.xcp_log.pop_front();
+        }
+        self.xcp_log.push_back(entry);
     }
 
     pub fn update_pdo(&mut self, node_id: u8, cob_id: u16, values: Vec<PdoValue>) {
@@ -326,6 +392,17 @@ pub fn apply_event(state: &mut AppState, ev: CanEvent) {
         }
         // Raw frames not decoded by DBC or CANopen — nothing to record in state.
         CanEvent::RawFrame { .. } => {}
+        CanEvent::Xcp(entry) => {
+            state.push_xcp(entry);
+        }
+        CanEvent::XcpDaq { pid: _, samples } => {
+            for s in samples {
+                state.xcp_daq_values.insert((s.addr_ext, s.address), s);
+            }
+        }
+        CanEvent::XcpConnected(connected) => {
+            state.xcp_connected = connected;
+        }
         CanEvent::DbcSignal(frame_signals) => {
             let now = Instant::now();
             // Store the raw payload so the GUI can use it as a base for writes.

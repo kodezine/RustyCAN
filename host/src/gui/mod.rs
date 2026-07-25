@@ -383,6 +383,14 @@ struct ConnectForm {
     /// When true the GUI will connect automatically on the first frame where
     /// the adapter is detected — no user click required.  Set by `--auto-connect`.
     auto_connect: bool,
+    /// Enable XCP-on-CAN decoding on the configured CRO/DTO identifiers.
+    xcp_enabled: bool,
+    /// CRO identifier (master → slave), hex (`0x600`) or decimal.
+    xcp_cro_str: String,
+    /// DTO identifier (slave → master), hex (`0x601`) or decimal.
+    xcp_dto_str: String,
+    /// Optional A2L file for measurement / characteristic name resolution.
+    xcp_a2l_path: String,
 }
 
 impl Clone for ConnectForm {
@@ -412,6 +420,10 @@ impl Clone for ConnectForm {
             original_adapter_kind: self.original_adapter_kind.clone(),
             message_history: self.message_history.clone(),
             auto_connect: self.auto_connect,
+            xcp_enabled: self.xcp_enabled,
+            xcp_cro_str: self.xcp_cro_str.clone(),
+            xcp_dto_str: self.xcp_dto_str.clone(),
+            xcp_a2l_path: self.xcp_a2l_path.clone(),
         }
     }
 }
@@ -425,6 +437,50 @@ struct NodeEntry {
 #[derive(Clone, serde::Serialize, serde::Deserialize)]
 struct DbcEntry {
     path: String,
+}
+
+/// Parse a CAN identifier from a hex (`0x600`) or decimal string.
+fn parse_u32_auto(s: &str) -> Option<u32> {
+    let t = s.trim();
+    if let Some(hex) = t.strip_prefix("0x").or_else(|| t.strip_prefix("0X")) {
+        u32::from_str_radix(hex, 16).ok()
+    } else {
+        t.parse::<u32>().ok()
+    }
+}
+
+/// Build an [`XcpSessionConfig`] from an enabled flag and identifier / A2L
+/// strings, returning `None` when disabled or the identifiers do not parse.
+fn build_xcp_config(
+    enabled: bool,
+    cro: &str,
+    dto: &str,
+    a2l: &str,
+) -> Option<session::XcpSessionConfig> {
+    if !enabled {
+        return None;
+    }
+    let cro_id = parse_u32_auto(cro)?;
+    let dto_id = parse_u32_auto(dto)?;
+    // Reject identifiers that cannot be a valid CAN ID (> 29-bit) and the
+    // ambiguous CRO == DTO case, which would make frame direction undecidable.
+    const MAX_EXT_ID: u32 = 0x1FFF_FFFF;
+    if cro_id > MAX_EXT_ID || dto_id > MAX_EXT_ID || cro_id == dto_id {
+        return None;
+    }
+    let a2l_path = {
+        let t = a2l.trim();
+        if t.is_empty() {
+            None
+        } else {
+            Some(std::path::PathBuf::from(t))
+        }
+    };
+    Some(session::XcpSessionConfig {
+        cro_id,
+        dto_id,
+        a2l_path,
+    })
 }
 
 // ── Configuration persistence ────────────────────────────────────────────────
@@ -450,6 +506,18 @@ struct PersistedConfig {
     /// Omitting this field uses 7878. The `--http-port` CLI flag overrides it.
     #[serde(default)]
     http_port: Option<u16>,
+    /// Enable XCP-on-CAN decoding.
+    #[serde(default)]
+    xcp_enabled: bool,
+    /// XCP CRO identifier (hex or decimal string).
+    #[serde(default)]
+    xcp_cro: String,
+    /// XCP DTO identifier (hex or decimal string).
+    #[serde(default)]
+    xcp_dto: String,
+    /// Optional A2L file path.
+    #[serde(default)]
+    xcp_a2l: String,
 }
 
 impl PersistedConfig {
@@ -538,6 +606,10 @@ impl PersistedConfig {
             original_adapter_kind: None,
             message_history: vec![],
             auto_connect: false,
+            xcp_enabled: self.xcp_enabled,
+            xcp_cro_str: self.xcp_cro,
+            xcp_dto_str: self.xcp_dto,
+            xcp_a2l_path: self.xcp_a2l,
         }
     }
 }
@@ -556,6 +628,10 @@ impl From<&ConnectForm> for PersistedConfig {
             kcan_serial: form.kcan_serial.clone(),
             dbc_files: form.dbc_files.clone(),
             http_port: None, // not persisted to the app-data config; set via --config file only
+            xcp_enabled: form.xcp_enabled,
+            xcp_cro: form.xcp_cro_str.clone(),
+            xcp_dto: form.xcp_dto_str.clone(),
+            xcp_a2l: form.xcp_a2l_path.clone(),
         }
     }
 }
@@ -589,6 +665,10 @@ impl Default for ConnectForm {
                 original_adapter_kind: None,
                 message_history: vec![],
                 auto_connect: false,
+                xcp_enabled: false,
+                xcp_cro_str: "0x600".into(),
+                xcp_dto_str: "0x601".into(),
+                xcp_a2l_path: String::new(),
             }
         }
     }
@@ -670,6 +750,12 @@ impl ConnectForm {
                 .map(|e| PathBuf::from(e.path.trim()))
                 .collect(),
             sse_tx: Some(sse_tx),
+            xcp: build_xcp_config(
+                self.xcp_enabled,
+                &self.xcp_cro_str,
+                &self.xcp_dto_str,
+                &self.xcp_a2l_path,
+            ),
         };
 
         let (rx, cmd_tx, sniff_rx, node_labels, actual_log_path, startup_notice) =
@@ -740,6 +826,7 @@ impl ConnectForm {
             node_labels: node_labels_clone,
             node_ods,
             sdo_browser: SdoBrowserPanel::default(),
+            xcp_panel: XcpPanel::default(),
             plot_state: plot_view::PlotState::default(),
             plot_open: false,
             dbc_filter: String::new(),
@@ -1575,6 +1662,40 @@ fn render_connect(
                         });
                 });
 
+            // ── XCP (optional) ────────────────────────────────────────────
+            egui::CollapsingHeader::new(egui::RichText::new("XCP (optional)").strong())
+                .default_open(false)
+                .show(ui, |ui| {
+                    ui.checkbox(&mut form.xcp_enabled, "Enable XCP-on-CAN decoding");
+                    ui.add_enabled_ui(form.xcp_enabled, |ui| {
+                        egui::Grid::new("xcp_grid")
+                            .num_columns(2)
+                            .spacing([12.0, 8.0])
+                            .show(ui, |ui| {
+                                ui.label("CRO ID (master→slave)");
+                                ui.text_edit_singleline(&mut form.xcp_cro_str);
+                                ui.end_row();
+                                ui.label("DTO ID (slave→master)");
+                                ui.text_edit_singleline(&mut form.xcp_dto_str);
+                                ui.end_row();
+                                ui.label("A2L file (optional)");
+                                ui.horizontal(|ui| {
+                                    ui.text_edit_singleline(&mut form.xcp_a2l_path);
+                                    if ui.button("Browse…").clicked() {
+                                        if let Some(path) = FileDialog::new()
+                                            .add_filter("A2L", &["a2l", "A2L"])
+                                            .set_title("Select A2L file")
+                                            .pick_file()
+                                        {
+                                            form.xcp_a2l_path = path.to_string_lossy().into_owned();
+                                        }
+                                    }
+                                });
+                                ui.end_row();
+                            });
+                    });
+                });
+
             ui.add_space(20.0);
 
             // ── Live warnings (duplicate node IDs) ────────────────────────
@@ -1591,6 +1712,23 @@ fn render_connect(
                     .filter(|(_, count)| *count > 1)
                     .map(|(id, _)| format!("Node ID {} is used more than once", id))
                     .collect();
+
+                // XCP is enabled but the CRO/DTO IDs are unusable — surface why
+                // decoding will be silently disabled instead of leaving the user
+                // to wonder why no XCP frames appear.
+                if form.xcp_enabled
+                    && build_xcp_config(
+                        form.xcp_enabled,
+                        &form.xcp_cro_str,
+                        &form.xcp_dto_str,
+                        &form.xcp_a2l_path,
+                    )
+                    .is_none()
+                {
+                    form.warnings.push(
+                        "XCP is enabled but the CRO/DTO IDs are invalid (must parse, be \u{2264} 0x1FFFFFFF, and differ); XCP decoding will be disabled".to_string(),
+                    );
+                }
                 form.warnings.sort();
             }
 
@@ -1769,6 +1907,18 @@ enum MonitorTab {
     Monitor,
     Sniffer,
     Plots,
+    Xcp,
+}
+
+/// Input buffers for the XCP tab's master-command controls.
+#[derive(Default)]
+struct XcpPanel {
+    upload_addr: String,
+    upload_len: String,
+    download_addr: String,
+    download_data: String,
+    seed_resource: String,
+    unlock_key: String,
 }
 
 /// Sniffer transmit backend: forwards to the CAN session via `CanCommand::SendRaw`.
@@ -1831,6 +1981,8 @@ struct MonitorView {
     node_ods: std::collections::HashMap<u8, crate::eds::types::ObjectDictionary>,
     /// State for the SDO Browser panel.
     sdo_browser: SdoBrowserPanel,
+    /// Input buffers for the XCP tab's master commands.
+    xcp_panel: XcpPanel,
     /// All plot-related state (ring buffers, chart configs).
     plot_state: plot_view::PlotState,
     /// Whether the plot window is currently open.
@@ -2705,6 +2857,7 @@ fn render_monitor(
                 "\u{1F50D} Sniffer",
             );
             ui.selectable_value(&mut view.active_tab, MonitorTab::Plots, "\u{1F4C8} Plots");
+            ui.selectable_value(&mut view.active_tab, MonitorTab::Xcp, "\u{1F527} XCP");
         });
         ui.separator();
         match view.active_tab {
@@ -2776,6 +2929,18 @@ fn render_monitor(
                     });
                 egui::CentralPanel::default().show(ui, |ui| {
                     sniffer_egui::inspector(ui, &mut view.sniffer, None);
+                });
+            }
+            MonitorTab::Xcp => {
+                egui::ScrollArea::vertical().show(ui, |ui| {
+                    sniffer_egui::apply_compact_text(ui);
+                    xcp_section(
+                        ui,
+                        &view.state,
+                        &view.cmd_tx,
+                        view.listen_only,
+                        &mut view.xcp_panel,
+                    );
                 });
             }
             MonitorTab::Plots => {
@@ -4625,6 +4790,220 @@ fn sdo_section(ui: &mut egui::Ui, state: &AppState) {
         });
 }
 
+/// XCP tab: connection controls, master commands, live DAQ, and the XCP log.
+fn xcp_section(
+    ui: &mut egui::Ui,
+    state: &AppState,
+    cmd_tx: &mpsc::Sender<CanCommand>,
+    listen_only: bool,
+    panel: &mut XcpPanel,
+) {
+    use crate::app::XcpDir;
+
+    // ── Connection status + connect / disconnect ─────────────────────────────
+    ui.horizontal(|ui| {
+        ui.strong("XCP");
+        let (label, color) = if state.xcp_connected {
+            ("CONNECTED", egui::Color32::from_rgb(80, 200, 120))
+        } else {
+            ("disconnected", egui::Color32::GRAY)
+        };
+        ui.colored_label(color, label);
+        ui.separator();
+        if ui
+            .add_enabled(!listen_only, egui::Button::new("Connect"))
+            .clicked()
+        {
+            let _ = cmd_tx.send(CanCommand::XcpConnect);
+        }
+        if ui
+            .add_enabled(!listen_only, egui::Button::new("Disconnect"))
+            .clicked()
+        {
+            let _ = cmd_tx.send(CanCommand::XcpDisconnect);
+        }
+    });
+    if listen_only {
+        ui.weak("Listen-only mode: transmit commands are disabled.");
+    }
+    ui.separator();
+
+    // ── Upload (SET_MTA + UPLOAD) ────────────────────────────────────────────
+    ui.horizontal(|ui| {
+        ui.label("Upload  addr");
+        ui.add(
+            egui::TextEdit::singleline(&mut panel.upload_addr)
+                .desired_width(110.0)
+                .hint_text("0x20000000"),
+        );
+        ui.label("len");
+        ui.add(
+            egui::TextEdit::singleline(&mut panel.upload_len)
+                .desired_width(48.0)
+                .hint_text("4"),
+        );
+        if ui
+            .add_enabled(!listen_only, egui::Button::new("Read"))
+            .clicked()
+        {
+            if let (Some(address), Ok(len)) = (
+                parse_u32_auto(&panel.upload_addr),
+                panel.upload_len.trim().parse::<u16>(),
+            ) {
+                // A zero-length UPLOAD is an invalid XCP request (element count
+                // 0); ignore the click rather than sending malformed traffic.
+                if len > 0 {
+                    let _ = cmd_tx.send(CanCommand::XcpUpload {
+                        address,
+                        addr_ext: 0,
+                        len,
+                    });
+                }
+            }
+        }
+    });
+
+    // ── Download (SET_MTA + DOWNLOAD) ────────────────────────────────────────
+    ui.horizontal(|ui| {
+        ui.label("Download addr");
+        ui.add(
+            egui::TextEdit::singleline(&mut panel.download_addr)
+                .desired_width(110.0)
+                .hint_text("0x20000000"),
+        );
+        ui.label("data");
+        ui.add(
+            egui::TextEdit::singleline(&mut panel.download_data)
+                .desired_width(160.0)
+                .hint_text("DE AD BE EF"),
+        );
+        if ui
+            .add_enabled(!listen_only, egui::Button::new("Write"))
+            .clicked()
+        {
+            if let (Some(address), Ok(data)) = (
+                parse_u32_auto(&panel.download_addr),
+                parse_hex_bytes(&panel.download_data),
+            ) {
+                if !data.is_empty() {
+                    let _ = cmd_tx.send(CanCommand::XcpDownload {
+                        address,
+                        addr_ext: 0,
+                        data,
+                    });
+                }
+            }
+        }
+    });
+
+    // ── Seed & key (manual unlock) ───────────────────────────────────────────
+    ui.horizontal(|ui| {
+        ui.label("Seed res");
+        ui.add(
+            egui::TextEdit::singleline(&mut panel.seed_resource)
+                .desired_width(48.0)
+                .hint_text("0x01"),
+        );
+        if ui
+            .add_enabled(!listen_only, egui::Button::new("Get Seed"))
+            .clicked()
+        {
+            if let Some(resource) = parse_u32_auto(&panel.seed_resource) {
+                // The XCP resource mask is a single byte; ignore out-of-range
+                // input rather than silently wrapping to the wrong resource.
+                if let Ok(resource) = u8::try_from(resource) {
+                    let _ = cmd_tx.send(CanCommand::XcpGetSeed { resource });
+                }
+            }
+        }
+        ui.separator();
+        ui.label("Unlock key");
+        ui.add(
+            egui::TextEdit::singleline(&mut panel.unlock_key)
+                .desired_width(160.0)
+                .hint_text("computed key bytes (hex)"),
+        );
+        if ui
+            .add_enabled(!listen_only, egui::Button::new("Unlock"))
+            .clicked()
+        {
+            if let Ok(key) = parse_hex_bytes(&panel.unlock_key) {
+                if !key.is_empty() {
+                    let _ = cmd_tx.send(CanCommand::XcpUnlock { key });
+                }
+            }
+        }
+    });
+    ui.separator();
+
+    // ── Live DAQ measurement values ──────────────────────────────────────────
+    egui::CollapsingHeader::new(
+        egui::RichText::new(format!("Live DAQ  ({})", state.xcp_daq_values.len())).strong(),
+    )
+    .default_open(true)
+    .show(ui, |ui| {
+        if state.xcp_daq_values.is_empty() {
+            ui.label("No DAQ values yet.");
+        } else {
+            let mut rows: Vec<_> = state.xcp_daq_values.values().collect();
+            rows.sort_by_key(|s| (s.addr_ext, s.address));
+            for s in rows {
+                ui.horizontal(|ui| {
+                    let label = s
+                        .name
+                        .clone()
+                        .unwrap_or_else(|| format!("0x{:08X}", s.address));
+                    ui.monospace(label);
+                    ui.label("=");
+                    let value = s.value.clone().unwrap_or_else(|| {
+                        s.raw
+                            .iter()
+                            .map(|b| format!("{b:02X}"))
+                            .collect::<Vec<_>>()
+                            .join(" ")
+                    });
+                    ui.strong(value);
+                });
+            }
+        }
+    });
+    ui.add_space(4.0);
+
+    // ── XCP command / response log ───────────────────────────────────────────
+    egui::CollapsingHeader::new(
+        egui::RichText::new(format!("XCP Log  (last {})", state.xcp_log.len())).strong(),
+    )
+    .default_open(true)
+    .show(ui, |ui| {
+        egui::ScrollArea::vertical()
+            .id_salt("xcp_scroll")
+            .max_height(280.0)
+            .stick_to_bottom(true)
+            .show(ui, |ui| {
+                for entry in &state.xcp_log {
+                    let ts = entry.ts.format("%H:%M:%S%.3f").to_string();
+                    let (dir_str, dir_color) = match entry.dir {
+                        XcpDir::Command => ("CRO", egui::Color32::from_rgb(80, 200, 255)),
+                        XcpDir::Response => ("RES", egui::Color32::from_rgb(80, 200, 120)),
+                        XcpDir::Error => ("ERR", egui::Color32::RED),
+                        XcpDir::Event => ("EV ", egui::Color32::from_rgb(200, 180, 90)),
+                    };
+                    ui.horizontal(|ui| {
+                        ui.monospace(format!("[{ts}]"));
+                        ui.colored_label(dir_color, dir_str);
+                        ui.label(entry.summary.as_str());
+                        if let Some(d) = &entry.detail {
+                            ui.weak(d.as_str());
+                        }
+                    });
+                }
+                if state.xcp_log.is_empty() {
+                    ui.label("No XCP activity yet.");
+                }
+            });
+    });
+}
+
 // ─── Entry point ──────────────────────────────────────────────────────────────
 
 pub fn run(
@@ -4799,6 +5178,12 @@ pub fn load_session_config(
             .map(|e| std::path::PathBuf::from(e.path.trim()))
             .collect(),
         sse_tx,
+        xcp: build_xcp_config(
+            config.xcp_enabled,
+            &config.xcp_cro,
+            &config.xcp_dto,
+            &config.xcp_a2l,
+        ),
     })
 }
 
@@ -4944,6 +5329,56 @@ mod tests {
         let mut harness = egui_kittest::Harness::new_ui(|ui| bus_load_bar(ui, 85.0));
         harness.run();
         harness.snapshot("bus_load_bar_85pct");
+    }
+
+    // ── XCP tab render test ───────────────────────────────────────────────────
+    //
+    // Renders the real `xcp_section` widget with a populated AppState and asserts
+    // the key controls and log/DAQ content are present in the accessibility tree.
+    // Deliberately *not* a pixel snapshot: the text-heavy panel varies across OS
+    // font rendering, so this asserts on the widget tree instead (CI-portable,
+    // no per-OS baseline image required).
+    #[test]
+    fn xcp_tab_renders_expected_controls() {
+        use crate::app::{XcpDaqSample, XcpDir, XcpLogEntry};
+        use egui_kittest::kittest::Queryable;
+
+        let (cmd_tx, _cmd_rx) = mpsc::channel::<CanCommand>();
+        let mut state = AppState::new("test.jsonl".into(), 250_000);
+        state.xcp_connected = true;
+        state.xcp_daq_values.insert(
+            (0, 0x2000_0000),
+            XcpDaqSample {
+                address: 0x2000_0000,
+                addr_ext: 0,
+                name: Some("engine_speed".into()),
+                raw: vec![0x10, 0x27],
+                value: Some("10000".into()),
+            },
+        );
+        state.push_xcp(XcpLogEntry {
+            ts: chrono::Utc::now(),
+            dir: XcpDir::Response,
+            summary: "CONNECT ok".into(),
+            detail: None,
+        });
+        let mut panel = XcpPanel::default();
+
+        let mut harness = egui_kittest::Harness::new_ui(move |ui| {
+            xcp_section(ui, &state, &cmd_tx, false, &mut panel);
+        });
+        harness.run();
+
+        // Master-command controls render (panics if a label is absent/ambiguous).
+        harness.get_by_label("Connect");
+        harness.get_by_label("Disconnect");
+        harness.get_by_label("Read");
+        harness.get_by_label("Write");
+        harness.get_by_label("Get Seed");
+        harness.get_by_label("Unlock");
+        // The connection status and the decoded DAQ measurement name are shown.
+        harness.get_by_label("CONNECTED");
+        harness.get_by_label("engine_speed");
     }
 
     // ── Linux-specific: SocketCAN connect-form snapshots ─────────────────────

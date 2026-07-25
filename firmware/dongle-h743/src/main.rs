@@ -103,8 +103,19 @@ use kcan_usb::KCanUsbClass;
 
 // ─── Shared channels ──────────────────────────────────────────────────────────
 
+/// Depth of the CAN-RX → USB channel.
+///
+/// Sized for burst DAQ capture (audit #65): ≥256 entries so a short USB stall
+/// (bulk-IN NAK, host scheduling gap) does not drop received CAN frames. At the
+/// classic-CAN line rate this buffers ~tens of milliseconds of back-to-back
+/// frames, decoupling the CAN-RX ISR path from USB latency.
+pub const CAN_TO_USB_DEPTH: usize = 256;
+
+/// Channel type for the CAN RX → USB Bulk IN path.
+pub type CanToUsbChannel = Channel<CriticalSectionRawMutex, KCanFrame, CAN_TO_USB_DEPTH>;
+
 /// CAN RX → USB Bulk IN.
-static CAN_TO_USB: Channel<CriticalSectionRawMutex, KCanFrame, 32> = Channel::new();
+static CAN_TO_USB: CanToUsbChannel = Channel::new();
 
 /// USB Bulk OUT → FDCAN1 TX (channel 0).
 static USB_TO_CAN: Channel<CriticalSectionRawMutex, KCanFrame, 32> = Channel::new();
