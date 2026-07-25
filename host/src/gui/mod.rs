@@ -87,6 +87,9 @@ use crate::session::{self, CanCommand, SessionConfig, SniffTap};
 
 mod plot_view;
 
+#[cfg(target_os = "macos")]
+mod macos;
+
 // ─── Icon glyphs (Font Awesome codepoints present in MesloLGS NF) ────────────
 mod icons {
     // App / toolbar
@@ -4648,6 +4651,14 @@ pub fn run(
         "RustyCAN",
         options,
         Box::new(|cc| {
+            // macOS: the `WinitView` class now exists (the window/view was just
+            // created), but the run loop has not started, so AppKit's
+            // `_NSTouchBarFinder` has not yet observed it. Install no-op KVO
+            // overrides on `WinitView` before the first display-cycle flush to
+            // prevent the `NSRangeException` crash. See `macos`.
+            #[cfg(target_os = "macos")]
+            macos::suppress_touch_bar_kvo();
+
             // ── Load MesloLGS NF and set it as the default font ───────────
             let font_data =
                 egui::FontData::from_static(include_bytes!("../../assets/MesloLGSNF-Regular.ttf"));

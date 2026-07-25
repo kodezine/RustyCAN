@@ -4364,6 +4364,7 @@ dependencies = [
  "kcan-protocol",
  "libc",
  "nusb",
+ "objc2 0.6.4",
  "ratatui",
  "rfd",
  "rusb",
