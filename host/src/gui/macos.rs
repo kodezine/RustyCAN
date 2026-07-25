@@ -92,6 +92,14 @@ pub(super) fn suppress_touch_bar_kvo() {
     unsafe {
         let cls = objc_getClass(c"WinitView".as_ptr()) as *mut AnyClass;
         if cls.is_null() {
+            // If `WinitView` is renamed or not yet registered when this runs,
+            // the crash mitigation is silently skipped. Fail loudly in debug
+            // builds so such a regression is caught during development, while
+            // leaving release behavior unchanged.
+            debug_assert!(
+                false,
+                "WinitView class not found; Touch Bar KVO crash mitigation not installed"
+            );
             return;
         }
 
