@@ -415,22 +415,41 @@ const APP_START_TIMEOUT: Duration = Duration::from_secs(30);
 /// transient adapter error (a bus-off/error burst that the PEAK backend reports
 /// as `Disconnected`). Those are the *expected* result of a successful mode
 /// switch, not a failure — the caller confirms the new mode by polling 0x1000.
-/// A real SDO abort or protocol error is still surfaced.
+///
+/// The very first SDO exchange after the channel opens is also unreliable on
+/// libPCBUSB: the cold frame is occasionally lost or answered with a spurious
+/// abort (seen as 0x05040001, "command specifier invalid"), which is why a
+/// fresh run so often had to be issued twice. The control write is idempotent
+/// and `write_u8` drains stale RX before each attempt, so retry a few times on
+/// an abort before giving up; the abort is only surfaced if it persists.
 fn write_control_expect_reset(
     client: &mut SdoClient,
     cfg: &DownloadConfig,
     command: u8,
 ) -> Result<(), DownloadError> {
-    match client.write_u8(OBJ_PROGRAM_CONTROL, cfg.program_number, command) {
-        Ok(()) => Ok(()),
-        // The node resets and re-initialises its CAN controller before it ACKs,
-        // so a successful mode switch surfaces as an SDO timeout or the transient
-        // USB/bus disconnect the PEAK backend reports as `Disconnected`. The
-        // caller confirms the new mode by polling 0x1000. Any other adapter error
-        // (Io/Protocol/Fatal/NotFound) is a genuine failure and is propagated.
-        Err(SdoError::Timeout) | Err(SdoError::Adapter(AdapterError::Disconnected)) => Ok(()),
-        Err(e) => Err(DownloadError::Sdo(e)),
+    const MAX_ATTEMPTS: u32 = 3;
+    let mut last_abort = None;
+    for _ in 0..MAX_ATTEMPTS {
+        match client.write_u8(OBJ_PROGRAM_CONTROL, cfg.program_number, command) {
+            Ok(()) => return Ok(()),
+            // The node resets and re-initialises its CAN controller before it
+            // ACKs, so a successful mode switch surfaces as an SDO timeout or the
+            // transient USB/bus disconnect the PEAK backend reports as
+            // `Disconnected`. The caller confirms the new mode by polling 0x1000.
+            Err(SdoError::Timeout) | Err(SdoError::Adapter(AdapterError::Disconnected)) => {
+                return Ok(())
+            }
+            // Transient cold-start abort: the node rejected the write without
+            // switching mode, so re-issue it after letting the bus settle.
+            Err(SdoError::Abort(code)) => {
+                last_abort = Some(SdoError::Abort(code));
+                thread::sleep(Duration::from_millis(50));
+            }
+            // Any other error (Io/Protocol/Fatal/NotFound) is a genuine failure.
+            Err(e) => return Err(DownloadError::Sdo(e)),
+        }
     }
+    Err(DownloadError::Sdo(last_abort.unwrap_or(SdoError::Timeout)))
 }
 
 /// Poll object 0x1000 until the bootloader (or blupdate-app) answers again — i.e.
