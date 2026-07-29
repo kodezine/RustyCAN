@@ -41,6 +41,13 @@ const CMD_CLEAR_PROGRAM: u8 = 0x03;
 const CMD_START_BOOTLOADER: u8 = 0x80;
 const CMD_SET_SIGNATURE: u8 = 0x83;
 
+// ─── SDO abort codes ─────────────────────────────────────────────────────────
+
+/// "Client/server command specifier not valid" — the abort libPCBUSB spuriously
+/// returns on the first (cold) SDO exchange after the channel opens. Only this
+/// code is treated as a transient worth retrying; every other abort is real.
+const SDO_ABORT_COMMAND_INVALID: u32 = 0x0504_0001;
+
 // ─── Flash status codes (read from 0x1F57) ───────────────────────────────────
 
 const STAT_OK: u32 = 0x0000_0000;
@@ -417,11 +424,12 @@ const APP_START_TIMEOUT: Duration = Duration::from_secs(30);
 /// switch, not a failure — the caller confirms the new mode by polling 0x1000.
 ///
 /// The very first SDO exchange after the channel opens is also unreliable on
-/// libPCBUSB: the cold frame is occasionally lost or answered with a spurious
-/// abort (seen as 0x05040001, "command specifier invalid"), which is why a
-/// fresh run so often had to be issued twice. The control write is idempotent
-/// and `write_u8` drains stale RX before each attempt, so retry a few times on
-/// an abort before giving up; the abort is only surfaced if it persists.
+/// libPCBUSB: the cold frame is occasionally lost or answered with the spurious
+/// [`SDO_ABORT_COMMAND_INVALID`] (0x05040001) abort, which is why a fresh run so
+/// often had to be issued twice. The control write is idempotent and `write_u8`
+/// drains stale RX before each attempt, so retry a few times on *that specific*
+/// abort before giving up. Every other abort code (access denied, object not
+/// found, …) is a genuine rejection and is surfaced immediately.
 fn write_control_expect_reset(
     client: &mut SdoClient,
     cfg: &DownloadConfig,
@@ -439,13 +447,15 @@ fn write_control_expect_reset(
             Err(SdoError::Timeout) | Err(SdoError::Adapter(AdapterError::Disconnected)) => {
                 return Ok(())
             }
-            // Transient cold-start abort: the node rejected the write without
-            // switching mode, so re-issue it after letting the bus settle.
-            Err(SdoError::Abort(code)) => {
+            // Only the known cold-start abort is transient — re-issue it after
+            // letting the bus settle. All other aborts are genuine and fall
+            // through to the arm below.
+            Err(SdoError::Abort(code)) if code == SDO_ABORT_COMMAND_INVALID => {
                 last_abort = Some(SdoError::Abort(code));
                 thread::sleep(Duration::from_millis(50));
             }
-            // Any other error (Io/Protocol/Fatal/NotFound) is a genuine failure.
+            // Any other error (a real SDO abort, Io/Protocol/Fatal/NotFound) is
+            // a genuine failure and is surfaced immediately.
             Err(e) => return Err(DownloadError::Sdo(e)),
         }
     }
@@ -479,7 +489,7 @@ fn wait_bootloader_active(
         }
         if std::time::Instant::now() >= deadline {
             return Err(DownloadError::BootloaderTimeout(
-                "bootloader did not re-enter after starting the application".into(),
+                "node did not enter the bootloader within the timeout window".into(),
             ));
         }
         thread::sleep(dur_100us(cfg.poll_delay_100us));

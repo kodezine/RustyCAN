@@ -10,13 +10,15 @@ use host_can::frame::CanFrame;
 
 use super::{probe_adapter_kind, AdapterError, AdapterKind, CanAdapter, ReceivedFrame};
 
-/// Minimum interval between USB-presence probes triggered by recv errors.
+/// Minimum interval between USB-presence probes triggered by adapter I/O errors
+/// on either the receive or transmit path.
 ///
 /// A transient CAN bus error (BUSHEAVY / BUSLIGHT / BUSOFF / OVERRUN) surfaces
-/// from libPCBUSB as the *same* "Unable to receive message" status that a real
-/// USB removal produces.  We disambiguate by checking whether the PEAK vendor
-/// ID is still enumerated, but that check spawns `ioreg` on macOS, so we
-/// debounce it to avoid a subprocess storm during an error burst.
+/// from libPCBUSB as the *same* "Unable to receive message" / "Unable to send
+/// message" status that a real USB removal produces.  Both `recv()` and
+/// `send()` disambiguate by checking whether the PEAK vendor ID is still
+/// enumerated, but that check spawns `ioreg` on macOS, so we debounce it to
+/// avoid a subprocess storm during an error burst.
 const PRESENCE_PROBE_DEBOUNCE: Duration = Duration::from_millis(500);
 
 /// Maximum number of resends after a transient "Unable to send message" TX
