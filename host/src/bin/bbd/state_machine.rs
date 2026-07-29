@@ -41,6 +41,13 @@ const CMD_CLEAR_PROGRAM: u8 = 0x03;
 const CMD_START_BOOTLOADER: u8 = 0x80;
 const CMD_SET_SIGNATURE: u8 = 0x83;
 
+// ─── SDO abort codes ─────────────────────────────────────────────────────────
+
+/// "Client/server command specifier not valid" — the abort libPCBUSB spuriously
+/// returns on the first (cold) SDO exchange after the channel opens. Only this
+/// code is treated as a transient worth retrying; every other abort is real.
+const SDO_ABORT_COMMAND_INVALID: u32 = 0x0504_0001;
+
 // ─── Flash status codes (read from 0x1F57) ───────────────────────────────────
 
 const STAT_OK: u32 = 0x0000_0000;
@@ -415,22 +422,44 @@ const APP_START_TIMEOUT: Duration = Duration::from_secs(30);
 /// transient adapter error (a bus-off/error burst that the PEAK backend reports
 /// as `Disconnected`). Those are the *expected* result of a successful mode
 /// switch, not a failure — the caller confirms the new mode by polling 0x1000.
-/// A real SDO abort or protocol error is still surfaced.
+///
+/// The very first SDO exchange after the channel opens is also unreliable on
+/// libPCBUSB: the cold frame is occasionally lost or answered with the spurious
+/// [`SDO_ABORT_COMMAND_INVALID`] (0x05040001) abort, which is why a fresh run so
+/// often had to be issued twice. The control write is idempotent and `write_u8`
+/// drains stale RX before each attempt, so retry a few times on *that specific*
+/// abort before giving up. Every other abort code (access denied, object not
+/// found, …) is a genuine rejection and is surfaced immediately.
 fn write_control_expect_reset(
     client: &mut SdoClient,
     cfg: &DownloadConfig,
     command: u8,
 ) -> Result<(), DownloadError> {
-    match client.write_u8(OBJ_PROGRAM_CONTROL, cfg.program_number, command) {
-        Ok(()) => Ok(()),
-        // The node resets and re-initialises its CAN controller before it ACKs,
-        // so a successful mode switch surfaces as an SDO timeout or the transient
-        // USB/bus disconnect the PEAK backend reports as `Disconnected`. The
-        // caller confirms the new mode by polling 0x1000. Any other adapter error
-        // (Io/Protocol/Fatal/NotFound) is a genuine failure and is propagated.
-        Err(SdoError::Timeout) | Err(SdoError::Adapter(AdapterError::Disconnected)) => Ok(()),
-        Err(e) => Err(DownloadError::Sdo(e)),
+    const MAX_ATTEMPTS: u32 = 3;
+    let mut last_abort = None;
+    for _ in 0..MAX_ATTEMPTS {
+        match client.write_u8(OBJ_PROGRAM_CONTROL, cfg.program_number, command) {
+            Ok(()) => return Ok(()),
+            // The node resets and re-initialises its CAN controller before it
+            // ACKs, so a successful mode switch surfaces as an SDO timeout or the
+            // transient USB/bus disconnect the PEAK backend reports as
+            // `Disconnected`. The caller confirms the new mode by polling 0x1000.
+            Err(SdoError::Timeout) | Err(SdoError::Adapter(AdapterError::Disconnected)) => {
+                return Ok(())
+            }
+            // Only the known cold-start abort is transient — re-issue it after
+            // letting the bus settle. All other aborts are genuine and fall
+            // through to the arm below.
+            Err(SdoError::Abort(code)) if code == SDO_ABORT_COMMAND_INVALID => {
+                last_abort = Some(SdoError::Abort(code));
+                thread::sleep(Duration::from_millis(50));
+            }
+            // Any other error (a real SDO abort, Io/Protocol/Fatal/NotFound) is
+            // a genuine failure and is surfaced immediately.
+            Err(e) => return Err(DownloadError::Sdo(e)),
+        }
     }
+    Err(DownloadError::Sdo(last_abort.unwrap_or(SdoError::Timeout)))
 }
 
 /// Poll object 0x1000 until the bootloader (or blupdate-app) answers again — i.e.
@@ -460,7 +489,7 @@ fn wait_bootloader_active(
         }
         if std::time::Instant::now() >= deadline {
             return Err(DownloadError::BootloaderTimeout(
-                "bootloader did not re-enter after starting the application".into(),
+                "node did not enter the bootloader within the timeout window".into(),
             ));
         }
         thread::sleep(dur_100us(cfg.poll_delay_100us));
@@ -503,34 +532,18 @@ fn wait_app_running(client: &mut SdoClient, cfg: &DownloadConfig) -> Result<u32,
 
 /// Send `CMD_START_BOOTLOADER` and wait until the bootloader reports active.
 fn start_bootloader(client: &mut SdoClient, cfg: &DownloadConfig) -> Result<(), DownloadError> {
-    client.write_u8(
-        OBJ_PROGRAM_CONTROL,
-        cfg.program_number,
-        CMD_START_BOOTLOADER,
-    )?;
+    // Commanding the running application back into the bootloader resets the
+    // node before it can ACK the 0x1F51 write, so the write surfaces as an SDO
+    // timeout / adapter disconnect — the same expected transient the
+    // post-download RestartBootloader step already tolerates. Treat it as a
+    // successful mode switch and confirm by polling 0x1000, instead of failing
+    // hard on the missing ACK.
+    write_control_expect_reset(client, cfg, CMD_START_BOOTLOADER)?;
 
     thread::sleep(dur_100us(cfg.delay_check_bl_100us));
 
-    // Retry up to max_retries_busy times waiting for the bootloader
-    for attempt in 0..cfg.max_retries_busy {
-        match is_bootloader_active(client, cfg.action) {
-            Ok(true) => return Ok(()),
-            Ok(false) => {
-                if attempt + 1 < cfg.max_retries_busy {
-                    thread::sleep(dur_100us(cfg.poll_delay_100us));
-                }
-            }
-            Err(DownloadError::Sdo(SdoError::Timeout)) => {
-                if attempt + 1 < cfg.max_retries_busy {
-                    thread::sleep(dur_100us(cfg.poll_delay_100us));
-                }
-            }
-            Err(e) => return Err(e),
-        }
-    }
-    Err(DownloadError::BootloaderTimeout(
-        "node did not enter bootloader within retry limit".into(),
-    ))
+    wait_bootloader_active(client, cfg)?;
+    Ok(())
 }
 
 /// Maximum wall-clock time to wait for flash erase / CRC to complete.
