@@ -503,34 +503,18 @@ fn wait_app_running(client: &mut SdoClient, cfg: &DownloadConfig) -> Result<u32,
 
 /// Send `CMD_START_BOOTLOADER` and wait until the bootloader reports active.
 fn start_bootloader(client: &mut SdoClient, cfg: &DownloadConfig) -> Result<(), DownloadError> {
-    client.write_u8(
-        OBJ_PROGRAM_CONTROL,
-        cfg.program_number,
-        CMD_START_BOOTLOADER,
-    )?;
+    // Commanding the running application back into the bootloader resets the
+    // node before it can ACK the 0x1F51 write, so the write surfaces as an SDO
+    // timeout / adapter disconnect — the same expected transient the
+    // post-download RestartBootloader step already tolerates. Treat it as a
+    // successful mode switch and confirm by polling 0x1000, instead of failing
+    // hard on the missing ACK.
+    write_control_expect_reset(client, cfg, CMD_START_BOOTLOADER)?;
 
     thread::sleep(dur_100us(cfg.delay_check_bl_100us));
 
-    // Retry up to max_retries_busy times waiting for the bootloader
-    for attempt in 0..cfg.max_retries_busy {
-        match is_bootloader_active(client, cfg.action) {
-            Ok(true) => return Ok(()),
-            Ok(false) => {
-                if attempt + 1 < cfg.max_retries_busy {
-                    thread::sleep(dur_100us(cfg.poll_delay_100us));
-                }
-            }
-            Err(DownloadError::Sdo(SdoError::Timeout)) => {
-                if attempt + 1 < cfg.max_retries_busy {
-                    thread::sleep(dur_100us(cfg.poll_delay_100us));
-                }
-            }
-            Err(e) => return Err(e),
-        }
-    }
-    Err(DownloadError::BootloaderTimeout(
-        "node did not enter bootloader within retry limit".into(),
-    ))
+    wait_bootloader_active(client, cfg)?;
+    Ok(())
 }
 
 /// Maximum wall-clock time to wait for flash erase / CRC to complete.
