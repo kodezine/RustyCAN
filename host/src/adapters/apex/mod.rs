@@ -450,3 +450,51 @@ fn find_device_info(serial: Option<&str>) -> Result<DeviceInfo, AdapterError> {
         None => format!("no Apex USB-CAN found (VID=0x{APEX_VID:04X})"),
     }))
 }
+
+/// Find a SocketCAN interface (`canX`) backed by an Apex USB device.
+///
+/// Returns the interface name when a kernel CAN driver is bound to the device
+/// (optionally matching `serial`), so the caller can drive it via SocketCAN
+/// instead of the userspace USB driver.  `None` means no kernel-driver
+/// interface exists and the nusb path should be used.
+#[cfg(target_os = "linux")]
+pub(super) fn find_socketcan_interface(serial: Option<&str>) -> Option<String> {
+    use std::path::Path;
+
+    // Read the USB vendor ID and serial of the device backing a netdev whose
+    // `device` symlink points at a USB interface (…:1.0); its parent is the
+    // USB device directory holding `idVendor` / `serial`.
+    fn usb_ids(iface_link: &Path) -> Option<(u16, Option<String>)> {
+        let usb_iface = std::fs::canonicalize(iface_link).ok()?;
+        let dev_dir = usb_iface.parent()?;
+        let vid = u16::from_str_radix(
+            std::fs::read_to_string(dev_dir.join("idVendor"))
+                .ok()?
+                .trim(),
+            16,
+        )
+        .ok()?;
+        let sn = std::fs::read_to_string(dev_dir.join("serial"))
+            .ok()
+            .map(|s| s.trim().to_string());
+        Some((vid, sn))
+    }
+
+    for entry in std::fs::read_dir("/sys/class/net").ok()?.flatten() {
+        let base = entry.path();
+        // ARPHRD_CAN = 280 marks a CAN interface.
+        let is_can = std::fs::read_to_string(base.join("type"))
+            .map(|s| s.trim() == "280")
+            .unwrap_or(false);
+        if !is_can {
+            continue;
+        }
+        match usb_ids(&base.join("device")) {
+            Some((APEX_VID, sn)) if serial.is_none_or(|s| sn.as_deref() == Some(s)) => {
+                return Some(entry.file_name().to_string_lossy().into_owned());
+            }
+            _ => {}
+        }
+    }
+    None
+}
