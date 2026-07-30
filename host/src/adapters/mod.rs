@@ -236,6 +236,14 @@ pub fn open_adapter(
             ))
         }
         AdapterKind::Apex { serial } => {
+            // On Linux, prefer a kernel driver: if a SocketCAN interface backed
+            // by the Apex device exists, use it; otherwise fall back to the
+            // cross-platform nusb userspace driver.
+            #[cfg(target_os = "linux")]
+            if let Some(iface) = apex::find_socketcan_interface(serial.as_deref()) {
+                let adapter = socketcan_adapter::SocketCanAdapter::open(&iface)?;
+                return Ok(Box::new(adapter));
+            }
             let adapter = apex::ApexAdapter::open(serial.as_deref(), baud, listen_only)?;
             Ok(Box::new(adapter))
         }
@@ -302,6 +310,14 @@ pub fn probe_adapter_kind(kind: &AdapterKind, _port: &str, _baud: u32) -> bool {
             #[cfg(not(target_os = "linux"))]
             false
         }
-        AdapterKind::Apex { serial } => apex::ApexAdapter::probe(serial.as_deref()),
+        AdapterKind::Apex { serial } => {
+            // Present if either a kernel-driver SocketCAN interface (Linux) or
+            // the raw USB device is available.
+            #[cfg(target_os = "linux")]
+            if apex::find_socketcan_interface(serial.as_deref()).is_some() {
+                return true;
+            }
+            apex::ApexAdapter::probe(serial.as_deref())
+        }
     }
 }

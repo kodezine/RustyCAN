@@ -855,7 +855,7 @@ fn adapter_display_name(kind: &AdapterKind) -> &'static str {
         AdapterKind::Summit => "Summit",
         AdapterKind::KCan { .. } => "KCAN Dongle",
         AdapterKind::SocketCan => "SocketCAN",
-        AdapterKind::Apex { .. } => "Apex USB-CAN",
+        AdapterKind::Apex { .. } => "Apex",
     }
 }
 
@@ -1135,7 +1135,7 @@ fn render_connect(
                                         // first device found.
                                         let is_apex =
                                             matches!(form.adapter_kind, AdapterKind::Apex { .. });
-                                        if ui.radio(is_apex, "Apex USB-CAN").clicked() {
+                                        if ui.radio(is_apex, "Apex").clicked() {
                                             form.adapter_kind = AdapterKind::Apex { serial: None };
                                             form.last_probe = None;
                                             form.adapter_notice = None;
@@ -5412,16 +5412,16 @@ mod tests {
     mod linux_connect_snapshots {
         use super::*;
 
-        /// Adapter selector row on Linux: all three radio buttons visible,
+        /// Adapter selector row on Linux: all four radio buttons visible,
         /// SocketCAN selected.  Catches regressions in label text or layout
         /// introduced by changes to the #[cfg(target_os = "linux")] block.
         #[test]
-        #[ignore = "baseline PNG stale after PEAK->Summit rename; regenerate on the Linux branch"]
         fn snapshot_connect_adapter_selector_socketcan() {
             let mut harness = egui_kittest::Harness::new_ui(|ui| {
                 ui.horizontal(|ui| {
                     let _ = ui.radio(false, "Summit");
                     let _ = ui.radio(false, "KCAN Dongle \u{2605}");
+                    let _ = ui.radio(false, "Apex");
                     let _ = ui.radio(true, "SocketCAN");
                 });
             });

@@ -81,6 +81,7 @@ The rules grant write access to:
 |---|---|---|
 | KCAN Dongle | `0x1209` | `0xBEEF` |
 | Summit | `0x0c72` | all PIDs |
+| Apex USB-CAN | `0x0878` | all PIDs |
 
 ### KCAN Dongle
 
@@ -145,6 +146,19 @@ step-by-step guidance in the Connect screen error banner if:
 
 RustyCAN uses the standard Linux `AF_CAN` / `PF_CAN` socket API via the
 `socketcan` crate — no proprietary library is required.
+
+### Apex USB-CAN adapter (optional)
+
+On Linux the Apex adapter works two ways, chosen automatically:
+
+1. **Kernel driver (preferred).** If a CAN kernel driver is bound to the device
+   it appears as a SocketCAN interface (`canX`); RustyCAN detects this and drives
+   it through SocketCAN. Bring the interface up as in the SocketCAN steps above,
+   then select **Apex USB-CAN** on the Connect screen.
+2. **Userspace fallback.** If no kernel driver is bound, RustyCAN talks to the
+   device directly over USB. This needs the udev rule for VID `0x0878` (included
+   above) for non-root access, and the device must already hold valid
+   application firmware.
 
 ---
 

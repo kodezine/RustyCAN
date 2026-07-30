@@ -292,7 +292,7 @@ Update checkboxes and push to share status with other sessions/systems.
 > Sources rsynced from mac (primary, commit `bb0cf8f`) via `tools/remote-dev/sync-to-remote.sh`;
 > md5 of `app.rs`/`tui/widgets.rs`/`gui/mod.rs` verified identical to mac.
 > Live CAN: Summit `can0` @ 250 kbps (brought UP persistently via udev rule
-> `/etc/udev/rules.d/90-can.rules`). Real device **node 32** (`distributor_board_mk3.eds`) on the bus.
+> `/etc/udev/rules.d/90-can.rules`). Real device **node 32** (`sample_drive.eds`) on the bus.
 > Config: `host/config.linux.json` (SocketCan/can0, node 32 → EDS on remote).
 > Capture helper: `tests/ui/capture-egui-headless.sh`. Artifacts: `tests/ui/screenshots/`.
 
