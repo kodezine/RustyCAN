@@ -1,7 +1,7 @@
 //! Continuous single-channel CAN echo task (feature = "periodic-echo").
 //!
 //! Transmits a frame on FDCAN1 every 100 ms.
-//! A PEAK PCAN-USB sniffer (or any CAN analyser) will see ID 0x7E1 on the bus.
+//! A Summit sniffer (or any CAN analyser) will see ID 0x7E1 on the bus.
 //!
 //! # Frame ID
 //!

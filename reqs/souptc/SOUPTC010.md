@@ -11,16 +11,16 @@ reviewed: FJTXHqXtuzDQ3zwr-jwNNcY1jx6YBt3fwruZSK9x5UQ=
 test-command: ''
 ---
 
-# PEAK PCAN-USB Adapter Connection
+# Summit Adapter Connection
 
-**Objective:** Verify that RustyCAN detects and connects to a PEAK PCAN-USB adapter.
+**Objective:** Verify that RustyCAN detects and connects to a Summit adapter.
 
-**Preconditions:** PEAK PCAN-USB adapter connected to host. Driver installed (macOS/Windows) or `pcan` kernel module loaded (Linux). CAN bus with termination resistors.
+**Preconditions:** Summit adapter connected to host. Driver installed (macOS/Windows) or `pcan` kernel module loaded (Linux). CAN bus with termination resistors.
 
 **Procedure:**
 
 1. Launch RustyCAN.
-2. On the Connect screen, select adapter type **PEAK PCAN-USB**.
+2. On the Connect screen, select adapter type **Summit**.
 3. Select the correct port/channel and baud rate.
 4. Click **Connect**.
 

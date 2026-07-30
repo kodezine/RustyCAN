@@ -13,7 +13,7 @@ Update checkboxes and push to share status with other sessions/systems.
 - Phase 4 — CI integration (`.github/workflows/ci.yml`) ✅
 - Phase 5 — Manual test sessions per OS (screenshots/terminal/browser) — fed: egui ✅ CAN ✅; web ⏳ (port-forward verified HTTP, SSE pending stable can0)
 - Phase 6 — Linux native GUI via XQuartz (egui window forwarded `ssh -Y fedora-can`) — fed ✅ (see Phase 6a/6b below)
-- Phase 7 — Ubuntu 26.04 headless validation (`ubu` @ 192.168.7.154, Xvfb+scrot / tmux, live PEAK can0) ✅ (see Phase 7 below)
+- Phase 7 — Ubuntu 26.04 headless validation (`ubu` @ 192.168.7.154, Xvfb+scrot / tmux, live Summit can0) ✅ (see Phase 7 below)
 
 **Test systems:**
 | Label | System | Access |
@@ -21,7 +21,7 @@ Update checkboxes and push to share status with other sessions/systems.
 | mac | macOS (this machine) | native |
 | win | Windows 11 (Parallels on second Mac) | native VM |
 | fed | Fedora latest | SSH; TUI direct, Web via port-forward, **egui native via XQuartz** (`ssh -Y fedora-can`) |
-| ubu | Ubuntu 26.04 LTS (lubuntu @ 192.168.7.154) | SSH; headless — egui via **Xvfb+scrot**, TUI via **tmux**, live PEAK `can0` |
+| ubu | Ubuntu 26.04 LTS (lubuntu @ 192.168.7.154) | SSH; headless — egui via **Xvfb+scrot**, TUI via **tmux**, live Summit `can0` |
 
 ---
 
@@ -186,8 +186,8 @@ Update checkboxes and push to share status with other sessions/systems.
 | Monitor — DBC signals panel | [ ] | [ ] | [ ] |
 | Monitor — full status bar | ✅ | [ ] | [ ] |
 | Plot view window | [ ] | [ ] | [ ] |
-| PEAK adapter shown (mac/win only) | ✅ | [ ] | N/A |
-| SocketCAN adapter shown on Linux (PEAK/KCAN also visible) | N/A | N/A | ✅ |
+| Summit adapter shown (mac/win only) | ✅ | [ ] | N/A |
+| SocketCAN adapter shown on Linux (Summit/KCAN also visible) | N/A | N/A | ✅ |
 | Connect screen — SocketCAN selected, Interface field | N/A | N/A | ✅ |
 
 ### TUI — Terminal Session
@@ -228,7 +228,7 @@ Update checkboxes and push to share status with other sessions/systems.
 
 > **Setup:** XQuartz must be running on the macOS host. `ssh -Y fedora-can` is
 > confirmed working (DISPLAY forwarded). The `can0` interface is UP @ 250 kbps
-> on fedora-can (PEAK PCAN-USB via `peak_usb` kernel module).
+> on fedora-can (Summit via `peak_usb` kernel module).
 >
 > **Launch script:** `tests/ui/run-fedora-xquartz.sh` — SSH + DISPLAY setup,
 > runs the GUI and optionally captures a screenshot via `scrot`.
@@ -264,7 +264,7 @@ Update checkboxes and push to share status with other sessions/systems.
 | Screen | fed (XQuartz) |
 |--------|---------------|
 | Connect screen — SocketCAN adapter selected, can0 in Interface field | ✅ |
-| Connect screen — all three adapters visible (PEAK, KCAN, SocketCAN) | ✅ |
+| Connect screen — all three adapters visible (Summit, KCAN, SocketCAN) | ✅ |
 | Connect screen — SocketCAN probe: adapter ready / not-found diagnostic | ✅ |
 | Connect screen → Monitor (live can0, node 32 heartbeating) | ✅ |
 | Monitor — NMT panel with live node 32 | ✅ |
@@ -291,7 +291,7 @@ Update checkboxes and push to share status with other sessions/systems.
 > Headless tty (no physical display) — egui captured via **Xvfb + scrot**, TUI via **tmux capture-pane**.
 > Sources rsynced from mac (primary, commit `bb0cf8f`) via `tools/remote-dev/sync-to-remote.sh`;
 > md5 of `app.rs`/`tui/widgets.rs`/`gui/mod.rs` verified identical to mac.
-> Live CAN: PEAK PCAN-USB `can0` @ 250 kbps (brought UP persistently via udev rule
+> Live CAN: Summit `can0` @ 250 kbps (brought UP persistently via udev rule
 > `/etc/udev/rules.d/90-can.rules`). Real device **node 32** (`distributor_board_mk3.eds`) on the bus.
 > Config: `host/config.linux.json` (SocketCan/can0, node 32 → EDS on remote).
 > Capture helper: `tests/ui/capture-egui-headless.sh`. Artifacts: `tests/ui/screenshots/`.

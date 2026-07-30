@@ -9,9 +9,9 @@
 └──────────────────────────────────────────────────────────────────────────┘
 
 ┌─ Connection ─────────────────────────────────────────────────────────────┐
-│  Adapter:  ○ PEAK PCAN-USB   ● KCAN Dongle ★   ○ SocketCAN (Linux only) │
+│  Adapter:  ○ Summit   ● KCAN Dongle ★   ○ SocketCAN (Linux only) │
 │  KCAN:     [ KCAN Dongle v1.0.0 (SN: 00000001) ▼ ]                       │
-│  Port:     [ 1 ]  PEAK channel · Interface: [ can0 ]  SocketCAN · hidden KCAN│
+│  Port:     [ 1 ]  Summit channel · Interface: [ can0 ]  SocketCAN · hidden KCAN│
 │  Baud:     [ 250000 ▼ ]  ● Dongle: Connected                             │
 │  SDO timeout: [ 500 ]                                                    │
 │  Log:      [ rustycan.jsonl              ] [Browse…]                     │
@@ -67,7 +67,7 @@
 
 ### Adapter Selection
 
-**Adapter** — radio buttons to choose between PEAK PCAN-USB, KCAN Dongle, and
+**Adapter** — radio buttons to choose between Summit, KCAN Dongle, and
 (on Linux only) SocketCAN. The KCAN row (★) is the recommended first-class option.
 
 **SocketCAN** (Linux only) — third radio button, visible only on Linux. Connects
@@ -87,7 +87,7 @@ See [install-linux.md](install-linux.md) for the complete setup guide.
 **KCAN device** — dropdown listing all KCAN dongles found via USB enumeration
 (VID `0x1209` / PID `0xBEEF`). Re-enumerated every 2 s.
 
-**Port / Interface** — PCAN-USB channel number (typically `1`) for PEAK; kernel
+**Port / Interface** — Summit channel number (typically `1`) for Summit; kernel
 interface name (e.g. `can0`) for SocketCAN; hidden when KCAN is selected.
 
 **Baud rate** — drop-down: 125000 / 250000 / 500000 / 1000000 bps.
@@ -109,8 +109,8 @@ log file alongside JSONL.
 (greyed) until the adapter is found on the given port/baud.
 
 **Automatic adapter fallback** — if the configured adapter is not found during
-probing, RustyCAN automatically tries other available adapter types (PEAK ↔ KCAN).
-When a fallback succeeds, a blue notice appears: "⚠ PEAK PCAN-USB not found,
+probing, RustyCAN automatically tries other available adapter types (Summit ↔ KCAN).
+When a fallback succeeds, a blue notice appears: "⚠ Summit not found,
 automatically switched to KCAN Dongle". Manually switching adapters clears the notice.
 
 ### CANopen Nodes Section
@@ -152,7 +152,7 @@ automatically switched to KCAN Dongle". Manually switching adapters clears the n
 - **Persistence** — messages never disappear; the last 5 are always visible for reference
 - **Font size** — consistent 11pt for both timestamps and message text
 - **Common messages**:
-  - Adapter fallback: "PEAK PCAN-USB not found, automatically switched to KCAN Dongle"
+  - Adapter fallback: "Summit not found, automatically switched to KCAN Dongle"
   - Invalid input: "Invalid baud rate: \"25x000\""
   - Validation errors: "Node ID 5 is used more than once"
 
@@ -223,7 +223,7 @@ button to manually return to the Connect screen when needed.
 **Header toolbar** — connection info and controls:
 - **Logo and title** — RustyCAN logo with app name and git version (same as Connect screen)
 - **Connection details** — adapter info displayed with icons:
-  - 🔌 Port number (e.g., "Port 1") — only shown for PEAK adapter
+  - 🔌 Port number (e.g., "Port 1") — only shown for Summit adapter
   - 📡 Baud rate with thousands separator (e.g., "250,000 bps")
   - 👥 Node count (e.g., "2 node(s)")
 - **Listen-only indicator** — yellow 🟡 badge "LISTEN-ONLY" shown when passive mode is active

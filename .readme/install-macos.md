@@ -72,16 +72,16 @@ brew untap kodezine/rustycan
 The KCAN Dongle (VID `0x1209` / PID `0xBEEF`) enumerates as a standard USB
 bulk device. macOS loads the generic USB driver automatically.
 
-### PEAK PCAN-USB adapter — optional
+### Summit adapter — optional
 
-If you want to use a PEAK PCAN-USB adapter:
+If you want to use a Summit adapter:
 
 | Step | Action |
 |---|---|
 | 1️⃣ | Download the latest **PCUSB** `.pkg` from <https://mac-can.com> |
 | 2️⃣ | Run the installer — places `libPCBUSB.dylib` in `/usr/local/lib/` |
-| 3️⃣ | Connect the PEAK adapter (appears as channel `1` by default) |
-| 4️⃣ | Launch RustyCAN → select **PEAK PCAN-USB** on the Connect screen |
+| 3️⃣ | Connect the Summit adapter (appears as channel `1` by default) |
+| 4️⃣ | Launch RustyCAN → select **Summit** on the Connect screen |
 
 > ℹ️ If the library is missing, RustyCAN shows a friendly message with the
 > download URL — the app still starts and the KCAN Dongle path is unaffected.
@@ -92,7 +92,7 @@ If you want to use a PEAK PCAN-USB adapter:
 
 1. Open **RustyCAN** from `/Applications` or Spotlight (`⌘ Space` → `RustyCAN`).
 2. On the **Connect** screen:
-   - Choose **KCAN Dongle** or **PEAK PCAN-USB**
+   - Choose **KCAN Dongle** or **Summit**
    - Set baud rate (default `250000`)
    - Optionally browse to `.eds` files for your nodes
 3. Click **Connect** — the button activates automatically when the adapter is detected.
@@ -107,5 +107,5 @@ See the [GUI Guide](gui-guide.md) for a full GUI walkthrough.
 |---|---|
 | _"RustyCAN is damaged and can't be opened"_ | `xattr -dr com.apple.quarantine /Applications/RustyCAN.app` |
 | Connect button stays grey (KCAN) | Re-plug dongle; check `system_profiler SPUSBDataType \| grep -A5 KCAN` |
-| Connect button stays grey (PEAK) | Verify `libPCBUSB.dylib` exists: `ls /usr/local/lib/libPCBUSB.dylib` |
+| Connect button stays grey (Summit) | Verify `libPCBUSB.dylib` exists: `ls /usr/local/lib/libPCBUSB.dylib` |
 | App crashes on launch | Check Console.app for crash report; file an issue with the log |

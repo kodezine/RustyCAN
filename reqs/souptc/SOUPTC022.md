@@ -15,7 +15,7 @@ test-command: ''
 
 **Objective:** Verify that RustyCAN sustains continuous logging without frame loss on a network with seven or more active CANopen nodes.
 
-**Preconditions:** Seven (7) or more CANopen nodes active on the bus, each transmitting heartbeats and at least one TPDO. Adapter: PEAK or KCAN.
+**Preconditions:** Seven (7) or more CANopen nodes active on the bus, each transmitting heartbeats and at least one TPDO. Adapter: Summit or KCAN.
 
 **Procedure:**
 

@@ -1,9 +1,9 @@
 {
-  "adapter_kind": "Peak",
+  "adapter_kind": "Summit",
   "port": "1",
   "baud": "250000",
   "http_port": 7879,
-  "log_path": "peak-echo-test.jsonl",
+  "log_path": "summit-echo-test.jsonl",
   "sdo_timeout_str": "500",
   "listen_only": false,
   "text_log": true,

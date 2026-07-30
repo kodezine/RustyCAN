@@ -12,6 +12,11 @@
 SUBSYSTEM=="usb", ATTR{idVendor}=="1209", ATTR{idProduct}=="beef", \
     MODE="0660", GROUP="plugdev", TAG+="uaccess"
 
-# PEAK PCAN-USB adapters (PEAK System vendor ID 0x0c72)
+# Summit adapters (vendor ID 0x0c72)
 SUBSYSTEM=="usb", ATTR{idVendor}=="0c72", \
+    MODE="0660", GROUP="plugdev", TAG+="uaccess"
+
+# Apex USB-CAN adapter (vendor ID 0x0878) — for the nusb userspace path when no
+# kernel CAN driver is bound to the device.
+SUBSYSTEM=="usb", ATTR{idVendor}=="0878", \
     MODE="0660", GROUP="plugdev", TAG+="uaccess"

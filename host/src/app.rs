@@ -152,7 +152,7 @@ pub enum CanEvent {
     DbcLoaded(String),
     /// A CAN frame that was not matched by any DBC or CANopen decoder.
     /// Carries the COB-ID, up to 8 data bytes, and the source CAN channel
-    /// (0 = FDCAN1, 1 = FDCAN2; always 0 for PEAK).
+    /// (0 = FDCAN1, 1 = FDCAN2; always 0 for Summit).
     RawFrame {
         cob_id: u32,
         data: Vec<u8>,

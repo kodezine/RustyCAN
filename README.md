@@ -8,7 +8,7 @@
 
 A native cross-platform GUI for monitoring, decoding, and controlling CANopen networks.
 
-Connect a **PEAK PCAN-USB** adapter, a **KCAN Dongle** (STM32H753ZI-based, built with Embassy), or any **SocketCAN** interface on Linux (e.g. `can0` via the `peak_usb` kernel driver), optionally provide EDS device-description files, and get live NMT state, PDO signal values, and SDO transactions — all stored to a newline-delimited JSON log.
+Connect a **Summit** adapter, a **KCAN Dongle** (STM32H753ZI-based, built with Embassy), or any **SocketCAN** interface on Linux (e.g. `can0` via the `peak_usb` kernel driver), optionally provide EDS device-description files, and get live NMT state, PDO signal values, and SDO transactions — all stored to a newline-delimited JSON log.
 
 The **KCAN Dongle** is the project's own first-class hardware target: a custom USB CAN adapter with hardware timestamps, a fully documented binary protocol, and a path to Phase 3 hardware-level encryption (STM32H563, TrustZone).
 
@@ -43,7 +43,7 @@ The GUI window opens immediately. See [Building from Source](.readme/building.md
 
 - 🖥️ **Native GUI** — egui/eframe window, no terminal required
 - 💻 **CLI Modes** — `--tui` for a full-screen terminal UI; `--log-to-stdout` to stream events to a pipe or file
-- 🔌 **Multi-adapter support** — PEAK PCAN-USB, KCAN Dongle (STM32H753ZI), or SocketCAN on Linux (no proprietary driver)
+- 🔌 **Multi-adapter support** — Summit, KCAN Dongle (STM32H753ZI), or SocketCAN on Linux (no proprietary driver)
 - ⏱️ **Hardware timestamps** — 100 ns-precision timestamps latched at frame SOF by FDCAN RXTS hardware (KCAN only)
 - 💓 **NMT monitoring & control** — Live node states with broadcast/per-node commands
 - 📊 **PDO & SDO decoding** — Live signal values with EDS support (optional)
@@ -80,7 +80,7 @@ Comprehensive documentation is organized in the [`.readme/`](.readme/) directory
 - [Testing](.readme/testing.md) — Running tests & verification
 
 ### Tools
-- [bbd — BinaryBlockDownload](.readme/bbd.md) — CANopen firmware update CLI tool (PEAK & KCAN, developer build only)
+- [bbd — BinaryBlockDownload](.readme/bbd.md) — CANopen firmware update CLI tool (Summit & KCAN, developer build only)
 - [KCAN Firmware Updates](.readme/firmware-update.md) — USB DFU update over the KCAN protocol: flash layout, Ed25519 signing, rollback safety, release pipeline
 
 ### Firmware
@@ -89,7 +89,7 @@ Comprehensive documentation is organized in the [`.readme/`](.readme/) directory
 ## 💡 30-Second Demo
 
 1. Launch RustyCAN
-2. Select your adapter (PEAK PCAN-USB, KCAN Dongle, or SocketCAN on Linux)
+2. Select your adapter (Summit, KCAN Dongle, or SocketCAN on Linux)
 3. Optionally add CANopen nodes with EDS files
 4. Click **Connect**
 5. Watch live NMT states, PDO signals, and SDO transactions

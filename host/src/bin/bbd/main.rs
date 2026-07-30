@@ -2,7 +2,7 @@
 //!
 //! A pure-Rust, CANopen-protocol firmware update utility. It downloads a
 //! binary block file to a CANopen bootloader node via SDO transfers, using
-//! either a PEAK PCAN-USB adapter or a KCAN Dongle.
+//! either a Summit adapter or a KCAN Dongle.
 //!
 //! This tool is a functional port of the `BinaryBlockDownload.c` C tool.
 //!
@@ -35,7 +35,7 @@ const VERSION: &str = env!("RUSTYCAN_VERSION");
 /// BinaryBlockDownload — CANopen firmware update tool.
 ///
 /// Downloads a binary block file to a CANopen bootloader node via SDO transfers.
-/// Supports PEAK PCAN-USB and KCAN dongle adapters.
+/// Supports Summit and KCAN dongle adapters.
 ///
 /// Exit codes: 0 = success, non-zero = error.
 #[derive(Parser, Debug)]
@@ -141,11 +141,11 @@ struct Cli {
     blupdate: bool,
 
     // ── Adapter selection ─────────────────────────────────────────────────
-    /// CAN adapter backend: peak or kcan.
-    #[arg(long, value_name = "ADAPTER", default_value = "peak")]
+    /// CAN adapter backend: summit, kcan, or apex.
+    #[arg(long, value_name = "ADAPTER", default_value = "summit")]
     adapter: String,
 
-    /// Adapter port / channel (PEAK: channel number e.g. "1"; KCAN: ignored if --kcan-serial is set).
+    /// Adapter port / channel (Summit: channel number e.g. "1"; KCAN: ignored if --kcan-serial is set).
     #[arg(long, value_name = "PORT", default_value = "1")]
     port: String,
 
@@ -290,12 +290,14 @@ fn main() {
 
     // ── Adapter kind ──────────────────────────────────────────────────────────
     let adapter_kind = match cli.adapter.to_lowercase().as_str() {
-        "peak" => AdapterKind::Peak,
+        "summit" => AdapterKind::Summit,
         "kcan" => AdapterKind::KCan {
             serial: cli.kcan_serial.clone(),
         },
+        // Apex has no dedicated serial flag; bbd uses the first device found.
+        "apex" => AdapterKind::Apex { serial: None },
         other => {
-            eprintln!("Error: unknown adapter {other:?}. Use 'peak' or 'kcan'.");
+            eprintln!("Error: unknown adapter {other:?}. Use 'summit', 'kcan', or 'apex'.");
             process::exit(1);
         }
     };

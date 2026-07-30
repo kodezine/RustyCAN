@@ -699,7 +699,7 @@ mod tests {
 
     #[test]
     fn skips_session_start() {
-        let line = r#"{"ts":"2026-06-24T13:21:02.389Z","type":"session_start","adapter":"PEAK","baud":250000}"#;
+        let line = r#"{"ts":"2026-06-24T13:21:02.389Z","type":"session_start","adapter":"Summit","baud":250000}"#;
         assert!(jsonl::parse_line(line).is_none());
     }
 

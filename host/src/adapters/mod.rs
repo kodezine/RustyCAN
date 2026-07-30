@@ -1,6 +1,6 @@
 //! CAN adapter abstraction for RustyCAN.
 //!
-//! Provides a single trait [`CanAdapter`] that both the PEAK PCAN-USB and the
+//! Provides a single trait [`CanAdapter`] that both the Summit and the
 //! KCAN dongle implement.  The session layer only sees this trait — it has no
 //! knowledge of which physical hardware is in use.
 //!
@@ -17,13 +17,15 @@ use std::time::Duration;
 use host_can::frame::CanFrame;
 
 pub mod kcan;
-// PEAK adapter uses host-can's pcan feature which is macOS/Windows only.
-// On Linux, PEAK hardware is accessed via SocketCAN (kernel driver).
+// Summit adapter uses host-can's pcan feature which is macOS/Windows only.
+// On Linux, Summit hardware is accessed via SocketCAN (kernel driver).
 #[cfg(not(target_os = "linux"))]
-pub mod peak;
+pub mod summit;
 // SocketCAN adapter is Linux-only — uses the kernel's raw CAN socket API.
 #[cfg(target_os = "linux")]
 pub mod socketcan_adapter;
+// Apex USB-CAN — cross-platform userspace USB driver (nusb).
+pub mod apex;
 
 // ─── Public types ─────────────────────────────────────────────────────────────
 
@@ -33,16 +35,16 @@ pub mod socketcan_adapter;
 /// latched at frame SOF (100 ns resolution, embassy 10 MHz tick rate).
 /// The host `TsRolloverTracker` in session extends this to a monotonic u64.
 ///
-/// For PEAK PCAN-USB, the field is `None` (host timestamps on USB receipt).
+/// For Summit, the field is `None` (host timestamps on USB receipt).
 pub struct ReceivedFrame {
     pub frame: CanFrame,
-    /// Nanoseconds since dongle bus-on, latched at frame SOF.  `None` for PEAK.
+    /// Nanoseconds since dongle bus-on, latched at frame SOF.  `None` for Summit.
     pub hardware_timestamp_ns: Option<u64>,
-    /// Source CAN channel: 0 = FDCAN1, 1 = FDCAN2.  Always 0 for PEAK.
+    /// Source CAN channel: 0 = FDCAN1, 1 = FDCAN2.  Always 0 for Summit.
     pub channel: u8,
     /// `true` when this is a TX echo returned by the dongle after a successful
     /// frame transmission.  The `hardware_timestamp_ns` is the moment the last
-    /// bit left the bus.  Always `false` for PEAK (no echo mechanism).
+    /// bit left the bus.  Always `false` for Summit (no echo mechanism).
     pub is_tx_echo: bool,
 }
 
@@ -80,10 +82,10 @@ impl fmt::Display for AdapterError {
 /// Selects which adapter backend to use when opening a session.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub enum AdapterKind {
-    /// PEAK PCAN-USB dongle accessed via `host-can` / libPCBUSB.
+    /// Summit dongle accessed via `host-can` / libPCBUSB.
     ///
     /// `port` is the channel number string: `"1"` for PCAN_USBBUS1, etc.
-    Peak,
+    Summit,
     /// KCAN dongle connected over USB.
     ///
     /// `serial` optionally pins a specific dongle by its USB serial string.
@@ -97,6 +99,12 @@ pub enum AdapterKind {
     /// sudo ip link set can0 up type can bitrate 250000
     /// ```
     SocketCan,
+    /// Apex USB-CAN device accessed via a cross-platform userspace
+    /// USB driver (nusb).  See issue #103.
+    ///
+    /// `serial` optionally pins a specific module by its USB serial string.
+    /// When `None`, the first Apex device found is used.
+    Apex { serial: Option<String> },
 }
 
 /// Uniform interface for sending and receiving CAN frames.
@@ -116,7 +124,7 @@ pub trait CanAdapter {
     /// Firmware version reported by the device during open, if available.
     ///
     /// Returns `Some((major, minor, patch))` for KCAN dongles; `None` for
-    /// all other adapters (PEAK, virtual, etc.).
+    /// all other adapters (Summit, virtual, etc.).
     fn firmware_version(&self) -> Option<(u8, u8, u8)> {
         None
     }
@@ -124,7 +132,7 @@ pub trait CanAdapter {
     /// Whether the adapter reports its own transmitted frames back through
     /// [`Self::recv`] as TX echoes (`ReceivedFrame::is_tx_echo == true`).
     ///
-    /// KCAN dongles echo TX; PEAK and SocketCAN do not. Callers use this to
+    /// KCAN dongles echo TX; Summit and SocketCAN do not. Callers use this to
     /// decide whether a host-initiated transmit will re-enter the receive path
     /// (and thus be surfaced to the live sniffer there) or must be reported at
     /// the send site instead.
@@ -146,7 +154,7 @@ pub fn open_adapter(
     listen_only: bool,
 ) -> Result<Box<dyn CanAdapter>, AdapterError> {
     match kind {
-        AdapterKind::Peak => {
+        AdapterKind::Summit => {
             #[cfg(not(target_os = "linux"))]
             {
                 // Prevent libPCBUSB.dylib from ever being dlclose'd.
@@ -193,7 +201,7 @@ pub fn open_adapter(
                         || detail.to_lowercase().contains("the specified module")
                     {
                         AdapterError::NotFound(format!(
-                            "PEAK driver library not found. \
+                            "Summit driver library not found. \
                             Please install the PCANBasic driver:\n\
                             • macOS: https://mac-can.com\n\
                             • Windows: https://peak-system.com/downloads\n\
@@ -203,11 +211,11 @@ pub fn open_adapter(
                         AdapterError::NotFound(detail)
                     }
                 })?;
-                Ok(Box::new(peak::PeakAdapter::new(inner)))
+                Ok(Box::new(summit::SummitAdapter::new(inner)))
             }
             #[cfg(target_os = "linux")]
             Err(AdapterError::NotFound(
-                "PEAK PCAN-USB is not supported on Linux via the proprietary driver. \
+                "Summit is not supported on Linux via the proprietary driver. \
                 Use the KCAN dongle instead, or connect via SocketCAN."
                     .into(),
             ))
@@ -227,6 +235,10 @@ pub fn open_adapter(
                 "SocketCAN is only available on Linux.".into(),
             ))
         }
+        AdapterKind::Apex { serial } => {
+            let adapter = apex::ApexAdapter::open(serial.as_deref(), baud, listen_only)?;
+            Ok(Box::new(adapter))
+        }
     }
 }
 
@@ -234,25 +246,25 @@ pub fn open_adapter(
 ///
 /// Used by the Connect-screen polling loop.
 ///
-/// # PEAK probing strategy
+/// # Summit probing strategy
 ///
-/// Do NOT use `host_can::adapter::get_adapter()` to probe for PEAK hardware.
+/// Do NOT use `host_can::adapter::get_adapter()` to probe for Summit hardware.
 /// That function opens the PCAN channel (CAN_Initialize) and then immediately
-/// drops it (CAN_Uninitialize + dlclose).  The macOS PEAK driver
+/// drops it (CAN_Uninitialize + dlclose).  The macOS Summit driver
 /// (libPCBUSB.dylib) starts internal USB callback threads on CAN_Initialize;
 /// dlclose frees the library's text segment while those threads are still
 /// running, producing a SIGSEGV on the next open.
 ///
-/// Instead, detect PEAK hardware by scanning USB devices for PEAK System's
+/// Instead, detect Summit hardware by scanning USB devices for Summit System's
 /// vendor ID (0x0C72), which is safe to call repeatedly from any thread.
 pub fn probe_adapter_kind(kind: &AdapterKind, _port: &str, _baud: u32) -> bool {
     match kind {
-        AdapterKind::Peak => {
+        AdapterKind::Summit => {
             #[cfg(target_os = "macos")]
             {
                 // nusb::list_devices() on macOS 26 Tahoe triggers a stack
-                // overflow in libusb's IOKit CFRunLoop thread when a PEAK
-                // adapter is present (libusb + Tahoe + PEAK USB interaction
+                // overflow in libusb's IOKit CFRunLoop thread when a Summit
+                // adapter is present (libusb + Tahoe + Summit USB interaction
                 // bug).  Use ioreg via subprocess to avoid touching the USB
                 // device directly from this process.
                 std::process::Command::new("ioreg")
@@ -261,7 +273,7 @@ pub fn probe_adapter_kind(kind: &AdapterKind, _port: &str, _baud: u32) -> bool {
                     .map(|out| {
                         let stdout = String::from_utf8_lossy(&out.stdout);
                         // ioreg prints idVendor as a decimal integer.
-                        // PEAK System VID = 0x0C72 = 3186 decimal.
+                        // Summit System VID = 0x0C72 = 3186 decimal.
                         stdout.contains("\"idVendor\" = 3186")
                     })
                     .unwrap_or(false)
@@ -269,7 +281,7 @@ pub fn probe_adapter_kind(kind: &AdapterKind, _port: &str, _baud: u32) -> bool {
             #[cfg(target_os = "windows")]
             {
                 // On Windows use nusb to enumerate USB devices and check for
-                // the PEAK System vendor ID (0x0C72 = 3186).  The macOS Tahoe
+                // the Summit System vendor ID (0x0C72 = 3186).  The macOS Tahoe
                 // nusb stack-overflow bug does not affect Windows.
                 use nusb::MaybeFuture as _;
                 const PEAK_VID: u16 = 0x0C72;
@@ -290,5 +302,6 @@ pub fn probe_adapter_kind(kind: &AdapterKind, _port: &str, _baud: u32) -> bool {
             #[cfg(not(target_os = "linux"))]
             false
         }
+        AdapterKind::Apex { serial } => apex::ApexAdapter::probe(serial.as_deref()),
     }
 }

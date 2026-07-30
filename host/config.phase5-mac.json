@@ -1,5 +1,5 @@
 {
-  "adapter_kind": "Peak",
+  "adapter_kind": "Summit",
   "port": "1",
   "baud": "250000",
   "http_port": 7878,

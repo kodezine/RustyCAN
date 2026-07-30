@@ -31,7 +31,7 @@ pub struct EventLogger {
     ///
     /// Set by [`set_hw_timestamp`][Self::set_hw_timestamp] before each frame's
     /// log call; cleared after each [`log`][Self::log] so it is only included
-    /// in the entry it belongs to.  `None` for PEAK (no hardware timestamps).
+    /// in the entry it belongs to.  `None` for Summit (no hardware timestamps).
     hw_timestamp_ns: Option<u64>,
     /// Optional SSE broadcast sender for the live HTTP dashboard.
     ///
@@ -465,7 +465,7 @@ impl EventLogger {
     /// Log a frame we transmitted (host-initiated Tx), marked `"type": "TX"`.
     ///
     /// Called at transmit time so Tx frames appear in the trace on every
-    /// adapter — including PEAK, which does not echo its own transmissions.
+    /// adapter — including Summit, which does not echo its own transmissions.
     /// On KCAN a matching `TX_ECHO` (with the on-bus hardware timestamp) also
     /// follows as confirmation.
     pub fn log_tx(&mut self, ts: DateTime<Utc>, can_id: u32, raw: &[u8]) {
