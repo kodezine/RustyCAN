@@ -418,16 +418,12 @@ fn is_apex(d: &DeviceInfo) -> bool {
     d.vendor_id() == APEX_VID && APEX_PID.is_none_or(|pid| d.product_id() == pid)
 }
 
-/// Neutral `"Apex USB-CAN [VID:PID]"` identifier for logs and the picker.
+/// Neutral `"Apex [VID:PID]"` identifier for logs and the picker.
 ///
 /// Deliberately ignores the device's own USB product string so no vendor
 /// branding from the hardware descriptor leaks into the UI.
 fn describe(d: &DeviceInfo) -> String {
-    format!(
-        "Apex USB-CAN [{:04X}:{:04X}]",
-        d.vendor_id(),
-        d.product_id()
-    )
+    format!("Apex [{:04X}:{:04X}]", d.vendor_id(), d.product_id())
 }
 
 fn find_device_info(serial: Option<&str>) -> Result<DeviceInfo, AdapterError> {
@@ -446,8 +442,8 @@ fn find_device_info(serial: Option<&str>) -> Result<DeviceInfo, AdapterError> {
         return Ok(info);
     }
     Err(AdapterError::NotFound(match serial {
-        Some(s) => format!("Apex USB-CAN serial '{s}' not found"),
-        None => format!("no Apex USB-CAN found (VID=0x{APEX_VID:04X})"),
+        Some(s) => format!("Apex device serial '{s}' not found"),
+        None => format!("no Apex device found (VID=0x{APEX_VID:04X})"),
     }))
 }
 
