@@ -294,9 +294,8 @@ fn main() {
         "kcan" => AdapterKind::KCan {
             serial: cli.kcan_serial.clone(),
         },
-        "apex" => AdapterKind::Apex {
-            serial: cli.kcan_serial.clone(),
-        },
+        // Apex has no dedicated serial flag; bbd uses the first device found.
+        "apex" => AdapterKind::Apex { serial: None },
         other => {
             eprintln!("Error: unknown adapter {other:?}. Use 'summit', 'kcan', or 'apex'.");
             process::exit(1);

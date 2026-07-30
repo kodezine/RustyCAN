@@ -143,7 +143,7 @@ using the **RustyCAN (Windows)** launch configuration.
 
 | Feature              | macOS                         | Windows                        |
 |----------------------|-------------------------------|--------------------------------|
-| Summit library         | `libPCBUSB.dylib` (mac-can)   | `PCANBasic.dll` (Summit official)|
+| Summit library         | `libPCBUSB.dylib` (mac-can)   | `PCANBasic.dll` (vendor driver)|
 | RTLD_NODELETE guard  | `#[cfg(target_os = "macos")]` | skipped (not needed)           |
 | Log path fallback    | project dir                   | `%USERPROFILE%` if ACL blocked |
 | Adapter detection    | `ioreg` / nusb                | nusb only                      |

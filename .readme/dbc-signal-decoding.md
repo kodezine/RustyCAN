@@ -55,7 +55,7 @@ before any adapter is opened.
 
 **Encoding support** — DBC files are read as UTF-8 by default.  If the file
 contains characters outside of ASCII (common for files produced by Vector
-CANdb++ or Summit), RustyCAN automatically falls back to the **CP-1252**
+CANdb++ or similar tools), RustyCAN automatically falls back to the **CP-1252**
 (Windows-1252) encoding.
 
 **Multi-DBC merging** — When multiple DBC files define the same CAN ID, all

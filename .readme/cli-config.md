@@ -64,8 +64,8 @@ A fully annotated copy is included in the repository at
 
 | Field | Type | Default | Description |
 |---|---|---|---|
-| `adapter_kind` | `"Summit"` \| `{"KCan":{"serial":null}}` | — | Which hardware adapter to use |
-| `port` | string | — | Adapter channel / interface name (Summit: `"1"` = PCAN_USBBUS1; SocketCAN: `"can0"`; unused for KCAN) |
+| `adapter_kind` | `"Summit"` \| `{"Apex":{"serial":null}}` \| `{"KCan":{"serial":null}}` | — | Which hardware adapter to use |
+| `port` | string | — | Adapter channel / interface name (Summit: `"1"` = PCAN_USBBUS1; SocketCAN: `"can0"`; unused for KCAN/Apex) |
 | `baud` | string | — | CAN baud rate in bps, e.g. `"250000"` or `"500000"` |
 | `http_port` | integer | `7878` | Port for `http://127.0.0.1:<port>/` live dashboard |
 | `log_path` | string | `"rustycan.jsonl"` | Path for the JSONL log file; relative paths are resolved from the working directory |
@@ -81,6 +81,11 @@ A fully annotated copy is included in the repository at
 Summit (macOS / Windows):
 ```json
 "adapter_kind": "Summit"
+```
+
+Apex USB-CAN (auto-select first found; `serial` pins a specific unit):
+```json
+"adapter_kind": { "Apex": { "serial": null } }
 ```
 
 SocketCAN interface on Linux (Summit via `peak_usb` kernel driver):

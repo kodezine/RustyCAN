@@ -1108,9 +1108,9 @@ fn render_connect(
                                     // ── Adapter type selector ─────────────────────
                                     ui.label("Adapter:");
                                     ui.horizontal(|ui| {
-                                        let is_peak =
+                                        let is_summit =
                                             matches!(form.adapter_kind, AdapterKind::Summit);
-                                        if ui.radio(is_peak, "Summit").clicked() {
+                                        if ui.radio(is_summit, "Summit").clicked() {
                                             form.adapter_kind = AdapterKind::Summit;
                                             form.last_probe = None; // force re-probe
                                             form.adapter_notice = None; // clear auto-switch notice
