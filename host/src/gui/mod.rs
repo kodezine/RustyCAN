@@ -5416,7 +5416,6 @@ mod tests {
         /// SocketCAN selected.  Catches regressions in label text or layout
         /// introduced by changes to the #[cfg(target_os = "linux")] block.
         #[test]
-        #[ignore = "baseline PNG stale after PEAK->Summit rename; regenerate on the Linux branch"]
         fn snapshot_connect_adapter_selector_socketcan() {
             let mut harness = egui_kittest::Harness::new_ui(|ui| {
                 ui.horizontal(|ui| {
