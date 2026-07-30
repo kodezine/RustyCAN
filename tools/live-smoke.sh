@@ -2,7 +2,7 @@
 #
 # live-smoke.sh — real-bus smoke test for RustyCAN.
 #
-# Opens the PEAK adapter (listen-only by default), captures decoded CAN events
+# Opens the Summit adapter (listen-only by default), captures decoded CAN events
 # for a fixed window, and asserts that the basic pipeline is alive:
 #   * adapter opens and receives frames
 #   * NMT and PDO decoders produce output
@@ -24,7 +24,7 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 
-CONFIG="${1:-host/config.smoke-peak-250k.json}"
+CONFIG="${1:-host/config.smoke-summit-250k.json}"
 DURATION="${2:-8}"
 MIN_FRAMES="${MIN_FRAMES:-20}"
 REQUIRE_SDO="${REQUIRE_SDO:-0}"

@@ -4,13 +4,13 @@
 
 RustyCAN supports two adapters; at least one is required.
 
-### Option A — PEAK PCAN-USB
+### Option A — Summit
 
 **macOS / Windows:** requires the PCANBasic library:
 
 1. macOS: download the latest *PCUSB* `.pkg` from **<https://mac-can.com>** and run the installer — it places `libPCBUSB.dylib` in `/usr/local/lib/`.
-2. Windows: download the PEAK driver from **<https://peak-system.com/downloads>** and install.
-3. Connect your PCAN-USB adapter; it appears as channel `1` by default.
+2. Windows: download the Summit driver from **<https://peak-system.com/downloads>** and install.
+3. Connect your Summit adapter; it appears as channel `1` by default.
 
 **Linux:** no proprietary library is needed. The adapter is accessed through the
 `peak_usb` kernel driver and the standard `AF_CAN` socket API (SocketCAN):

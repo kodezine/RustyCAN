@@ -1,8 +1,8 @@
-//! PEAK PCAN-USB adapter — thin wrapper around `host-can`.
+//! Summit adapter — thin wrapper around `host-can`.
 //!
 //! Translates the `host_can::adapter::Adapter` trait to the unified
 //! [`crate::adapters::CanAdapter`] trait.  Hardware timestamps are not
-//! available from PEAK on macOS (`hardware_timestamp_us = None`).
+//! available from Summit on macOS (`hardware_timestamp_us = None`).
 
 use std::time::{Duration, Instant};
 
@@ -16,7 +16,7 @@ use super::{probe_adapter_kind, AdapterError, AdapterKind, CanAdapter, ReceivedF
 /// A transient CAN bus error (BUSHEAVY / BUSLIGHT / BUSOFF / OVERRUN) surfaces
 /// from libPCBUSB as the *same* "Unable to receive message" / "Unable to send
 /// message" status that a real USB removal produces.  Both `recv()` and
-/// `send()` disambiguate by checking whether the PEAK vendor ID is still
+/// `send()` disambiguate by checking whether the Summit vendor ID is still
 /// enumerated, but that check spawns `ioreg` on macOS, so we debounce it to
 /// avoid a subprocess storm during an error burst.
 const PRESENCE_PROBE_DEBOUNCE: Duration = Duration::from_millis(500);
@@ -31,13 +31,13 @@ const SEND_RETRY_MAX: u32 = 8;
 /// auto-recover before the next `CAN_Write`.
 const SEND_RETRY_BACKOFF: Duration = Duration::from_millis(20);
 
-pub struct PeakAdapter {
+pub struct SummitAdapter {
     inner: Box<dyn host_can::adapter::Adapter>,
     /// Cached `(instant, present)` result of the last USB-presence probe.
     last_probe: Option<(Instant, bool)>,
 }
 
-impl PeakAdapter {
+impl SummitAdapter {
     pub fn new(inner: Box<dyn host_can::adapter::Adapter>) -> Self {
         Self {
             inner,
@@ -45,7 +45,7 @@ impl PeakAdapter {
         }
     }
 
-    /// Returns `true` while a PEAK adapter is still enumerated on USB.
+    /// Returns `true` while a Summit adapter is still enumerated on USB.
     ///
     /// Debounced to at most one real probe per [`PRESENCE_PROBE_DEBOUNCE`]; the
     /// cached answer is reused for calls in between so an error burst cannot
@@ -56,13 +56,13 @@ impl PeakAdapter {
                 return present;
             }
         }
-        let present = probe_adapter_kind(&AdapterKind::Peak, "", 0);
+        let present = probe_adapter_kind(&AdapterKind::Summit, "", 0);
         self.last_probe = Some((Instant::now(), present));
         present
     }
 }
 
-impl CanAdapter for PeakAdapter {
+impl CanAdapter for SummitAdapter {
     fn recv(&mut self, timeout: Duration) -> Result<ReceivedFrame, AdapterError> {
         match self.inner.recv(Some(timeout)) {
             Ok(frame) => Ok(ReceivedFrame {
@@ -89,7 +89,7 @@ impl CanAdapter for PeakAdapter {
                     // disconnect would tear the adapter down and re-open it,
                     // dropping frames for the duration of every glitch.
                     //
-                    // Disambiguate by checking whether the PEAK hardware is
+                    // Disambiguate by checking whether the Summit hardware is
                     // still on the USB bus: if it is, this is a recoverable bus
                     // error — report a no-frame Timeout so the recv loop keeps
                     // running.  Only when the device has actually left the USB
@@ -117,7 +117,7 @@ impl CanAdapter for PeakAdapter {
                     // peripheral during a firmware state transition (e.g. the
                     // bootloader jumping to the freshly flashed application) —
                     // and for a genuine USB removal.  Disambiguate exactly as
-                    // the recv path does: if the PEAK is gone from USB, report
+                    // the recv path does: if the Summit is gone from USB, report
                     // Disconnected; otherwise treat it as a recoverable bus-off
                     // and resend.  A failed CAN_Write never queued the frame,
                     // so resending cannot duplicate traffic on the bus.
@@ -135,6 +135,6 @@ impl CanAdapter for PeakAdapter {
     }
 
     fn name(&self) -> &str {
-        "PEAK PCAN-USB"
+        "Summit"
     }
 }

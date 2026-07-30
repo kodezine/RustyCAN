@@ -56,7 +56,7 @@ loopback = []
 # Requires both Waveshare modules wired to the same CAN bus.
 # Build with: cargo run --features bus-test
 bus-test = []
-# Phase 3b: continuous bidirectional echo at 100 ms for PEAK sniffer / RustyCAN
+# Phase 3b: continuous bidirectional echo at 100 ms for Summit sniffer / RustyCAN
 # verification. Injects 0x7E1 on FDCAN1 and 0x7E2 on FDCAN2 every 100 ms.
 # Build with: cargo run --features periodic-echo
 periodic-echo = []

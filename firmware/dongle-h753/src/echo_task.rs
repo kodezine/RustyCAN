@@ -2,7 +2,7 @@
 //!
 //! Transmits a frame on FDCAN1 and FDCAN2 alternately, 100 ms apart.
 //! The frame received by the opposite channel is visible on the shared bus —
-//! a PEAK PCAN-USB sniffer (or any CAN analyser) will see both IDs.
+//! a Summit sniffer (or any CAN analyser) will see both IDs.
 //!
 //! # Frame IDs
 //!

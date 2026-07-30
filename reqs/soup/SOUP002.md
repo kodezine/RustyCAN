@@ -10,8 +10,8 @@ reviewed: ZAR-Jjld0uq4ky-9kJz75Rk8LCIWgxS8BWPrmMDxF94=
 type: functional
 ---
 
-# PEAK PCAN-USB Adapter Support
+# Summit Adapter Support
 
-RustyCAN **shall** support connection to a PEAK PCAN-USB adapter for CAN bus access.
+RustyCAN **shall** support connection to a Summit adapter for CAN bus access.
 
-On macOS and Windows the vendor-provided PEAK driver is used. On Linux, the SocketCAN kernel interface (`pcan` module) is used instead.
+On macOS and Windows the vendor-provided Summit driver is used. On Linux, the SocketCAN kernel interface (`pcan` module) is used instead.

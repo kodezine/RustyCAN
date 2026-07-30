@@ -17,7 +17,7 @@ host/               rustycan host application
     logger.rs       EventLogger — JSONL line writer (hw_ts_us for KCAN)
     adapters/
       mod.rs        CanAdapter trait, ReceivedFrame, AdapterKind, open_adapter
-      peak.rs       PeakAdapter — wraps host_can (PCAN-USB)
+      summit/mod.rs SummitAdapter — wraps host_can (Summit)
       kcan.rs       KCanAdapter — nusb background-thread USB adapter
     eds/
       mod.rs        EDS INI parser; parse_node_id, parse_node_id_str

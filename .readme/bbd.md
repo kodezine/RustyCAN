@@ -1,6 +1,6 @@
 # bbd — BinaryBlockDownload Firmware Update Tool
 
-`bbd` is a command-line CANopen firmware update tool built into the RustyCAN workspace. It downloads binary block files to CANopen bootloader nodes via SDO transfers, using either a **PEAK PCAN-USB** adapter or a **KCAN Dongle**.
+`bbd` is a command-line CANopen firmware update tool built into the RustyCAN workspace. It downloads binary block files to CANopen bootloader nodes via SDO transfers, using either a **Summit** adapter or a **KCAN Dongle**.
 
 It is a faithful Rust port of the C `BinaryBlockDownload` tool from the CANopen bootloader toolchain.
 
@@ -11,7 +11,7 @@ It is a faithful Rust port of the C `BinaryBlockDownload` tool from the CANopen 
 ## Prerequisites
 
 - One of:
-  - **PEAK PCAN-USB** adapter with the [PEAK driver library](https://mac-can.com) installed (`libPCBUSB.dylib` on macOS, `PCANBasic.dll` on Windows).
+  - **Summit** adapter with the [Summit driver library](https://mac-can.com) installed (`libPCBUSB.dylib` on macOS, `PCANBasic.dll` on Windows).
   - **KCAN Dongle** (STM32H753ZI) connected via USB — no driver installation required.
 - A CANopen device running a compatible CANopen bootloader.
 - A binary block file (`.bin`) produced by the bootloader toolchain.
@@ -98,8 +98,8 @@ bbd --node-id 5 --tx-baseid 0x600 --rx-baseid 0x580 --timeout 1000 firmware.bin
 | `--current-step <NUM>` | `0` | Current step in a multi-step sequence (progress display) |
 | `--blupdate-app` | *(off)* | Load the bootloader-update application |
 | `--blupdate` | *(off)* | Update the bootloader (requires blupdate-app already running) |
-| `--adapter <ADAPTER>` | `peak` | Adapter backend: `peak` or `kcan` |
-| `--port <PORT>` | `1` | Adapter port / channel (PEAK: channel number; ignored for KCAN when `--kcan-serial` is set) |
+| `--adapter <ADAPTER>` | `summit` | Adapter backend: `summit`, `kcan`, or `apex` |
+| `--port <PORT>` | `1` | Adapter port / channel (Summit: channel number; ignored for KCAN when `--kcan-serial` is set) |
 | `--baud <BPS>` | `500000` | CAN bus baud rate in bits per second |
 | `--kcan-serial <SERIAL>` | *(none)* | KCAN dongle USB serial (optional; first found if omitted) |
 

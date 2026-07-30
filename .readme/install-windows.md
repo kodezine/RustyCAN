@@ -30,16 +30,16 @@ Windows 10/11 includes WinUSB support for USB bulk devices. The KCAN Dongle
 (VID `0x1209` / PID `0xBEEF`) enumerates automatically — no additional driver
 installation is required.
 
-### PEAK PCAN-USB adapter — optional
+### Summit adapter — optional
 
-If you want to use a PEAK PCAN-USB adapter:
+If you want to use a Summit adapter:
 
 | Step | Action |
 |---|---|
-| 1️⃣ | Download the Windows PEAK driver from <https://peak-system.com/downloads> |
+| 1️⃣ | Download the Windows Summit driver from <https://peak-system.com/downloads> |
 | 2️⃣ | Run the installer — registers `PCANBasic.dll` in the system |
-| 3️⃣ | Connect the PEAK adapter; Windows assigns it a PCAN channel |
-| 4️⃣ | Launch RustyCAN → select **PEAK PCAN-USB** on the Connect screen |
+| 3️⃣ | Connect the Summit adapter; Windows assigns it a PCAN channel |
+| 4️⃣ | Launch RustyCAN → select **Summit** on the Connect screen |
 
 > ℹ️ If `PCANBasic.dll` is not found, RustyCAN shows a friendly message with
 > the download URL — the app still opens and the KCAN Dongle path is unaffected.
@@ -62,7 +62,7 @@ or run:
 
 1. Open **RustyCAN** from the Start Menu or desktop shortcut.
 2. On the **Connect** screen:
-   - Choose **KCAN Dongle** or **PEAK PCAN-USB**
+   - Choose **KCAN Dongle** or **Summit**
    - Set baud rate (default `250000`)
    - Optionally browse to `.eds` files for your nodes
 3. Click **Connect** — the button activates automatically when the adapter is detected.
@@ -77,5 +77,5 @@ See the [GUI Guide](gui-guide.md) for a full GUI walkthrough.
 |---|---|
 | _"Windows protected your PC"_ | Click **More info → Run anyway** |
 | KCAN Dongle not detected | Open Device Manager — check for `Unknown device` under USB; reinstall WinUSB via Zadig if needed |
-| PEAK adapter not found | Verify `PCANBasic.dll` is installed: `where PCANBasic.dll` in CMD |
+| Summit adapter not found | Verify `PCANBasic.dll` is installed: `where PCANBasic.dll` in CMD |
 | App fails to start | Check Windows Event Viewer → Application log for the crash entry |

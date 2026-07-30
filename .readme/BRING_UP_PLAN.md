@@ -261,16 +261,16 @@ cargo run --release -- --config host/config.kcan-h743.json
 
 ### Phase 3: FDCAN Physical Bus Validation ✅
 
-**Gate:** Frames visible on PEAK PCAN-USB sniffer or second CAN node
+**Gate:** Frames visible on Summit sniffer or second CAN node
 
 - [x] FDCAN1 pins corrected: PA11 (RX) / PA12 (TX) per MB1246-H743-E03 schematic
-- [x] Connect CAN cable: CN3 DB9 ↔ PEAK PCAN-USB
+- [x] Connect CAN cable: CN3 DB9 ↔ Summit
 - [x] Bus termination confirmed (120 Ω at each end)
 - [x] RTT: `FDCAN RX [ID=0x720, DLC=1]` — CANopen heartbeat from slave node 32
 - [x] Host: NMT BOOTUP + PRE-OPERATIONAL heartbeats @ 1 Hz decoded correctly
 - [x] EMCY frame `[0x0A0]` (node 32 emergency) received and decoded
 
-**Result:** Live CANopen slave (node 32) frames flowing PEAK→CN3→PA11→FDCAN1→USB→host. CANopen NMT decoder confirmed working on real bus traffic.
+**Result:** Live CANopen slave (node 32) frames flowing Summit→CN3→PA11→FDCAN1→USB→host. CANopen NMT decoder confirmed working on real bus traffic.
 
 ---
 

@@ -56,7 +56,7 @@ impl SocketCanAdapter {
                      module is not loaded.\n\n\
                      Step 1 — load the driver (once per boot):\n\
                      \tsudo modprobe peak_usb\n\n\
-                     Step 2 — plug in the PEAK adapter (or re-plug if already connected).\n\n\
+                     Step 2 — plug in the Summit adapter (or re-plug if already connected).\n\n\
                      Step 3 — bring up the interface:\n\
                      \tsudo ip link set {interface} up type can bitrate 250000\n\n\
                      Verify:  ip link show | grep can"

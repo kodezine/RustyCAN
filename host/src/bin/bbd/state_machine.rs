@@ -419,7 +419,7 @@ const APP_START_TIMEOUT: Duration = Duration::from_secs(30);
 ///
 /// The node frequently resets and re-initialises its CAN controller *before* it
 /// acknowledges the SDO write, so the write can come back as an SDO timeout or a
-/// transient adapter error (a bus-off/error burst that the PEAK backend reports
+/// transient adapter error (a bus-off/error burst that the Summit backend reports
 /// as `Disconnected`). Those are the *expected* result of a successful mode
 /// switch, not a failure — the caller confirms the new mode by polling 0x1000.
 ///
@@ -442,7 +442,7 @@ fn write_control_expect_reset(
             Ok(()) => return Ok(()),
             // The node resets and re-initialises its CAN controller before it
             // ACKs, so a successful mode switch surfaces as an SDO timeout or the
-            // transient USB/bus disconnect the PEAK backend reports as
+            // transient USB/bus disconnect the Summit backend reports as
             // `Disconnected`. The caller confirms the new mode by polling 0x1000.
             Err(SdoError::Timeout) | Err(SdoError::Adapter(AdapterError::Disconnected)) => {
                 return Ok(())

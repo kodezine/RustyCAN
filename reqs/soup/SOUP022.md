@@ -10,6 +10,6 @@ reviewed: i-gGH4UqQmt1MPhvGxkCBPc25B12qLwmGUCeYY9u6Nc=
 type: interface
 ---
 
-# PEAK Adapter Hardware Interface
+# Summit Adapter Hardware Interface
 
-RustyCAN **shall** interface with PEAK PCAN-USB adapters via the vendor-provided PEAK driver on macOS and Windows, and via the SocketCAN kernel interface (using the `pcan` kernel module) on Linux.
+RustyCAN **shall** interface with Summit adapters via the vendor-provided Summit driver on macOS and Windows, and via the SocketCAN kernel interface (using the `pcan` kernel module) on Linux.

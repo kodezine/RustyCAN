@@ -58,7 +58,7 @@ usb-hs = []
 # Build with: cargo build --release --features loopback
 # Remove for normal operation (Phase 3+).
 loopback = []
-# Phase 3b: continuous single-channel echo at 100 ms for PEAK sniffer /
+# Phase 3b: continuous single-channel echo at 100 ms for Summit sniffer /
 # RustyCAN verification. Injects 0x7E1 on FDCAN1 every 100 ms.
 # Build with: cargo run --features periodic-echo
 periodic-echo = []

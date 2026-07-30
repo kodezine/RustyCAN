@@ -14,7 +14,7 @@ and/or Linux remotes for build verification and screenshot comparison.
 - Rust stable: `rustup install stable`
 - rsync: `choco install rsync` (requires Chocolatey)
 - PATH: `~/.cargo/bin` and `C:\ProgramData\chocolatey\bin` in `~/.bashrc`
-- PEAK driver: install from https://www.peak-system.com/PCAN-Basic.239.0.html
+- Summit driver: install from https://www.peak-system.com/PCAN-Basic.239.0.html
 - Config: `host/config.windows.json` (committed, edit `nodes` as needed)
 
 ### Linux remote (headless Fedora)
@@ -143,7 +143,7 @@ using the **RustyCAN (Windows)** launch configuration.
 
 | Feature              | macOS                         | Windows                        |
 |----------------------|-------------------------------|--------------------------------|
-| PEAK library         | `libPCBUSB.dylib` (mac-can)   | `PCANBasic.dll` (PEAK official)|
+| Summit library         | `libPCBUSB.dylib` (mac-can)   | `PCANBasic.dll` (Summit official)|
 | RTLD_NODELETE guard  | `#[cfg(target_os = "macos")]` | skipped (not needed)           |
 | Log path fallback    | project dir                   | `%USERPROFILE%` if ACL blocked |
 | Adapter detection    | `ioreg` / nusb                | nusb only                      |

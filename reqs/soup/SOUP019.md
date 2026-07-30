@@ -12,4 +12,4 @@ type: performance
 
 # Configurable CAN Baud Rate
 
-RustyCAN **shall** support operator-configurable CAN baud rates. For PEAK PCAN-USB adapters the supported range is up to 1 Mbit/s. For KCAN Dongles the supported baud rates are those defined in the KCAN firmware bit-timing configuration.
+RustyCAN **shall** support operator-configurable CAN baud rates. For Summit adapters the supported range is up to 1 Mbit/s. For KCAN Dongles the supported baud rates are those defined in the KCAN firmware bit-timing configuration.

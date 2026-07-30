@@ -15,7 +15,7 @@ type: anomaly
 
 **Affected platforms:** All
 
-**Description:** The `bbd` (BinaryBlockDownload) command-line tool for CANopen firmware updates via PEAK or KCAN adapters is compiled as part of the workspace but is excluded from signed packaged releases (DMG, NSIS installer, AppImage/deb). It is available only in developer builds (`cargo build -p rustycan --bin bbd`).
+**Description:** The `bbd` (BinaryBlockDownload) command-line tool for CANopen firmware updates via Summit or KCAN adapters is compiled as part of the workspace but is excluded from signed packaged releases (DMG, NSIS installer, AppImage/deb). It is available only in developer builds (`cargo build -p rustycan --bin bbd`).
 
 **Workaround:** Build from source to obtain `bbd`. Pre-built packaged installers do not include this tool.
 

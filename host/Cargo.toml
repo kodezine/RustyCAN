@@ -60,7 +60,7 @@ libc = "0.2"
 objc2 = "0.6"
 
 # host-can: pcan feature is only available on macOS and Windows.
-# On Linux, PEAK hardware uses SocketCAN (kernel driver) and the proprietary
+# On Linux, Summit hardware uses SocketCAN (kernel driver) and the proprietary
 # libPCBUSB library does not support Linux — enabling pcan there causes a
 # compile error in the upstream crate (host-can issue: missing cfg(linux) arm).
 [target.'cfg(not(target_os = "linux"))'.dependencies]
@@ -106,7 +106,7 @@ icons        = [
 [package.metadata.packager.macos]
 
 # Windows: NSIS one-click installer (.exe).
-# PCANBasic.dll is loaded at runtime via libloading — user installs PEAK drivers.
+# PCANBasic.dll is loaded at runtime via libloading — user installs the vendor driver.
 [package.metadata.packager.nsis]
 installer-mode = "currentUser"
 

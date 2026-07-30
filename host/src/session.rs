@@ -267,7 +267,7 @@ pub struct SessionConfig {
     pub block_size: u8,
     /// Which adapter backend to use.
     ///
-    /// Defaults to [`AdapterKind::Peak`] so existing callers are unaffected.
+    /// Defaults to [`AdapterKind::Summit`] so existing callers are unaffected.
     pub adapter_kind: AdapterKind,
     /// DBC files to load for bus-wide raw CAN signal decoding.
     ///
@@ -325,7 +325,7 @@ pub type SessionResult = Result<
 /// Opens the adapter, immediately drops it, and returns `true` on success.
 /// Intended for the Connect-screen dongle-detection poll.
 pub fn probe_adapter(port: &str, baud: u32) -> bool {
-    probe_adapter_kind(&AdapterKind::Peak, port, baud)
+    probe_adapter_kind(&AdapterKind::Summit, port, baud)
 }
 
 /// Probe a specific adapter kind.
@@ -1639,12 +1639,12 @@ fn recv_loop(
                             match adapter.send(&frame) {
                                 Ok(()) => {
                                     // Log the transmit so Tx frames appear in the
-                                    // trace even on adapters that don't echo (PEAK).
+                                    // trace even on adapters that don't echo (Summit).
                                     let ts = Utc::now();
                                     logger.log_tx(ts, can_id, payload);
                                     // Echoing adapters (KCAN) re-surface this frame
                                     // to the sniffer via the TX-echo recv branch;
-                                    // for non-echoing adapters (PEAK, SocketCAN)
+                                    // for non-echoing adapters (Summit, SocketCAN)
                                     // emit the tap here so live aggregation still
                                     // sees host-initiated TX. Keyed by the full ID.
                                     if !adapter.echoes_tx() {
@@ -1747,7 +1747,7 @@ fn recv_loop(
         let cob_id = extract_cob_id(&frame);
         let full_id = full_can_id(&frame);
         let ts = Utc::now();
-        // Pass hardware timestamp to logger for this frame (None for PEAK).
+        // Pass hardware timestamp to logger for this frame (None for Summit).
         logger.set_hw_timestamp(hardware_timestamp_ns);
 
         // Classify against the configured XCP CRO/DTO identifiers first — these

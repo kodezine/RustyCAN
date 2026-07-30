@@ -49,9 +49,9 @@ See [logging-performance.md](logging-performance.md) for details.
 
 ## Hardware Recommendations
 
-- **7-15 nodes:** PCAN-USB (standard) - now works reliably
-- **16-30 nodes:** PCAN-USB Pro - recommended
-- **30+ nodes:** PCAN-USB FD - for high traffic
+- **7-15 nodes:** Summit (standard) - now works reliably
+- **16-30 nodes:** Summit Pro - recommended
+- **30+ nodes:** Summit FD - for high traffic
 
 **Critical:** Use 120Ω termination resistors at both bus ends
 

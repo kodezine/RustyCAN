@@ -22,7 +22,7 @@ All CAN data bytes are written as `"0x##"` hex strings.
 | `type` | all | Entry type (see table below) |
 | `cob_id` | all | CAN Object Identifier as `"0xNNN"` hex string |
 | `raw` | all | Full CAN data bytes as `["0x##", …]` hex strings |
-| `hw_ts_us` | KCAN only | Hardware timestamp in microseconds from FDCAN TIM2 (absent for PEAK frames) |
+| `hw_ts_us` | KCAN only | Hardware timestamp in microseconds from FDCAN TIM2 (absent for Summit frames) |
 
 ## Entry Types
 

@@ -80,15 +80,15 @@ The rules grant write access to:
 | Device | VID | PID |
 |---|---|---|
 | KCAN Dongle | `0x1209` | `0xBEEF` |
-| PEAK PCAN-USB | `0x0c72` | all PIDs |
+| Summit | `0x0c72` | all PIDs |
 
 ### KCAN Dongle
 
 No additional drivers are needed beyond the udev rules above.
 
-### PEAK PCAN-USB adapter (optional)
+### Summit adapter (optional)
 
-PEAK adapters on Linux use the **SocketCAN** kernel driver (`peak_usb`), which
+Summit adapters on Linux use the **SocketCAN** kernel driver (`peak_usb`), which
 is included in the mainline kernel (4.1+). No proprietary library is needed.
 
 #### Step 1 — Load the kernel module (once per boot)
