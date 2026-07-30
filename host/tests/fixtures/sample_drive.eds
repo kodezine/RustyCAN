@@ -4,7 +4,7 @@ FileVersion=1
 FileRevision=1
 LastEDS=
 EDSVersion=4.0
-Description=Distribution Board Table Top MK3
+Description=Sample Drive
 CreationTime=10:55AM
 CreationDate=10-02-2025
 CreatedBy=Sohal Patel
@@ -17,9 +17,9 @@ NodeId=32
 Baudrate=250
 
 [DeviceInfo]
-VendorName=Baxter Co&KG GmbH.
+VendorName=kodezine ug
 VendorNumber=0x0000003F
-ProductName=Distributor Board
+ProductName=sample-drive
 ProductNumber=0x00000001
 RevisionNumber=0
 BaudRate_10=0
@@ -254,7 +254,7 @@ DefaultValue=1000
 PDOMapping=0
 
 [1400]
-ParameterName=RPDO Distributor Board Command Channel
+ParameterName=RPDO Command Channel
 ObjectType=0x9
 ;StorageLocation=RAM
 SubNumber=0x4
@@ -770,7 +770,7 @@ DefaultValue=0x00000000
 PDOMapping=0
 
 [1800]
-ParameterName=TPDO Distributor Board Status
+ParameterName=TPDO Status
 ObjectType=0x9
 ;StorageLocation=RAM
 SubNumber=0x6
@@ -1088,7 +1088,7 @@ DefaultValue=0x0
 PDOMapping=0
 
 [3000subA]
-ParameterName=KlineDetectLevel
+ParameterName=DetectLevel
 ObjectType=0x7
 ;StorageLocation=RAM
 DataType=0x0006
@@ -1097,7 +1097,7 @@ DefaultValue=0x0
 PDOMapping=0
 
 [3000subB]
-ParameterName=KlineNrOfDetections
+ParameterName=NrOfDetections
 ObjectType=0x7
 ;StorageLocation=RAM
 DataType=0x0006
@@ -1106,7 +1106,7 @@ DefaultValue=0x0
 PDOMapping=0
 
 [3000subC]
-ParameterName=KlineLastDetectLevel
+ParameterName=LastDetectLevel
 ObjectType=0x7
 ;StorageLocation=RAM
 DataType=0x0006
@@ -1277,7 +1277,7 @@ DefaultValue=0
 PDOMapping=0
 
 [3005]
-ParameterName=KlineContainer:General
+ParameterName=Container:General
 ObjectType=0x9
 ;StorageLocation=RAM
 SubNumber=0x4
@@ -1292,7 +1292,7 @@ DefaultValue=0x2
 PDOMapping=0
 
 [3005sub1]
-ParameterName=KlineTableTopType
+ParameterName=DeviceType
 ObjectType=0x7
 ;StorageLocation=RAM
 DataType=0x0005
@@ -1301,7 +1301,7 @@ DefaultValue=0x1
 PDOMapping=0
 
 [3005sub2]
-ParameterName=KlineTableTopSerialNumber
+ParameterName=DeviceSerialNumber
 ObjectType=0x7
 ;StorageLocation=RAM
 DataType=0x0007
@@ -1310,7 +1310,7 @@ DefaultValue=0x0
 PDOMapping=0
 
 [3005sub3]
-ParameterName=CheckSumKLine
+ParameterName=CheckSum
 ObjectType=0x7
 ;StorageLocation=RAM
 DataType=0x0007
@@ -1319,7 +1319,7 @@ DefaultValue=0x0
 PDOMapping=0
 
 [3006]
-ParameterName=KlineContainer:PositionFactor
+ParameterName=Container:PositionFactor
 ObjectType=0x8
 ;StorageLocation=RAM
 SubNumber=0x11
@@ -1478,7 +1478,7 @@ DefaultValue=0x0
 PDOMapping=0
 
 [3007]
-ParameterName=KlineContainer:SpeedFactor
+ParameterName=Container:SpeedFactor
 ObjectType=0x8
 ;StorageLocation=RAM
 SubNumber=0x11
@@ -1637,7 +1637,7 @@ DefaultValue=0x0
 PDOMapping=0
 
 [3008]
-ParameterName=KlineContainer:MotorMapping
+ParameterName=Container:MotorMapping
 ObjectType=0x8
 ;StorageLocation=RAM
 SubNumber=0x11
@@ -1811,7 +1811,7 @@ DefaultValue=0xB
 PDOMapping=0
 
 [3010sub1]
-ParameterName=DCTableTopID
+ParameterName=DeviceID
 ObjectType=0x7
 ;StorageLocation=RAM
 DataType=0x0006
