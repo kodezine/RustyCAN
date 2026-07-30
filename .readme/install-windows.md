@@ -44,6 +44,40 @@ If you want to use a Summit adapter:
 > ℹ️ If `PCANBasic.dll` is not found, RustyCAN shows a friendly message with
 > the download URL — the app still opens and the KCAN Dongle path is unaffected.
 
+### Apex USB-CAN adapter — one-time WinUSB binding (Zadig)
+
+RustyCAN talks to the Apex module directly over USB (no vendor DLL). Unlike the
+KCAN Dongle, the Apex firmware does **not** advertise WinUSB automatically, so
+Windows will not load a usable driver on its own. Bind it to Microsoft's in-box
+`winusb.sys` once, using the free [Zadig](https://zadig.akeo.ie/) tool — no
+paid driver signing is involved.
+
+> **Important — bind *both* device IDs.** During connect, RustyCAN reboots the
+> module from its bootloader into the application, and it re-enumerates with a
+> different USB product ID. You must bind WinUSB to **both**:
+>
+> | Role | VID | PID |
+> |---|---|---|
+> | Apex (application) | `0x0878` | `0x1181` |
+> | Apex (bootloader) | `0x0878` | `0x1101` |
+>
+> If you bind only one, the connect sequence stalls the first time the device
+> switches modes.
+
+| Step | Action | Expected result |
+|---|---|---|
+| 1️⃣ | Download and run **Zadig** (portable `.exe`, no install) | Zadig window opens |
+| 2️⃣ | Menu **Options → List All Devices** | Hidden/driverless devices appear |
+| 3️⃣ | In the dropdown, select **USB-CANmodul1** (`0878 1181`) | USB ID shows `0878 1181` |
+| 4️⃣ | Set the target driver to **WinUSB**, click **Replace Driver** | "Driver installed successfully" |
+| 5️⃣ | Unplug/replug so the **bootloader** ID `0878 1101` appears, repeat steps 3–4 for it | Both IDs now on WinUSB |
+| 6️⃣ | Launch RustyCAN → select **Apex** on the Connect screen → **Connect** | Frames start flowing |
+
+> **This replaces the vendor driver** for the Apex module, so the vendor's own
+> Windows software can't use it while WinUSB is bound. It's fully reversible:
+> **Device Manager → the device → Uninstall device** (tick *delete driver*) and
+> replug, or use Zadig to restore.
+
 ---
 
 ## 🗑️ Uninstall
@@ -62,7 +96,7 @@ or run:
 
 1. Open **RustyCAN** from the Start Menu or desktop shortcut.
 2. On the **Connect** screen:
-   - Choose **KCAN Dongle** or **Summit**
+   - Choose **KCAN Dongle**, **Summit**, or **Apex** (Apex needs the one-time WinUSB binding above)
    - Set baud rate (default `250000`)
    - Optionally browse to `.eds` files for your nodes
 3. Click **Connect** — the button activates automatically when the adapter is detected.
@@ -77,5 +111,7 @@ See the [GUI Guide](gui-guide.md) for a full GUI walkthrough.
 |---|---|
 | _"Windows protected your PC"_ | Click **More info → Run anyway** |
 | KCAN Dongle not detected | Open Device Manager — check for `Unknown device` under USB; reinstall WinUSB via Zadig if needed |
+| Apex connect stalls after "booting" | The **bootloader** ID `0878 1101` isn't on WinUSB — bind it in Zadig (see the Apex section) |
+| Apex not detected at all | Confirm the **application** ID `0878 1181` is bound to WinUSB in Zadig, then replug |
 | Summit adapter not found | Verify `PCANBasic.dll` is installed: `where PCANBasic.dll` in CMD |
 | App fails to start | Check Windows Event Viewer → Application log for the crash entry |
