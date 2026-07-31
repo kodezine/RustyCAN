@@ -6,7 +6,7 @@
 //! GPL driver source, and operates on plain integers/bytes so it is fully
 //! unit-testable without hardware.
 //!
-//! # Running-mode USB interface (PID 0x1101 / 0x1181)
+//! # Running-mode USB interface (PID 0x1101 / 0x1181 / 0x1122)
 //!
 //! Five endpoints:
 //! * `0x01` bulk OUT — CAN frames to send (DATA_OUT)
@@ -33,7 +33,10 @@ pub const EP_STAT_IN: u8 = 0x83;
 pub const APEX_VID: u16 = 0x0878;
 /// Running/application-mode product IDs (device exposes the 5-endpoint CAN
 /// interface).  Everything else under the vendor ID is a bootloader.
-pub const PID_RUNNING: [u16; 2] = [0x1101, 0x1181];
+///
+/// `0x1101`/`0x1181` are the bench unit; `0x1122` is another USB-CANmodul1
+/// hardware variant that boots straight into the same running-mode interface.
+pub const PID_RUNNING: [u16; 3] = [0x1101, 0x1181, 0x1122];
 
 // ─── Bootloader EP0 vendor requests ───────────────────────────────────────────
 //
