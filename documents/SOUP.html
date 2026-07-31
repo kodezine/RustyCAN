@@ -64,7 +64,7 @@
                     href="#SOUP002"
                     data-bs-toggle="tooltip"
                     data-bs-placement="left"
-                    title="SOUP002">2.1 PEAK PCAN-USB Adapter Support (SOUP002)</a>
+                    title="SOUP002">2.1 Summit Adapter Support (SOUP002)</a>
                 </li>
                 <li>
                   <a class="dropdown-item text-truncate"
@@ -204,7 +204,7 @@
                     href="#SOUP022"
                     data-bs-toggle="tooltip"
                     data-bs-placement="left"
-                    title="SOUP022">11.2 PEAK Adapter Hardware Interface (SOUP022)</a>
+                    title="SOUP022">11.2 Summit Adapter Hardware Interface (SOUP022)</a>
                 </li>
                 <li>
                   <a class="dropdown-item text-truncate"
@@ -326,7 +326,7 @@
 </tr>
 <tr>
 <td><strong>Version</strong></td>
-<td>v0.2.9</td>
+<td>v0.2.10</td>
 </tr>
 <tr>
 <td><strong>License</strong></td>
@@ -372,10 +372,10 @@
 </tr>
 </tbody>
 </table>
-<h2 id="SOUP002">2.1 PEAK PCAN-USB Adapter Support <small>(SOUP002)</small></h2>
-<p>RustyCAN <strong>shall</strong> support connection to a PEAK PCAN-USB adapter for CAN bus access.</p>
-<p>On macOS and Windows the vendor-provided PEAK driver is used. On Linux, the SocketCAN kernel interface (<code>pcan</code> module) is used instead.</p>
-<p><em>Child links:</em> <a href="SOUPANOM.html#SOUPANOM004">SOUPANOM004 PEAK Adapter Not Supported on Linux via Vendor Driver</a>, <a href="SOUPTC.html#SOUPTC010">SOUPTC010 PEAK PCAN-USB Adapter Connection</a></p>
+<h2 id="SOUP002">2.1 Summit Adapter Support <small>(SOUP002)</small></h2>
+<p>RustyCAN <strong>shall</strong> support connection to a Summit adapter for CAN bus access.</p>
+<p>On macOS and Windows the vendor-provided Summit driver is used. On Linux, the SocketCAN kernel interface (<code>pcan</code> module) is used instead.</p>
+<p><em>Child links:</em> <a href="SOUPANOM.html#SOUPANOM004">SOUPANOM004 Summit Adapter Not Supported on Linux via Vendor Driver</a>, <a href="SOUPTC.html#SOUPTC010">SOUPTC010 Summit Adapter Connection</a></p>
 <table>
 <thead>
 <tr>
@@ -731,7 +731,7 @@
 </tbody>
 </table>
 <h2 id="SOUP019">10.2 Configurable CAN Baud Rate <small>(SOUP019)</small></h2>
-<p>RustyCAN <strong>shall</strong> support operator-configurable CAN baud rates. For PEAK PCAN-USB adapters the supported range is up to 1 Mbit/s. For KCAN Dongles the supported baud rates are those defined in the KCAN firmware bit-timing configuration.</p>
+<p>RustyCAN <strong>shall</strong> support operator-configurable CAN baud rates. For Summit adapters the supported range is up to 1 Mbit/s. For KCAN Dongles the supported baud rates are those defined in the KCAN firmware bit-timing configuration.</p>
 <table>
 <thead>
 <tr>
@@ -797,8 +797,8 @@
 </tr>
 </tbody>
 </table>
-<h2 id="SOUP022">11.2 PEAK Adapter Hardware Interface <small>(SOUP022)</small></h2>
-<p>RustyCAN <strong>shall</strong> interface with PEAK PCAN-USB adapters via the vendor-provided PEAK driver on macOS and Windows, and via the SocketCAN kernel interface (using the <code>pcan</code> kernel module) on Linux.</p>
+<h2 id="SOUP022">11.2 Summit Adapter Hardware Interface <small>(SOUP022)</small></h2>
+<p>RustyCAN <strong>shall</strong> interface with Summit adapters via the vendor-provided Summit driver on macOS and Windows, and via the SocketCAN kernel interface (using the <code>pcan</code> kernel module) on Linux.</p>
 <p><em>Child links:</em> <a href="SOUPTC.html#SOUPTC024">SOUPTC024 Code Review: Adapter Interface Implementation</a></p>
 <table>
 <thead>

@@ -78,7 +78,7 @@
                     href="#SOUPANOM004"
                     data-bs-toggle="tooltip"
                     data-bs-placement="left"
-                    title="SOUPANOM004">1.4 PEAK Adapter Not Supported on Linux via Vendor Driver (SOUPANOM004)</a>
+                    title="SOUPANOM004">1.4 Summit Adapter Not Supported on Linux via Vendor Driver (SOUPANOM004)</a>
                 </li>
                 <li>
                   <a class="dropdown-item text-truncate"
@@ -217,12 +217,12 @@
 </tr>
 </tbody>
 </table>
-<h2 id="SOUPANOM004">1.4 PEAK Adapter Not Supported on Linux via Vendor Driver <small>(SOUPANOM004)</small></h2>
+<h2 id="SOUPANOM004">1.4 Summit Adapter Not Supported on Linux via Vendor Driver <small>(SOUPANOM004)</small></h2>
 <p><strong>Affected platforms:</strong> Linux</p>
-<p><strong>Description:</strong> The PEAK vendor-provided <code>pcan</code> userspace driver used on macOS and Windows is not available on Linux. Linux support for PEAK PCAN-USB adapters is provided via the SocketCAN kernel interface (<code>pcan</code> kernel module), which requires the <code>pcan</code> module to be loaded.</p>
-<p><strong>Workaround:</strong> On Linux, configure the PEAK adapter as a SocketCAN network interface (e.g., <code>ip link set can0 up type can bitrate 250000</code>) before launching RustyCAN.</p>
-<p><strong>Impact:</strong> Linux users must perform additional system configuration before connecting a PEAK adapter. KCAN Dongle support is unaffected on all platforms.</p>
-<p><em>Parent links:</em> <a href="SOUP.html#SOUP002">SOUP002 PEAK PCAN-USB Adapter Support</a></p>
+<p><strong>Description:</strong> The Summit vendor-provided <code>pcan</code> userspace driver used on macOS and Windows is not available on Linux. Linux support for Summit adapters is provided via the SocketCAN kernel interface (<code>pcan</code> kernel module), which requires the <code>pcan</code> module to be loaded.</p>
+<p><strong>Workaround:</strong> On Linux, configure the Summit adapter as a SocketCAN network interface (e.g., <code>ip link set can0 up type can bitrate 250000</code>) before launching RustyCAN.</p>
+<p><strong>Impact:</strong> Linux users must perform additional system configuration before connecting a Summit adapter. KCAN Dongle support is unaffected on all platforms.</p>
+<p><em>Parent links:</em> <a href="SOUP.html#SOUP002">SOUP002 Summit Adapter Support</a></p>
 <table>
 <thead>
 <tr>
@@ -243,7 +243,7 @@
 </table>
 <h2 id="SOUPANOM005">1.5 bbd Firmware Tool Excluded from Packaged Releases <small>(SOUPANOM005)</small></h2>
 <p><strong>Affected platforms:</strong> All</p>
-<p><strong>Description:</strong> The <code>bbd</code> (BinaryBlockDownload) command-line tool for CANopen firmware updates via PEAK or KCAN adapters is compiled as part of the workspace but is excluded from signed packaged releases (DMG, NSIS installer, AppImage/deb). It is available only in developer builds (<code>cargo build -p rustycan --bin bbd</code>).</p>
+<p><strong>Description:</strong> The <code>bbd</code> (BinaryBlockDownload) command-line tool for CANopen firmware updates via Summit or KCAN adapters is compiled as part of the workspace but is excluded from signed packaged releases (DMG, NSIS installer, AppImage/deb). It is available only in developer builds (<code>cargo build -p rustycan --bin bbd</code>).</p>
 <p><strong>Workaround:</strong> Build from source to obtain <code>bbd</code>. Pre-built packaged installers do not include this tool.</p>
 <p><strong>Impact:</strong> End-users installing RustyCAN from a release package cannot perform CANopen-based firmware updates using <code>bbd</code> without building from source. The KCAN Dongle USB DFU update path (via the GUI or <code>--dfu-firmware</code> flag) is unaffected and is included in all releases.</p>
 <p><em>Parent links:</em> <a href="SOUP.html#SOUP017">SOUP017 KCAN Dongle Firmware Update</a></p>

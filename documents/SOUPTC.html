@@ -120,7 +120,7 @@
                     href="#SOUPTC010"
                     data-bs-toggle="tooltip"
                     data-bs-placement="left"
-                    title="SOUPTC010">2.1 PEAK PCAN-USB Adapter Connection (SOUPTC010)</a>
+                    title="SOUPTC010">2.1 Summit Adapter Connection (SOUPTC010)</a>
                 </li>
                 <li>
                   <a class="dropdown-item text-truncate"
@@ -547,18 +547,18 @@
 </tr>
 </tbody>
 </table>
-<h2 id="SOUPTC010">2.1 PEAK PCAN-USB Adapter Connection <small>(SOUPTC010)</small></h2>
-<p><strong>Objective:</strong> Verify that RustyCAN detects and connects to a PEAK PCAN-USB adapter.</p>
-<p><strong>Preconditions:</strong> PEAK PCAN-USB adapter connected to host. Driver installed (macOS/Windows) or <code>pcan</code> kernel module loaded (Linux). CAN bus with termination resistors.</p>
+<h2 id="SOUPTC010">2.1 Summit Adapter Connection <small>(SOUPTC010)</small></h2>
+<p><strong>Objective:</strong> Verify that RustyCAN detects and connects to a Summit adapter.</p>
+<p><strong>Preconditions:</strong> Summit adapter connected to host. Driver installed (macOS/Windows) or <code>pcan</code> kernel module loaded (Linux). CAN bus with termination resistors.</p>
 <p><strong>Procedure:</strong></p>
 <ol>
 <li>Launch RustyCAN.</li>
-<li>On the Connect screen, select adapter type <strong>PEAK PCAN-USB</strong>.</li>
+<li>On the Connect screen, select adapter type <strong>Summit</strong>.</li>
 <li>Select the correct port/channel and baud rate.</li>
 <li>Click <strong>Connect</strong>.</li>
 </ol>
 <p><strong>Pass criteria:</strong> The Monitor screen opens. The status bar shows the adapter as connected. No error dialog is displayed.</p>
-<p><em>Parent links:</em> <a href="SOUP.html#SOUP002">SOUP002 PEAK PCAN-USB Adapter Support</a></p>
+<p><em>Parent links:</em> <a href="SOUP.html#SOUP002">SOUP002 Summit Adapter Support</a></p>
 <table>
 <thead>
 <tr>
@@ -866,7 +866,7 @@
 </table>
 <h2 id="SOUPTC022">2.13 Multi-Node Logging Stability <small>(SOUPTC022)</small></h2>
 <p><strong>Objective:</strong> Verify that RustyCAN sustains continuous logging without frame loss on a network with seven or more active CANopen nodes.</p>
-<p><strong>Preconditions:</strong> Seven (7) or more CANopen nodes active on the bus, each transmitting heartbeats and at least one TPDO. Adapter: PEAK or KCAN.</p>
+<p><strong>Preconditions:</strong> Seven (7) or more CANopen nodes active on the bus, each transmitting heartbeats and at least one TPDO. Adapter: Summit or KCAN.</p>
 <p><strong>Procedure:</strong></p>
 <ol>
 <li>Start a session with all seven nodes active.</li>
@@ -992,15 +992,15 @@
 </tbody>
 </table>
 <h2 id="SOUPTC024">3.1 Code Review: Adapter Interface Implementation <small>(SOUPTC024)</small></h2>
-<p><strong>Objective:</strong> Confirm by code review that <code>host/src/adapters/peak.rs</code> and <code>host/src/adapters/kcan.rs</code> correctly implement the declared hardware interface requirements.</p>
+<p><strong>Objective:</strong> Confirm by code review that <code>host/src/adapters/summit/mod.rs</code> and <code>host/src/adapters/kcan.rs</code> correctly implement the declared hardware interface requirements.</p>
 <p><strong>Reviewers:</strong> At least one reviewer with USB and CAN bus expertise.</p>
 <p><strong>Review checklist:</strong></p>
 <ul>
-<li><code>peak.rs</code>: Uses vendor PEAK driver API on macOS/Windows; uses SocketCAN <code>AF_CAN</code> socket on Linux. Correct error propagation on driver failure.</li>
+<li><code>summit/mod.rs</code>: Uses vendor Summit driver API on macOS/Windows; uses SocketCAN <code>AF_CAN</code> socket on Linux. Correct error propagation on driver failure.</li>
 <li><code>kcan.rs</code>: Uses <code>nusb</code> exclusively (no <code>libusb</code> or <code>rusb</code> imports). Bulk endpoints OUT=0x01, IN=0x81. Call order: <code>open()</code> → <code>claim_interface(0)</code> → control/bulk I/O. GET_INFO retry logic present. Bulk OUT chunked to 64-byte MPS.</li>
 </ul>
 <p><strong>Pass criteria:</strong> Review completed and documented. No deviations from SOUP023 (nusb-only) or SOUP022 (driver mapping) found, or deviations are recorded as new anomaly items.</p>
-<p><em>Parent links:</em> <a href="SOUP.html#SOUP022">SOUP022 PEAK Adapter Hardware Interface</a>, <a href="SOUP.html#SOUP023">SOUP023 KCAN Adapter Hardware Interface</a></p>
+<p><em>Parent links:</em> <a href="SOUP.html#SOUP022">SOUP022 Summit Adapter Hardware Interface</a>, <a href="SOUP.html#SOUP023">SOUP023 KCAN Adapter Hardware Interface</a></p>
 <table>
 <thead>
 <tr>
