@@ -21,7 +21,9 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use embedded_can::{ExtendedId, Frame as EmbeddedFrame, Id, StandardId};
-use nusb::transfer::{Buffer, Bulk, ControlOut, ControlType, In, Interrupt, Out, Recipient};
+use nusb::transfer::{
+    Buffer, Bulk, ControlIn, ControlOut, ControlType, In, Interrupt, Out, Recipient,
+};
 use nusb::{DeviceInfo, Endpoint, MaybeFuture};
 
 use host_can::frame::CanFrame;
@@ -344,6 +346,51 @@ fn reconnect_from_bootloader(info: &DeviceInfo) -> Result<(), AdapterError> {
         .wait()
         .map_err(|e| AdapterError::Io(format!("open bootloader: {e}")))?;
     let iface = claim_iface0(&device)?;
+    // Boot-arm handshake for the 0x1122-generation bootloader (observed via
+    // usbmon): it must be told the application flash address (SET_BOOT_ADDR)
+    // before RECONNECT will jump to it.  The 0x1101 loader boots on RECONNECT
+    // alone, so these extra steps are sent best-effort and errors are ignored.
+    for req in [protocol::VRREQ_READ_VERSION, protocol::VRREQ_READ_HWINFO] {
+        let _ = iface
+            .control_in(
+                ControlIn {
+                    control_type: ControlType::Vendor,
+                    recipient: Recipient::Device,
+                    request: req,
+                    value: 0,
+                    index: 0,
+                    length: 4,
+                },
+                CTRL_TIMEOUT,
+            )
+            .wait();
+    }
+    let _ = iface
+        .control_out(
+            ControlOut {
+                control_type: ControlType::Vendor,
+                recipient: Recipient::Device,
+                request: protocol::VRREQ_SET_BOOT_ADDR,
+                value: 0,
+                index: 0,
+                data: &protocol::BOOT_ADDR_ARM,
+            },
+            CTRL_TIMEOUT,
+        )
+        .wait();
+    let _ = iface
+        .control_in(
+            ControlIn {
+                control_type: ControlType::Vendor,
+                recipient: Recipient::Device,
+                request: protocol::VRREQ_BOOT_STATUS,
+                value: 0,
+                index: 0,
+                length: 12,
+            },
+            CTRL_TIMEOUT,
+        )
+        .wait();
     // VRREQ RECONNECT (0xB6): vendor OUT, no data — the device jumps to the
     // application and re-enumerates, so it may drop before ACKing.
     let _ = iface

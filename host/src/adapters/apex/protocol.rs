@@ -44,7 +44,18 @@ pub const PID_RUNNING: [u16; 2] = [0x1101, 0x1181];
 // which we deliberately do not implement — firmware is provisioned elsewhere.)
 
 pub const VRREQ_READ_VERSION: u8 = 0xB0;
+/// Read bootloader hardware info (4-byte response).
+pub const VRREQ_READ_HWINFO: u8 = 0xB9;
+/// Arm the bootloader with the application flash address before RECONNECT.
+/// The 0x1122-generation loader requires this; the 0x1101 loader ignores it.
+pub const VRREQ_SET_BOOT_ADDR: u8 = 0xBA;
+/// Read bootloader boot status/checksum (12-byte response).
+pub const VRREQ_BOOT_STATUS: u8 = 0xBB;
 pub const VRREQ_RECONNECT: u8 = 0xB6;
+
+/// SET_BOOT_ADDR payload observed booting a 0x1122 unit: application flash
+/// base `0x08010000` and region size `0x00008000`, little-endian.
+pub const BOOT_ADDR_ARM: [u8; 8] = [0x00, 0x00, 0x01, 0x08, 0x00, 0x80, 0x00, 0x00];
 
 // ─── Command opcodes (byte 0 of an 8-byte MSG) ────────────────────────────────
 
