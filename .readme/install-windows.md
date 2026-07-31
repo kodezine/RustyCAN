@@ -52,25 +52,27 @@ Windows will not load a usable driver on its own. Bind it to Microsoft's in-box
 `winusb.sys` once, using the free [Zadig](https://zadig.akeo.ie/) tool — no
 paid driver signing is involved.
 
-> **Important — bind *both* device IDs.** During connect, RustyCAN reboots the
+> **Important — bind *both* device IDs.** During connect, RustyCAN boots the
 > module from its bootloader into the application, and it re-enumerates with a
-> different USB product ID. You must bind WinUSB to **both**:
+> different USB product ID. You must bind WinUSB to **both** the application and
+> the bootloader IDs:
 >
 > | Role | VID | PID |
 > |---|---|---|
 > | Apex (application) | `0x0878` | `0x1181` |
-> | Apex (bootloader) | `0x0878` | `0x1101` |
+> | Apex (bootloader) | `0x0878` | `0x1101` **or** `0x1122` |
 >
-> If you bind only one, the connect sequence stalls the first time the device
-> switches modes.
+> The bootloader PID differs by hardware generation — bind whichever one your
+> unit shows in Zadig (check the USB ID field). If you bind only one, the
+> connect sequence stalls the first time the device switches modes.
 
 | Step | Action | Expected result |
 |---|---|---|
 | 1️⃣ | Download and run **Zadig** (portable `.exe`, no install) | Zadig window opens |
 | 2️⃣ | Menu **Options → List All Devices** | Hidden/driverless devices appear |
-| 3️⃣ | In the dropdown, select **USB-CANmodul1** (`0878 1181`) | USB ID shows `0878 1181` |
+| 3️⃣ | Select **USB-CANmodul1** and note its USB ID (`0878 1181`, `0878 1101`, or `0878 1122`) | USB ID shown |
 | 4️⃣ | Set the target driver to **WinUSB**, click **Replace Driver** | "Driver installed successfully" |
-| 5️⃣ | Unplug/replug so the **bootloader** ID `0878 1101` appears, repeat steps 3–4 for it | Both IDs now on WinUSB |
+| 5️⃣ | Make the *other* ID appear — replug and/or launch RustyCAN once (it boots the loader into the app `0878 1181`) — then repeat 3–4 for it | Both IDs now on WinUSB |
 | 6️⃣ | Launch RustyCAN → select **Apex** on the Connect screen → **Connect** | Frames start flowing |
 
 > **This replaces the vendor driver** for the Apex module, so the vendor's own
