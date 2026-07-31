@@ -59,12 +59,12 @@ paid driver signing is involved.
 >
 > | Role | VID | PID |
 > |---|---|---|
-> | Apex (application) | `0x0878` | `0x1181` |
-> | Apex (bootloader) | `0x0878` | `0x1101` **or** `0x1122` |
+> | Apex (application) | `0x0878` | `0x1181` (some units `0x1101`) |
+> | Apex (bootloader) | `0x0878` | `0x1122` (varies by generation) |
 >
-> The bootloader PID differs by hardware generation — bind whichever one your
-> unit shows in Zadig (check the USB ID field). If you bind only one, the
-> connect sequence stalls the first time the device switches modes.
+> The bootloader PID differs by hardware generation — bind whichever app and
+> bootloader IDs your unit shows in Zadig (check the USB ID field). If you bind
+> only one, the connect sequence stalls the first time the device switches modes.
 
 | Step | Action | Expected result |
 |---|---|---|
@@ -113,7 +113,7 @@ See the [GUI Guide](gui-guide.md) for a full GUI walkthrough.
 |---|---|
 | _"Windows protected your PC"_ | Click **More info → Run anyway** |
 | KCAN Dongle not detected | Open Device Manager — check for `Unknown device` under USB; reinstall WinUSB via Zadig if needed |
-| Apex connect stalls after "booting" | The **bootloader** ID `0878 1101` isn't on WinUSB — bind it in Zadig (see the Apex section) |
+| Apex connect stalls after "booting" | The **bootloader** ID (e.g. `0878 1122`) isn't on WinUSB — bind it in Zadig (see the Apex section) |
 | Apex not detected at all | Confirm the **application** ID `0878 1181` is bound to WinUSB in Zadig, then replug |
 | Summit adapter not found | Verify `PCANBasic.dll` is installed: `where PCANBasic.dll` in CMD |
 | App fails to start | Check Windows Event Viewer → Application log for the crash entry |

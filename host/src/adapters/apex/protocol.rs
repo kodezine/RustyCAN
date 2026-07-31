@@ -32,7 +32,9 @@ pub const EP_STAT_IN: u8 = 0x83;
 
 pub const APEX_VID: u16 = 0x0878;
 /// Running/application-mode product IDs (device exposes the 5-endpoint CAN
-/// interface).  Everything else under the vendor ID is a bootloader.
+/// interface).  Any other PID under the vendor ID is a bootloader that must be
+/// booted into the application first (see `reconnect_from_bootloader`); the
+/// 0x1122 generation is one such bootloader.
 pub const PID_RUNNING: [u16; 2] = [0x1101, 0x1181];
 
 // ─── Bootloader EP0 vendor requests ───────────────────────────────────────────
@@ -47,7 +49,8 @@ pub const VRREQ_READ_VERSION: u8 = 0xB0;
 /// Read bootloader hardware info (4-byte response).
 pub const VRREQ_READ_HWINFO: u8 = 0xB9;
 /// Arm the bootloader with the application flash address before RECONNECT.
-/// The 0x1122-generation loader requires this; the 0x1101 loader ignores it.
+/// Required by the 0x1122-generation bootloader; bootloaders that boot on
+/// RECONNECT alone ignore it (it is sent best-effort).
 pub const VRREQ_SET_BOOT_ADDR: u8 = 0xBA;
 /// Read bootloader boot status/checksum (12-byte response).
 pub const VRREQ_BOOT_STATUS: u8 = 0xBB;

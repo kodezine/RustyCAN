@@ -348,8 +348,8 @@ fn reconnect_from_bootloader(info: &DeviceInfo) -> Result<(), AdapterError> {
     let iface = claim_iface0(&device)?;
     // Boot-arm handshake for the 0x1122-generation bootloader (observed via
     // usbmon): it must be told the application flash address (SET_BOOT_ADDR)
-    // before RECONNECT will jump to it.  The 0x1101 loader boots on RECONNECT
-    // alone, so these extra steps are sent best-effort and errors are ignored.
+    // before RECONNECT will jump to it.  Bootloaders that boot on RECONNECT
+    // alone are unaffected, so these steps are best-effort and errors ignored.
     for req in [protocol::VRREQ_READ_VERSION, protocol::VRREQ_READ_HWINFO] {
         let _ = iface
             .control_in(
