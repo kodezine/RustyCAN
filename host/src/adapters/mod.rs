@@ -292,10 +292,10 @@ pub fn probe_adapter_kind(kind: &AdapterKind, _port: &str, _baud: u32) -> bool {
                 // the Summit System vendor ID (0x0C72 = 3186).  The macOS Tahoe
                 // nusb stack-overflow bug does not affect Windows.
                 use nusb::MaybeFuture as _;
-                const PEAK_VID: u16 = 0x0C72;
+                const SUMMIT_VID: u16 = 0x0C72;
                 nusb::list_devices()
                     .wait()
-                    .map(|mut iter| iter.any(|d| d.vendor_id() == PEAK_VID))
+                    .map(|mut iter| iter.any(|d| d.vendor_id() == SUMMIT_VID))
                     .unwrap_or(false)
             }
             #[cfg(target_os = "linux")]

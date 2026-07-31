@@ -9,7 +9,7 @@
 └──────────────────────────────────────────────────────────────────────────┘
 
 ┌─ Connection ─────────────────────────────────────────────────────────────┐
-│  Adapter:  ○ Summit   ● KCAN Dongle ★   ○ SocketCAN (Linux only) │
+│  Adapter:  ○ Summit   ● KCAN Dongle ★   ○ Apex   ○ SocketCAN (Linux) │
 │  KCAN:     [ KCAN Dongle v1.0.0 (SN: 00000001) ▼ ]                       │
 │  Port:     [ 1 ]  Summit channel · Interface: [ can0 ]  SocketCAN · hidden KCAN│
 │  Baud:     [ 250000 ▼ ]  ● Dongle: Connected                             │
@@ -67,7 +67,7 @@
 
 ### Adapter Selection
 
-**Adapter** — radio buttons to choose between Summit, KCAN Dongle, and
+**Adapter** — radio buttons to choose between Summit, KCAN Dongle, Apex, and
 (on Linux only) SocketCAN. The KCAN row (★) is the recommended first-class option.
 
 **SocketCAN** (Linux only) — third radio button, visible only on Linux. Connects

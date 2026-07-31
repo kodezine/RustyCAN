@@ -86,13 +86,20 @@ If you want to use a Summit adapter:
 > ℹ️ If the library is missing, RustyCAN shows a friendly message with the
 > download URL — the app still starts and the KCAN Dongle path is unaffected.
 
+### Apex USB-CAN adapter — ✅ no extra drivers needed
+
+The Apex USB-CAN (SYS TEC USB-CANmodul family, VID `0x0878`) works over a
+built-in userspace `nusb` driver — no kernel extension or vendor library.
+Plug it in and select **Apex** on the Connect screen; RustyCAN boots the
+device from its bootloader into CAN mode automatically.
+
 ---
 
 ## 🚀 First launch
 
 1. Open **RustyCAN** from `/Applications` or Spotlight (`⌘ Space` → `RustyCAN`).
 2. On the **Connect** screen:
-   - Choose **KCAN Dongle** or **Summit**
+   - Choose **KCAN Dongle**, **Summit**, or **Apex**
    - Set baud rate (default `250000`)
    - Optionally browse to `.eds` files for your nodes
 3. Click **Connect** — the button activates automatically when the adapter is detected.
