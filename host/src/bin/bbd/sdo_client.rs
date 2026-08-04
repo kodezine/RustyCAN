@@ -161,7 +161,8 @@ impl SdoClient {
     /// Frames from other COB-IDs are silently discarded. Returns the 8-byte
     /// data payload of the matching frame, or [`SdoError::Timeout`].
     fn recv_response(&mut self) -> Result<[u8; 8], SdoError> {
-        self.recv_response_matching(|_| true)
+        // No multiplexer for bare segment/sub-block acks: surface any abort.
+        self.recv_response_matching(None, |_| true)
     }
 
     /// Wait for an SDO response frame that satisfies `accept`.
@@ -170,9 +171,20 @@ impl SdoClient {
     /// that `accept` rejects — those are treated as stale/late replies from a
     /// previous transaction (for example a flash-status upload response that
     /// arrived after its poll timed out during `WaitClear`) and skipped until
-    /// the real reply arrives or the timeout elapses. SDO aborts (CS = 0x80)
-    /// and malformed frames are surfaced immediately regardless of `accept`.
-    fn recv_response_matching<F>(&mut self, accept: F) -> Result<[u8; 8], SdoError>
+    /// the real reply arrives or the timeout elapses.
+    ///
+    /// An SDO abort (CS = 0x80) is surfaced only when it targets the object in
+    /// `expect_mux` (index in bytes 1-2, subindex in byte 3). A stale abort for
+    /// a *different* object — left in the adapter/device RX queue by a prior
+    /// interrupted session (see kodezine/RustyCAN#107) — is skipped like any
+    /// other stale reply. Pass `None` for transfers with no multiplexer
+    /// (segment / sub-block / end acks), where any abort on the response COB-ID
+    /// is surfaced. Malformed frames are always surfaced immediately.
+    fn recv_response_matching<F>(
+        &mut self,
+        expect_mux: Option<(u8, u8, u8)>,
+        accept: F,
+    ) -> Result<[u8; 8], SdoError>
     where
         F: Fn(&[u8; 8]) -> bool,
     {
@@ -201,8 +213,16 @@ impl SdoClient {
                             raw.len()
                         )));
                     }
-                    // Check for SDO abort (CS = 0x80)
+                    // SDO abort (CS = 0x80). Only surface it when it targets the
+                    // object being transacted on; a stale abort for a different
+                    // object (left in the device RX FIFO by a prior session, see
+                    // kodezine/RustyCAN#107) is skipped like any other stale reply.
                     if raw[0] == 0x80 {
+                        if let Some((lo, hi, sub)) = expect_mux {
+                            if raw[1] != lo || raw[2] != hi || raw[3] != sub {
+                                continue;
+                            }
+                        }
                         let code = u32::from_le_bytes([raw[4], raw[5], raw[6], raw[7]]);
                         return Err(SdoError::Abort(code));
                     }
@@ -243,7 +263,7 @@ impl SdoClient {
         // from a prior interrupted transfer) is skipped until the real reply
         // arrives or we time out.
         let [idx_lo, idx_hi] = index.to_le_bytes();
-        let resp = self.recv_response_matching(|r| {
+        let resp = self.recv_response_matching(Some((idx_lo, idx_hi, subindex)), |r| {
             r[0] & 0xE0 == 0x40 && r[1] == idx_lo && r[2] == idx_hi && r[3] == subindex
         })?;
         let cs = resp[0];
@@ -297,7 +317,7 @@ impl SdoClient {
         // byte 3) so a stale reply for a different object on the same COB-ID is
         // skipped.
         let [idx_lo, idx_hi] = index.to_le_bytes();
-        let resp = self.recv_response_matching(|r| {
+        let resp = self.recv_response_matching(Some((idx_lo, idx_hi, subindex)), |r| {
             r[0] & 0xE0 == 0x40 && r[1] == idx_lo && r[2] == idx_hi && r[3] == subindex
         })?;
         let cs = resp[0];
@@ -364,7 +384,7 @@ impl SdoClient {
         // as well as the 0x60 command specifier so a stale download-ack for a
         // different object on the same COB-ID is not mis-associated.
         let [idx_lo, idx_hi] = index.to_le_bytes();
-        let resp = self.recv_response_matching(|r| {
+        let resp = self.recv_response_matching(Some((idx_lo, idx_hi, subindex)), |r| {
             is_download_initiate_ack(r) && r[1] == idx_lo && r[2] == idx_hi && r[3] == subindex
         })?;
         if !is_download_initiate_ack(&resp) {
@@ -393,7 +413,7 @@ impl SdoClient {
         // Match the echoed multiplexer as well as the 0x60 command specifier so
         // a stale ack for a different object on the same COB-ID is skipped.
         let [idx_lo, idx_hi] = index.to_le_bytes();
-        let resp = self.recv_response_matching(|r| {
+        let resp = self.recv_response_matching(Some((idx_lo, idx_hi, subindex)), |r| {
             is_download_initiate_ack(r) && r[1] == idx_lo && r[2] == idx_hi && r[3] == subindex
         })?;
         if !is_download_initiate_ack(&resp) {
@@ -411,7 +431,7 @@ impl SdoClient {
             let chunk = &data[offset..end];
             let is_last = end == data.len();
             self.send(encode_download_segment(chunk, toggle, is_last))?;
-            let resp = self.recv_response_matching(|r| is_download_segment_ack(r, toggle))?;
+            let resp = self.recv_response_matching(None, |r| is_download_segment_ack(r, toggle))?;
             if !is_download_segment_ack(&resp, toggle) {
                 return Err(SdoError::Protocol(format!(
                     "segment ack mismatch at offset {offset}: got 0x{:02X}",
@@ -445,7 +465,7 @@ impl SdoClient {
         // skipped. (The later sub-block/end responses carry only ackseq/blksize
         // /CRC, so there is no multiplexer to match on those.)
         let [idx_lo, idx_hi] = index.to_le_bytes();
-        let resp = self.recv_response_matching(|r| {
+        let resp = self.recv_response_matching(Some((idx_lo, idx_hi, subindex)), |r| {
             decode_block_download_initiate_response(r).is_some()
                 && r[1] == idx_lo
                 && r[2] == idx_hi
@@ -501,8 +521,9 @@ impl SdoClient {
             let segs_sent = seqno - 1;
 
             // Wait for sub-block acknowledgement.
-            let resp = self
-                .recv_response_matching(|r| decode_block_download_subblock_response(r).is_some())?;
+            let resp = self.recv_response_matching(None, |r| {
+                decode_block_download_subblock_response(r).is_some()
+            })?;
             let (ackseq, new_blksize) =
                 decode_block_download_subblock_response(&resp).ok_or_else(|| {
                     SdoError::Protocol(format!(
@@ -568,7 +589,7 @@ impl SdoClient {
         };
         self.send(encode_block_download_end(n, crc))?;
 
-        let resp = self.recv_response_matching(|r| decode_block_download_end_response(r))?;
+        let resp = self.recv_response_matching(None, |r| decode_block_download_end_response(r))?;
         if !decode_block_download_end_response(&resp) {
             return Err(SdoError::Protocol(format!(
                 "expected block end ack (0xA1), got 0x{:02X}",
@@ -596,7 +617,7 @@ impl SdoClient {
             // Match the echoed multiplexer as well as the 0x60 command specifier
             // so a stale ack for a different object on the same COB-ID is skipped.
             let [idx_lo, idx_hi] = index.to_le_bytes();
-            let resp = self.recv_response_matching(|r| {
+            let resp = self.recv_response_matching(Some((idx_lo, idx_hi, subindex)), |r| {
                 is_download_initiate_ack(r) && r[1] == idx_lo && r[2] == idx_hi && r[3] == subindex
             })?;
             if !is_download_initiate_ack(&resp) {
