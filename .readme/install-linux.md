@@ -151,14 +151,27 @@ RustyCAN uses the standard Linux `AF_CAN` / `PF_CAN` socket API via the
 
 On Linux the Apex adapter works two ways, chosen automatically:
 
-1. **Kernel driver (preferred).** If a CAN kernel driver is bound to the device
+1. **Kernel driver (recommended).** If a CAN kernel driver is bound to the device
    it appears as a SocketCAN interface (`canX`); RustyCAN detects this and drives
    it through SocketCAN. Bring the interface up as in the SocketCAN steps above,
-   then select **Apex USB-CAN** on the Connect screen.
+   then select **Apex USB-CAN** on the Connect screen. The SYS TEC USB-CANmodul
+   family is served by the vendor's ATLAS SocketCAN driver (`systec_can`); build
+   it against your running kernel (`make` in the driver tree) if the prebuilt
+   module reports `Invalid module format`.
 2. **Userspace fallback.** If no kernel driver is bound, RustyCAN talks to the
-   device directly over USB. This needs the udev rule for VID `0x0878` (included
-   above) for non-root access, and the device must already hold valid
+   device directly over USB via `nusb`. This needs the udev rule for VID `0x0878`
+   (included above) for non-root access, and the device must already hold valid
    application firmware.
+
+> **Prefer SocketCAN on Linux for firmware/bulk transfers.** The userspace `nusb`
+> path is fine for live monitoring, but it is throughput-limited and unsuitable
+> for large SDO downloads (e.g. `bbd` firmware updates): its poll loop caps a
+> segmented transfer to roughly one CAN frame per USB poll (~180 B/s), and
+> block-mode bursts can overrun the device's CAN-TX FIFO (SDO abort
+> `0x05040003`). On Linux, route **all** third-party USB-CAN modules through their
+> SocketCAN kernel driver for bulk work — see
+> [SOUPANOM008](../reqs/soupanom/SOUPANOM008.md). Windows and macOS have no
+> SocketCAN and continue to use the `nusb` path unchanged.
 
 ---
 

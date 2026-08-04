@@ -7,7 +7,7 @@
 | 🖥️ **Native GUI** | egui/eframe window — no terminal required |
 | 🔌 **Adapter selection** | Choose Summit, KCAN Dongle, Apex, or SocketCAN (Linux only) from the Connect screen |
 | 🔧 **KCAN Dongle** | Two targets: STM32H753ZI Nucleo (USB FS, 12 Mb/s) and STM32H743XI H743I-EVAL MB1246 Rev E (USB HS via ULPI, 480 Mb/s); Embassy firmware; custom 80-byte USB protocol with hardware timestamps |
-| 🔌 **Apex USB-CAN** | SYS TEC USB-CANmodul family via a cross-platform userspace `nusb` driver (macOS/Linux/Windows); clean-room protocol; boots the device from its bootloader (including the 0x1122 generation) into CAN mode |
+| 🔌 **Apex USB-CAN** | SYS TEC USB-CANmodul family via a cross-platform userspace `nusb` driver (macOS/Linux/Windows); clean-room protocol; boots the device from its bootloader (including the 0x1122 generation) into CAN mode. On Linux, prefer the SocketCAN kernel driver for firmware/bulk downloads — `nusb` is monitoring-grade ([SOUPANOM008](../reqs/soupanom/SOUPANOM008.md)) |
 | ⏱️ **Hardware timestamps** | KCAN frames carry 100 ns-precision timestamps latched at frame SOF by FDCAN RXTS hardware; logged as `hw_ts_ns` in JSONL |
 | 🔍 **Dongle detection** | Connect button enabled only when the selected adapter is found; re-checked every 2 s |
 | 🔄 **Automatic adapter fallback** | If configured adapter unavailable, automatically tries other types (Summit ↔ KCAN) with notice |
@@ -37,7 +37,7 @@
 | Summit on Linux via SocketCAN (`peak_usb` kernel driver, no proprietary library) | ✅ |
 | Apex USB-CAN adapter (SYS TEC USB-CANmodul, userspace `nusb` driver, macOS/Linux/Windows) | ✅ |
 | Apex 0x1122-generation bootloader boot-arm (SET_BOOT_ADDR before RECONNECT) | ✅ |
-| Apex on Linux: SocketCAN kernel driver preferred, userspace `nusb` fallback | ✅ |
+| Apex on Linux: SocketCAN kernel driver for firmware/bulk (recommended), userspace `nusb` for live monitoring | ✅ |
 | Apex on Windows: WinUSB via Zadig (no WCID, no paid driver signing) | ✅ |
 | KCAN Dongle adapter (STM32H753ZI) | ✅ |
 | KCAN Dongle adapter (STM32H743XI — H743I-EVAL MB1246 Rev E) | ✅ |
