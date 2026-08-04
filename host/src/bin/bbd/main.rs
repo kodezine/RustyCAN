@@ -296,8 +296,12 @@ fn main() {
         },
         // Apex has no dedicated serial flag; bbd uses the first device found.
         "apex" => AdapterKind::Apex { serial: None },
+        // SocketCAN interface name is passed via --port (e.g. `--port can0`).
+        "socketcan" => AdapterKind::SocketCan,
         other => {
-            eprintln!("Error: unknown adapter {other:?}. Use 'summit', 'kcan', or 'apex'.");
+            eprintln!(
+                "Error: unknown adapter {other:?}. Use 'summit', 'kcan', 'apex', or 'socketcan'."
+            );
             process::exit(1);
         }
     };
