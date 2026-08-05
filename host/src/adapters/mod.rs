@@ -57,6 +57,9 @@ pub enum AdapterError {
     Timeout,
     /// The underlying transport returned an error.
     Io(String),
+    /// The adapter's transmit queue is momentarily full; the caller may back
+    /// off and retry.  Distinct from `Io`, which signals a real send failure.
+    TxQueueFull,
     /// The KCAN protocol returned an unexpected response.
     Protocol(String),
     /// Unrecoverable error — the session must be terminated.
@@ -72,6 +75,7 @@ impl fmt::Display for AdapterError {
             Self::NotFound(s) => write!(f, "adapter not found: {s}"),
             Self::Timeout => write!(f, "receive timeout"),
             Self::Io(s) => write!(f, "I/O error: {s}"),
+            Self::TxQueueFull => write!(f, "transmit queue full"),
             Self::Protocol(s) => write!(f, "protocol error: {s}"),
             Self::Fatal(s) => write!(f, "fatal error: {s}"),
             Self::Disconnected => write!(f, "USB device disconnected"),

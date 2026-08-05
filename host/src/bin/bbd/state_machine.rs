@@ -291,7 +291,13 @@ pub fn run_firmware_download(
 
     // ── 4. Clear flash ───────────────────────────────────────────────────────
     progress_cb(Progress::State("ClearFlash"));
-    client.write_u8(OBJ_PROGRAM_CONTROL, cfg.program_number, CMD_CLEAR_PROGRAM)?;
+    // The erase physically starts even when its SDO ack is lost (Apex backend,
+    // kodezine/RustyCAN#107); the flash-status poll below is the authoritative
+    // completion check, so a dropped ack (Timeout) is tolerated here.
+    match client.write_u8(OBJ_PROGRAM_CONTROL, cfg.program_number, CMD_CLEAR_PROGRAM) {
+        Ok(()) | Err(SdoError::Timeout) => {}
+        Err(e) => return Err(DownloadError::Sdo(e)),
+    }
 
     progress_cb(Progress::State("WaitClear"));
     wait_flash_status(client, cfg, cfg.max_retries_busy, cfg.max_retries_crc)?;
@@ -365,7 +371,12 @@ pub fn run_firmware_download(
     });
 
     progress_cb(Progress::State("SetSignature"));
-    client.write_u8(OBJ_PROGRAM_CONTROL, cfg.program_number, CMD_SET_SIGNATURE)?;
+    // As with ClearFlash, the signature/CRC operation runs even if its ack is
+    // lost (#107); the flash-status poll below authoritatively confirms it.
+    match client.write_u8(OBJ_PROGRAM_CONTROL, cfg.program_number, CMD_SET_SIGNATURE) {
+        Ok(()) | Err(SdoError::Timeout) => {}
+        Err(e) => return Err(DownloadError::Sdo(e)),
+    }
 
     progress_cb(Progress::State("WaitSetSignature"));
     wait_flash_status(client, cfg, cfg.max_retries_busy, cfg.max_retries_crc)?;
