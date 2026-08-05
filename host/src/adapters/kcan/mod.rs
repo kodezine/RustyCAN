@@ -321,7 +321,7 @@ impl CanAdapter for KCanAdapter {
         let kf = can_frame_to_kcan(frame, seq);
         self.tx_cmd_tx
             .try_send(TxCmd::Send(kf.to_bytes().to_vec()))
-            .map_err(|_| AdapterError::Io("KCAN TX queue full".into()))
+            .map_err(|_| AdapterError::TxQueueFull)
     }
 
     fn name(&self) -> &str {

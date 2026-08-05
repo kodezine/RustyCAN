@@ -197,7 +197,7 @@ impl CanAdapter for ApexAdapter {
     fn send(&mut self, frame: &CanFrame) -> Result<(), AdapterError> {
         self.tx_cmd_tx
             .try_send(TxCmd::Send(can_frame_to_bytes(frame)))
-            .map_err(|_| AdapterError::Io("Apex TX queue full".into()))
+            .map_err(|_| AdapterError::TxQueueFull)
     }
 
     fn name(&self) -> &str {

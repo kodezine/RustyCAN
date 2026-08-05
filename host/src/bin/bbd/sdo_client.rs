@@ -279,14 +279,6 @@ impl SdoClient {
     }
 
     /// Send an idempotent initiating SDO request and wait for its matching
-    /// response, re-issuing the request on timeout.
-    ///
-    /// Only for requests that may be replayed safely — an upload, or the
-    /// initiate of a download before any segment/block data is sent. Each retry
-    /// drains stale RX and re-sends, so a response dropped because a stale frame
-    /// held the device's RX slot (kodezine/RustyCAN#107) is recovered on the
-    /// next attempt. Non-timeout errors are surfaced immediately.
-    /// Send an idempotent initiating SDO request and wait for its matching
     /// response, re-issuing the request on a short cadence until it is answered
     /// or the client's timeout budget is spent.
     ///
@@ -560,10 +552,13 @@ impl SdoClient {
             toggle = !toggle;
             offset = end;
         }
-        // The server's final ack may be dropped by the adapter; don't depend on
-        // it — the caller's flash-status poll is authoritative.
-        let _ = self.recv_response_matching_within(Duration::from_millis(300), None, |_| true);
-        Ok(())
+        // The server's final ack may be dropped by the adapter, so a timeout
+        // here is fine — the caller's flash-status poll is authoritative. But an
+        // explicit abort is a real failure and must not be swallowed.
+        match self.recv_response_matching_within(Duration::from_millis(300), None, |_| true) {
+            Err(e @ SdoError::Abort(_)) => Err(e),
+            _ => Ok(()),
+        }
     }
 
     /// Send a frame, waiting and retrying while the adapter TX queue is full so
@@ -574,8 +569,9 @@ impl SdoClient {
         loop {
             match self.adapter.send(&frame) {
                 Ok(()) => return Ok(()),
-                // A full TX queue surfaces as an Io error; back off and retry.
-                Err(AdapterError::Io(_)) if Instant::now() < deadline => {
+                // Only back off on a momentarily full TX queue; real send
+                // failures (interface down, device unplugged) surface at once.
+                Err(AdapterError::TxQueueFull) if Instant::now() < deadline => {
                     std::thread::sleep(Duration::from_millis(1));
                 }
                 Err(e) => return Err(SdoError::Adapter(e)),
