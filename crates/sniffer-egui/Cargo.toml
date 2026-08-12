@@ -5,11 +5,11 @@ edition = "2021"
 description = "egui view for the RustyCAN sniffer model (reusable across the dev harness and the live app)."
 
 [dependencies]
-egui = "0.35"
+egui = "0.36"
 sniffer-core = { path = "../sniffer-core" }
 
 [dev-dependencies]
-eframe = "0.35"
+eframe = "0.36"
 
 [[example]]
 name = "dev_sniffer"
