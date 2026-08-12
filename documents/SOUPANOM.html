@@ -101,6 +101,13 @@
                     data-bs-placement="left"
                     title="SOUPANOM007">1.7 XCP Seed and Key Requires Manual Unlock (SOUPANOM007)</a>
                 </li>
+                <li>
+                  <a class="dropdown-item text-truncate"
+                    href="#SOUPANOM008"
+                    data-bs-toggle="tooltip"
+                    data-bs-placement="left"
+                    title="SOUPANOM008">1.8 Apex Userspace (nusb) Backend Unsuitable for Bulk SDO Download on Linux (SOUPANOM008)</a>
+                </li>
                 </ul>
                 </ul>
             </ul>
@@ -293,6 +300,29 @@
 <p><strong>Description:</strong> RustyCAN XCP master does not embed a vendor seed-and-key algorithm. For slaves that lock resources, the GET_SEED value is surfaced and the operator must supply the corresponding UNLOCK key bytes manually.</p>
 <p><strong>Impact:</strong> Locked resources cannot be accessed without the externally-computed key. No impact on unlocked slaves.</p>
 <p><em>Parent links:</em> <a href="SOUP.html#SOUP027">SOUP027 XCP Master Command Set</a></p>
+<table>
+<thead>
+<tr>
+<th>Attribute</th>
+<th>Value</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>type</td>
+<td>anomaly</td>
+</tr>
+<tr>
+<td>iec62304-clause</td>
+<td>8.1.3</td>
+</tr>
+</tbody>
+</table>
+<h2 id="SOUPANOM008">1.8 Apex Userspace (nusb) Backend Unsuitable for Bulk SDO Download on Linux <small>(SOUPANOM008)</small></h2>
+<p><strong>Affected platforms:</strong> Linux (userspace <code>nusb</code> path). The throughput limit is inherent to the <code>nusb</code> backend on all platforms; only Linux offers a SocketCAN remedy.</p>
+<p><strong>Description:</strong> When the Apex USB-CAN adapter (SYS TEC USB-CANmodul, VID <code>0x0878</code>) is driven through RustyCAN's userspace <code>nusb</code> backend, large SDO transfers such as <code>bbd</code> firmware downloads are unreliable and impractically slow. The single-threaded reader loop issues one status-IN and one data-IN poll per iteration, so a strict request/response segmented download advances only about one CAN frame per poll cycle (~180 B/s — roughly 14 minutes for a 145 KB image). Block-mode transfers burst faster than the device's CAN-TX FIFO drains, producing SDO abort <code>0x05040003</code> (invalid sequence number). A CAN-bus capture confirms the bus, bootloader, and node are healthy — every segment is acknowledged with the correct toggle and no protocol errors — so the limitation is in the userspace USB backend, not the device or its firmware.</p>
+<p><strong>Workaround:</strong> On Linux, drive the SYS TEC device through its SocketCAN kernel driver instead of <code>nusb</code>. Load the vendor ATLAS <code>systec_can</code> module (build it against the running kernel with <code>make</code> if the prebuilt module reports <code>Invalid module format</code>); the device then appears as a <code>canX</code> interface with kernel-level flow control and downloads the full image reliably in about a minute. More generally, on Linux route all third-party USB-CAN modules through their SocketCAN kernel driver for firmware/bulk work. The <code>nusb</code> path remains suitable for live monitoring.</p>
+<p><strong>Impact:</strong> Linux users performing firmware updates or other bulk SDO transfers over an Apex adapter must use the SocketCAN kernel-driver path. Live monitoring over <code>nusb</code> is unaffected. Windows and macOS have no SocketCAN and continue to use the <code>nusb</code> path unchanged; for bulk work on those platforms prefer a kernel-driver-backed adapter where available.</p>
 <table>
 <thead>
 <tr>
