@@ -17,6 +17,9 @@ use std::time::Duration;
 use host_can::frame::CanFrame;
 
 pub mod kcan;
+// Pluggable adapter registry (issue #111) — step 1 scaffolding, delegates to
+// the enum-based `open_adapter` for now.
+pub mod registry;
 // Summit adapter uses host-can's pcan feature which is macOS/Windows only.
 // On Linux, Summit hardware is accessed via SocketCAN (kernel driver).
 #[cfg(not(target_os = "linux"))]
