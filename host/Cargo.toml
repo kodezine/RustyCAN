@@ -28,7 +28,9 @@ chrono = { version = "0.4", features = ["serde"] }
 dirs = "6"
 # KCAN dongle support
 nusb = "0.2"
-rusb = "0.9"
+# `vendored` builds libusb from source and links it statically, so the packaged
+# app has no external libusb.dylib dependency (no Homebrew needed) — issue #112.
+rusb = { version = "0.9", features = ["vendored"] }
 ed25519-dalek = { version = "3", features = ["rand_core"] }
 sha2 = "0.11"
 kcan-protocol = { path = "../kcan-protocol", features = ["std"] }

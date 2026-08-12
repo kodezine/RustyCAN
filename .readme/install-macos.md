@@ -115,4 +115,5 @@ See the [GUI Guide](gui-guide.md) for a full GUI walkthrough.
 | _"RustyCAN is damaged and can't be opened"_ | `xattr -dr com.apple.quarantine /Applications/RustyCAN.app` |
 | Connect button stays grey (KCAN) | Re-plug dongle; check `system_profiler SPUSBDataType \| grep -A5 KCAN` |
 | Connect button stays grey (Summit) | Verify `libPCBUSB.dylib` exists: `ls /usr/local/lib/libPCBUSB.dylib` |
-| App crashes on launch | Check Console.app for crash report; file an issue with the log |
+| Crash at launch: `dyld: Library not loaded … libusb-1.0.0.dylib` | **Pre-fix builds only** — run `brew install libusb`. Fixed from the next release: libusb is now compiled into the app (no Homebrew needed). |
+| App crashes on launch (other) | Check Console.app for crash report; file an issue with the log |
