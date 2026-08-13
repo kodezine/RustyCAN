@@ -5,7 +5,7 @@
 | Feature | Details |
 |---|---|
 | 🖥️ **Native GUI** | egui/eframe window — no terminal required |
-| 🔌 **Adapter selection** | Choose Summit, KCAN Dongle, Apex, or SocketCAN (Linux only) from the Connect screen |
+| 🔌 **Adapter selection** | Choose Summit, KCAN Dongle (USB), Apex, SocketCAN (Linux), or KCan-Net (encrypted TCP) from the Connect screen |
 | 🔧 **KCAN Dongle** | Two targets: STM32H753ZI Nucleo (USB FS, 12 Mb/s) and STM32H743XI H743I-EVAL MB1246 Rev E (USB HS via ULPI, 480 Mb/s); Embassy firmware; custom 80-byte USB protocol with hardware timestamps |
 | 🔌 **Apex USB-CAN** | SYS TEC USB-CANmodul family via a cross-platform userspace `nusb` driver (macOS/Linux/Windows); clean-room protocol; boots the device from its bootloader (including the 0x1122 generation) into CAN mode. On Linux, prefer the SocketCAN kernel driver for firmware/bulk downloads — `nusb` is monitoring-grade ([SOUPANOM008](../reqs/soupanom/SOUPANOM008.md)) |
 | ⏱️ **Hardware timestamps** | KCAN frames carry 100 ns-precision timestamps latched at frame SOF by FDCAN RXTS hardware; logged as `hw_ts_ns` in JSONL |
@@ -74,7 +74,8 @@
 | KCAN firmware auto-update: notify + confirm (GUI banner / TUI prompt / CLI flag) | ✅ |
 | KCAN firmware rollback via `mark_booted()` (embassy-boot verify — reverts on bad update) | ✅ |
 | KCAN firmware bundled in host release + GitHub Releases background version check | ✅ |
-| KCAN Phase 3: STM32H563 HW encryption | planned |
+| KCAN encrypted remote access via TCP — X25519 ECDH + AES-256-GCM (`KCanNetAdapter`); K1 URI from device QR | ✅ |
+| KCAN Phase 3: STM32H563 hardware SAES/PKA/RNG encryption variant | planned |
 | CAN FD (KCAN firmware + host) | planned |
 | EMCY message decode | planned |
 | Heartbeat timeout / watchdog | planned |

@@ -33,7 +33,8 @@ nusb = "0.2"
 rusb = { version = "0.9", features = ["vendored"] }
 ed25519-dalek = { version = "3", features = ["rand_core"] }
 sha2 = "0.11"
-kcan-protocol = { path = "../kcan-protocol", features = ["std"] }
+kcan-protocol = { path = "../kcan-protocol", features = ["std", "crypto"] }
+getrandom = "0.2"
 futures-lite = "2.6.1"
 # Reusable sniffer (headless model + egui view), shared with the dev harness.
 sniffer-core = { path = "../crates/sniffer-core" }

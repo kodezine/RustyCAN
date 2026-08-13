@@ -64,7 +64,7 @@ A fully annotated copy is included in the repository at
 
 | Field | Type | Default | Description |
 |---|---|---|---|
-| `adapter_kind` | `"Summit"` \| `{"Apex":{"serial":null}}` \| `{"KCan":{"serial":null}}` | — | Which hardware adapter to use |
+| `adapter_kind` | `"Summit"` \| `{"Apex":{"serial":null}}` \| `{"KCan":{"serial":null}}` \| `{"KCanNet":{"uri":"K1:..."}}` | — | Which hardware adapter to use |
 | `port` | string | — | Adapter channel / interface name (Summit: `"1"` = PCAN_USBBUS1; SocketCAN: `"can0"`; unused for KCAN/Apex) |
 | `baud` | string | — | CAN baud rate in bps, e.g. `"250000"` or `"500000"` |
 | `http_port` | integer | `7878` | Port for `http://127.0.0.1:<port>/` live dashboard |
@@ -103,6 +103,12 @@ KCAN Dongle pinned to a specific serial:
 ```json
 "adapter_kind": { "KCan": { "serial": "ABC123" } }
 ```
+
+KCan-Net (encrypted TCP, scan device QR for the URI):
+```json
+"adapter_kind": { "KCanNet": { "uri": "K1:C0A803B2/yhRv_Y28dyfXdvgJG4V5XeGNv4NqbVjJqqvy6Y2seig" } }
+```
+The URI is the `K1:<8-hex-ip>/<base64url-pubkey>` string shown on the device's e-paper display.
 
 #### `nodes` array
 
