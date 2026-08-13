@@ -26,9 +26,10 @@ pub enum RequestCode {
     SetMode = 0x04,
     GetStatus = 0x05,
     GetBtConst = 0x06,
-    /// Phase 3: initiate ECDH key exchange.
+    /// Reserved: USB EP0 crypto handshake (future hardware variant).
+    /// Current encryption uses TCP-level ECDH — see `KCanNetAdapter`.
     CryptoHello = 0x10,
-    /// Phase 3: retrieve device identity certificate.
+    /// Reserved: USB EP0 identity retrieval (future hardware variant).
     GetIdentity = 0x11,
 }
 

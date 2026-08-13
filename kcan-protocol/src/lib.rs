@@ -18,4 +18,7 @@ pub mod frame;
 pub use control::{
     KCanBitTiming, KCanBtConst, KCanDeviceInfo, KCanMode, KCanModeFlags, KCanStatus, RequestCode,
 };
+#[cfg(feature = "crypto")]
+pub use encrypted::SoftwareEncryptionLayer;
+pub use encrypted::{CryptoError, EncryptedKCanFrame, EncryptionLayer, ENCRYPTED_FRAME_SIZE};
 pub use frame::{FrameFlags, FrameType, KCanFrame, KCAN_FRAME_SIZE, KCAN_MAGIC, KCAN_VERSION};

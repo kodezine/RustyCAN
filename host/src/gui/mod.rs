@@ -856,6 +856,7 @@ fn adapter_display_name(kind: &AdapterKind) -> &'static str {
         AdapterKind::KCan { .. } => "KCAN Dongle",
         AdapterKind::SocketCan => "SocketCAN",
         AdapterKind::Apex { .. } => "Apex",
+        AdapterKind::KCanNet { .. } => "KCan-Net",
     }
 }
 
@@ -876,6 +877,7 @@ fn try_fallback_adapter(form: &mut ConnectForm) -> bool {
         AdapterKind::KCan { .. } => vec![AdapterKind::Summit],
         AdapterKind::SocketCan => vec![],
         AdapterKind::Apex { .. } => vec![],
+        AdapterKind::KCanNet { .. } => vec![],
     };
 
     for fallback_kind in fallbacks {

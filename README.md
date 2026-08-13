@@ -10,7 +10,7 @@ A native cross-platform GUI for monitoring, decoding, and controlling CANopen ne
 
 Connect a **Summit** adapter, a **KCAN Dongle** (STM32H753ZI-based, built with Embassy), an **Apex** USB-CAN (SYS TEC USB-CANmodul, userspace `nusb` driver on macOS/Linux/Windows), or any **SocketCAN** interface on Linux (e.g. `can0` via the `peak_usb` kernel driver), optionally provide EDS device-description files, and get live NMT state, PDO signal values, and SDO transactions — all stored to a newline-delimited JSON log.
 
-The **KCAN Dongle** is the project's own first-class hardware target: a custom USB CAN adapter with hardware timestamps, a fully documented binary protocol, and a path to Phase 3 hardware-level encryption (STM32H563, TrustZone).
+The **KCAN Dongle** is the project's own first-class hardware target: a custom USB CAN adapter with hardware timestamps, a fully documented binary protocol, and support for **encrypted remote access** — scan the device QR code to open an X25519/AES-256-GCM authenticated TCP session from anywhere on the LAN (`KCanNet` adapter).
 
 ## 🚀 Quick Start
 
@@ -43,7 +43,7 @@ The GUI window opens immediately. See [Building from Source](.readme/building.md
 
 - 🖥️ **Native GUI** — egui/eframe window, no terminal required
 - 💻 **CLI Modes** — `--tui` for a full-screen terminal UI; `--log-to-stdout` to stream events to a pipe or file
-- 🔌 **Multi-adapter support** — Summit, KCAN Dongle (STM32H753ZI), Apex USB-CAN, or SocketCAN on Linux (no proprietary driver); on Linux, drive USB-CAN modules (Summit/Apex) through SocketCAN for firmware/bulk transfers — the userspace `nusb` path is monitoring-grade
+- 🔌 **Multi-adapter support** — Summit, KCAN Dongle (STM32H753ZI), Apex USB-CAN, SocketCAN on Linux, or **KCan-Net** (encrypted TCP — scan the device QR code to connect over LAN without a USB cable)
 - ⏱️ **Hardware timestamps** — 100 ns-precision timestamps latched at frame SOF by FDCAN RXTS hardware (KCAN only)
 - 💓 **NMT monitoring & control** — Live node states with broadcast/per-node commands
 - 📊 **PDO & SDO decoding** — Live signal values with EDS support (optional)

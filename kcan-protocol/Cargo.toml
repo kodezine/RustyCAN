@@ -8,5 +8,11 @@ description = "KCAN wire-protocol types shared between firmware and the RustyCAN
 [features]
 default = ["std"]
 std = []
+# Pulls in X25519 + AES-GCM; off by default so no_std targets that don't need
+# crypto (e.g. the old dongle) aren't forced to carry the extra code.
+crypto = ["dep:x25519-dalek", "dep:aes-gcm"]
 
 [dependencies]
+# Optional crypto primitives — only compiled when the `crypto` feature is on.
+x25519-dalek = { version = "3", default-features = false, features = ["static_secrets"], optional = true }
+aes-gcm = { version = "0.10", default-features = false, features = ["aes"], optional = true }

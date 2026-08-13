@@ -20,6 +20,8 @@ pub mod kcan;
 // Pluggable adapter registry (issue #111) — step 1 scaffolding, delegates to
 // the enum-based `open_adapter` for now.
 pub mod registry;
+// KCan-over-TCP: encrypted session bootstrapped from the device panel QR code.
+pub mod kcan_net;
 // Summit adapter uses host-can's pcan feature which is macOS/Windows only.
 // On Linux, Summit hardware is accessed via SocketCAN (kernel driver).
 #[cfg(not(target_os = "linux"))]
@@ -112,6 +114,11 @@ pub enum AdapterKind {
     /// `serial` optionally pins a specific module by its USB serial string.
     /// When `None`, the first Apex device found is used.
     Apex { serial: Option<String> },
+    /// KCAN-over-TCP with X25519 + AES-256-GCM session encryption.
+    ///
+    /// `uri` is the `K1:<8-hex-ip>/<43-base64url-pubkey>` string scanned from
+    /// the device's e-paper QR code.
+    KCanNet { uri: String },
 }
 
 /// Uniform interface for sending and receiving CAN frames.
@@ -254,6 +261,10 @@ pub fn open_adapter(
             let adapter = apex::ApexAdapter::open(serial.as_deref(), baud, listen_only)?;
             Ok(Box::new(adapter))
         }
+        AdapterKind::KCanNet { uri } => {
+            let adapter = kcan_net::KCanNetAdapter::open(uri)?;
+            Ok(Box::new(adapter))
+        }
     }
 }
 
@@ -326,5 +337,7 @@ pub fn probe_adapter_kind(kind: &AdapterKind, _port: &str, _baud: u32) -> bool {
             }
             apex::ApexAdapter::probe(serial.as_deref())
         }
+        // Probe by attempting a short TCP connect to the IP encoded in the URI.
+        AdapterKind::KCanNet { uri } => kcan_net::KCanNetAdapter::probe(uri),
     }
 }
