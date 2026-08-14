@@ -371,6 +371,8 @@ struct ConnectForm {
     kcan_serial: String,
     /// K1 URI for KCanNet adapter (relay or LAN); populated by QR import or manual entry.
     kcannet_uri: String,
+    /// When a QR image contains >1 code, holds the choices for the picker modal.
+    pending_qr_choices: Option<Vec<String>>,
     /// DBC files to load for signal decoding.
     dbc_files: Vec<DbcEntry>,
     /// Index of the DBC file awaiting remove-confirmation, if any.
@@ -416,6 +418,7 @@ impl Clone for ConnectForm {
             kcan_devices: self.kcan_devices.clone(),
             kcan_serial: self.kcan_serial.clone(),
             kcannet_uri: self.kcannet_uri.clone(),
+            pending_qr_choices: self.pending_qr_choices.clone(),
             dbc_files: self.dbc_files.clone(),
             confirm_remove_dbc: self.confirm_remove_dbc,
             adapter_notice: self.adapter_notice.clone(),
@@ -616,6 +619,7 @@ impl PersistedConfig {
             } else {
                 self.kcannet_uri
             },
+            pending_qr_choices: None,
             dbc_files: self.dbc_files,
             confirm_remove_dbc: None,
             adapter_notice: None,
@@ -677,6 +681,7 @@ impl Default for ConnectForm {
                 kcan_devices: vec![],
                 kcan_serial: String::new(),
                 kcannet_uri: String::new(),
+                pending_qr_choices: None,
                 dbc_files: vec![],
                 confirm_remove_dbc: None,
                 adapter_notice: None,
@@ -915,20 +920,26 @@ fn try_fallback_adapter(form: &mut ConnectForm) -> bool {
     false
 }
 
+/// Decode all QR codes in an image file, returning every decoded string found.
+pub fn decode_qr_image_all(path: &std::path::Path) -> Vec<String> {
+    let Ok(img) = image::open(path) else {
+        return vec![];
+    };
+    let luma = img.to_luma8();
+    let mut prepared = rqrr::PreparedImage::prepare(luma);
+    prepared
+        .detect_grids()
+        .into_iter()
+        .filter_map(|g| g.decode().ok().map(|(_, s)| s))
+        .collect()
+}
+
 /// Decode a QR code image file and return the first decoded string.
 ///
 /// Returns `None` if the file cannot be read, contains no QR code, or decoding
 /// fails.  Multiple QR codes in one image: returns the first one found.
 pub fn decode_qr_image(path: &std::path::Path) -> Option<String> {
-    let img = image::open(path).ok()?.to_luma8();
-    let mut prepared = rqrr::PreparedImage::prepare(img);
-    let grids = prepared.detect_grids();
-    for grid in grids {
-        if let Ok((_, content)) = grid.decode() {
-            return Some(content);
-        }
-    }
-    None
+    decode_qr_image_all(path).into_iter().next()
 }
 
 /// Classify a decoded QR string as a K1 URI, a "device active" indicator, or invalid.
@@ -988,6 +999,44 @@ fn render_connect(
                     form.adapter_notice = Some("No QR code found in dropped image".into());
                 }
             }
+        }
+    }
+
+    // ── Multi-QR picker modal ─────────────────────────────────────────────────
+    if let Some(choices) = form.pending_qr_choices.clone() {
+        let mut open = true;
+        let mut selected: Option<String> = None;
+        egui::Window::new("Multiple QR codes found")
+            .collapsible(false)
+            .resizable(false)
+            .open(&mut open)
+            .show(ui.ctx(), |ui| {
+                ui.label("Select the K1 URI to use:");
+                ui.add_space(4.0);
+                for (i, choice) in choices.iter().enumerate() {
+                    let short = if choice.len() > 50 {
+                        &choice[..50]
+                    } else {
+                        choice
+                    };
+                    let selected_now = form.kcannet_uri == *choice;
+                    if ui.radio(selected_now, format!("{i}: {short}…")).clicked() {
+                        selected = Some(choice.clone());
+                    }
+                }
+                ui.add_space(8.0);
+                if ui.button("Use selected").clicked() {
+                    if let Some(s) = &selected {
+                        form.kcannet_uri = s.trim().to_string();
+                        form.adapter_kind = AdapterKind::KCanNet {
+                            uri: form.kcannet_uri.clone(),
+                        };
+                        form.pending_qr_choices = None;
+                    }
+                }
+            });
+        if !open {
+            form.pending_qr_choices = None;
         }
     }
 
@@ -1340,17 +1389,48 @@ fn render_connect(
                                                         .add_filter("Image", &["png", "jpg", "jpeg", "webp"])
                                                         .pick_file()
                                                     {
-                                                        match decode_qr_image(&path) {
-                                                            Some(s) => {
-                                                                form.kcannet_uri = s.trim().to_string();
-                                                                form.adapter_kind = AdapterKind::KCanNet {
-                                                                    uri: form.kcannet_uri.clone(),
-                                                                };
-                                                            }
-                                                            None => {
+                                                        let choices = decode_qr_image_all(&path);
+                                                        match choices.len() {
+                                                            0 => {
                                                                 form.kcannet_uri = String::new();
-                                                                // show error in the notice area
                                                                 form.adapter_notice = Some("No QR code found in image".into());
+                                                            }
+                                                            1 => {
+                                                                form.kcannet_uri = choices.into_iter().next().unwrap().trim().to_string();
+                                                                form.adapter_kind = AdapterKind::KCanNet { uri: form.kcannet_uri.clone() };
+                                                            }
+                                                            _ => {
+                                                                // Multiple QR codes — show picker modal
+                                                                form.pending_qr_choices = Some(choices);
+                                                            }
+                                                        }
+                                                    }
+                                                }
+                                                // ⌘V / Ctrl-V clipboard image paste
+                                                if ui.button("📋 Paste").clicked()
+                                                    || ui.input(|i| i.modifiers.command && i.key_pressed(egui::Key::V))
+                                                {
+                                                    if let Ok(mut cb) = arboard::Clipboard::new() {
+                                                        if let Ok(img) = cb.get_image() {
+                                                            let rgba: image::RgbaImage = image::RgbaImage::from_raw(
+                                                                img.width as u32,
+                                                                img.height as u32,
+                                                                img.bytes.into_owned(),
+                                                            ).unwrap_or_default();
+                                                            let luma = image::DynamicImage::ImageRgba8(rgba).to_luma8();
+                                                            let mut prepared = rqrr::PreparedImage::prepare(luma);
+                                                            let choices: Vec<String> = prepared
+                                                                .detect_grids()
+                                                                .into_iter()
+                                                                .filter_map(|g| g.decode().ok().map(|(_, s)| s))
+                                                                .collect();
+                                                            match choices.len() {
+                                                                0 => { form.adapter_notice = Some("No QR code found in clipboard image".into()); }
+                                                                1 => {
+                                                                    form.kcannet_uri = choices.into_iter().next().unwrap().trim().to_string();
+                                                                    form.adapter_kind = AdapterKind::KCanNet { uri: form.kcannet_uri.clone() };
+                                                                }
+                                                                _ => { form.pending_qr_choices = Some(choices); }
                                                             }
                                                         }
                                                     }
@@ -5263,6 +5343,30 @@ pub fn run(
 /// logic.  Pass `Some(sender)` when an SSE broadcast server is already running;
 /// pass `None` to disable live-dashboard mirroring.
 ///
+/// Build a minimal `SessionConfig` for a KCanNet URI (used by `--qr-image` CLI).
+pub fn session_config_for_kcannet(uri: String) -> crate::session::SessionConfig {
+    crate::session::SessionConfig {
+        port: String::new(),
+        baud: 250_000,
+        nodes: vec![],
+        log_path: format!(
+            "rustycan_{}.jsonl",
+            chrono::Utc::now().format("%Y%m%d%H%M%S")
+        ),
+        listen_only: false,
+        text_log: false,
+        sdo_timeout_ms: 500,
+        block_initiate_timeout_ms: 2000,
+        block_subblock_timeout_ms: 2000,
+        block_end_timeout_ms: 2000,
+        block_size: 127,
+        adapter_kind: crate::adapters::AdapterKind::KCanNet { uri },
+        dbc_paths: vec![],
+        sse_tx: None,
+        xcp: None,
+    }
+}
+
 /// # Errors
 /// Returns a human-readable error string if the file cannot be read, parsed,
 /// or if any required field (e.g. baud rate) is invalid.

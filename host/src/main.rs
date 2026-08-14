@@ -74,12 +74,11 @@ struct CliArgs {
     #[arg(long, requires = "config")]
     auto_connect: bool,
 
-    /// Decode a K1 QR code image and print the extracted URI to stderr, then
-    /// open a session using the decoded URI as the KCanNet adapter.
+    /// Decode a K1 QR code image and stream CAN events to stdout using the
+    /// decoded URI as the KCanNet adapter.  No GUI window is opened.
     ///
-    /// Requires `--log-to-stdout`.  Useful for scripted / headless workflows
-    /// where the user photographs the device panel and passes the image directly.
-    #[arg(long, value_name = "IMAGE", requires = "log_to_stdout")]
+    /// Prints the decoded K1 URI to stderr before connecting.
+    #[arg(long, value_name = "IMAGE")]
     qr_image: Option<PathBuf>,
 }
 
@@ -88,21 +87,6 @@ fn main() {
 
     // --qr-image: decode the image, build a KCanNet config, then fall through
     // to log_to_stdout mode with the decoded URI as the adapter.
-    if let Some(ref img_path) = args.qr_image {
-        use rustycan::gui::decode_qr_image;
-        match decode_qr_image(img_path) {
-            Some(uri) => {
-                eprintln!("kcannet URI: {uri}");
-                // TODO: construct a temporary config and run log_to_stdout session
-                // with AdapterKind::KCanNet { uri }.  Full wiring in a follow-up.
-            }
-            None => {
-                eprintln!("error: no K1 QR code found in {}", img_path.display());
-                std::process::exit(1);
-            }
-        }
-    }
-
     // --dfu-update without --tui and without --config: run DFU immediately, then exit.
     // With --config (GUI mode): the GUI shows a firmware update banner and [Update Now] button.
     // With --tui: launch TUI first; user confirms with U→y inside the TUI.
@@ -118,7 +102,7 @@ fn main() {
         eprintln!("error: --tui requires --config <FILE>");
         std::process::exit(1);
     }
-    if args.log_to_stdout && args.config.is_none() {
+    if args.log_to_stdout && args.config.is_none() && args.qr_image.is_none() {
         eprintln!("error: --log-to-stdout requires --config <FILE>");
         std::process::exit(1);
     }
@@ -139,6 +123,25 @@ fn main() {
             })
             .unwrap_or(7878)
     });
+
+    if let Some(ref img_path) = args.qr_image {
+        use rustycan::gui::{decode_qr_image, session_config_for_kcannet};
+        match decode_qr_image(img_path) {
+            Some(uri) => {
+                eprintln!("kcannet URI: {uri}");
+                let cfg = session_config_for_kcannet(uri);
+                if let Err(e) = rustycan::tui::log_stream::stream_session(cfg, effective_port) {
+                    eprintln!("error: {e}");
+                    std::process::exit(1);
+                }
+                return;
+            }
+            None => {
+                eprintln!("error: no K1 QR code found in {}", img_path.display());
+                std::process::exit(1);
+            }
+        }
+    }
 
     if args.log_to_stdout {
         // SAFETY: config is Some — validated above.
