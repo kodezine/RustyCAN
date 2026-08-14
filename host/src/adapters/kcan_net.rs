@@ -7,7 +7,7 @@
 //! [`EncryptedKCanFrame`]s for the life of the connection.
 
 use std::io::{Read, Write};
-use std::net::TcpStream;
+use std::net::{TcpStream, ToSocketAddrs};
 use std::sync::{mpsc, Arc, Mutex};
 use std::time::Duration;
 
@@ -35,18 +35,54 @@ pub struct KCanNetAdapter {
 }
 
 impl KCanNetAdapter {
-    /// Parse `uri`, connect, perform the ECDH handshake, and start the reader thread.
+    /// Parse `uri`, connect (direct or via kgate relay), perform the ECDH handshake,
+    /// and start the reader thread.
     pub fn open(uri: &str) -> Result<Self, AdapterError> {
-        let (ip_bytes, device_pk) = parse_k1_uri(uri)
+        let k1 = parse_k1_uri(uri)
             .ok_or_else(|| AdapterError::Protocol(format!("bad K1 URI: {uri}")))?;
 
-        let ip = std::net::Ipv4Addr::from(ip_bytes);
-        let addr = std::net::SocketAddr::from((ip, NET_PORT));
-        let stream = TcpStream::connect_timeout(&addr, Duration::from_secs(5))
-            .map_err(|e| AdapterError::Io(format!("connect {addr}: {e}")))?;
-        // Bound the handshake: a stalled device must not block the GUI connect flow.
-        stream.set_read_timeout(Some(Duration::from_secs(10))).ok();
-        stream.set_write_timeout(Some(Duration::from_secs(10))).ok();
+        let (stream, device_pk, name) = match k1 {
+            K1Uri::Lan { ip, device_pk } => {
+                let addr = std::net::SocketAddr::from((std::net::Ipv4Addr::from(ip), NET_PORT));
+                let stream = TcpStream::connect_timeout(&addr, Duration::from_secs(5))
+                    .map_err(|e| AdapterError::Io(format!("connect {addr}: {e}")))?;
+                stream.set_read_timeout(Some(Duration::from_secs(10))).ok();
+                stream.set_write_timeout(Some(Duration::from_secs(10))).ok();
+                let name = format!("KCan-Net {}:{NET_PORT}", std::net::Ipv4Addr::from(ip));
+                (stream, device_pk, name)
+            }
+            K1Uri::Relay { room_id, device_pk } => {
+                // Resolve and connect — try every resolved address so an IPv6-first
+                // result doesn't silently fail when an IPv4 address would succeed.
+                let addrs: Vec<_> = "bore.pub:4444"
+                    .to_socket_addrs()
+                    .map_err(|e| AdapterError::Io(format!("relay DNS: {e}")))?
+                    .collect();
+                if addrs.is_empty() {
+                    return Err(AdapterError::Protocol("relay DNS: no addresses".into()));
+                }
+                let mut last_err = String::new();
+                let mut connected = None;
+                for addr in &addrs {
+                    match TcpStream::connect_timeout(addr, Duration::from_secs(5)) {
+                        Ok(s) => {
+                            connected = Some(s);
+                            break;
+                        }
+                        Err(e) => last_err = e.to_string(),
+                    }
+                }
+                let mut stream = connected
+                    .ok_or_else(|| AdapterError::Io(format!("connect relay: {last_err}")))?;
+                stream.set_write_timeout(Some(Duration::from_secs(10))).ok();
+                // 30s covers kgate pairing + ECDH over relay; device should already be
+                // registered (it connects at boot), so typical latency is <1s.
+                stream.set_read_timeout(Some(Duration::from_secs(30))).ok();
+                // Announce room_id to kgate — triggers pairing with the waiting device.
+                write_exact(&mut stream, &room_id)?;
+                (stream, device_pk, "KCan-Net relay bore.pub:4444".into())
+            }
+        };
 
         // Generate host ephemeral keypair from OS entropy (host = initiator, prefix=1).
         let mut entropy = [0u8; 32];
@@ -98,7 +134,7 @@ impl KCanNetAdapter {
             frame_rx,
             error_rx,
             reader_thread: Some(reader_handle),
-            name: format!("KCan-Net {ip}:{NET_PORT}"),
+            name,
             tx_seq: 0,
         })
     }
@@ -111,11 +147,25 @@ impl KCanNetAdapter {
 
     /// Quick reachability check: TCP connect with a short timeout.
     pub fn probe(uri: &str) -> bool {
-        let Some((ip_bytes, _)) = parse_k1_uri(uri) else {
-            return false;
-        };
-        let addr = std::net::SocketAddr::from((std::net::Ipv4Addr::from(ip_bytes), NET_PORT));
-        TcpStream::connect_timeout(&addr, Duration::from_secs(1)).is_ok()
+        match parse_k1_uri(uri) {
+            Some(K1Uri::Lan { ip, .. }) => {
+                let addr = std::net::SocketAddr::from((std::net::Ipv4Addr::from(ip), NET_PORT));
+                TcpStream::connect_timeout(&addr, Duration::from_secs(1)).is_ok()
+            }
+            Some(K1Uri::Relay { .. }) => {
+                // Try all resolved addresses, same as open().
+                "bore.pub:4444"
+                    .to_socket_addrs()
+                    .ok()
+                    .map(|mut addrs| {
+                        addrs.any(|addr| {
+                            TcpStream::connect_timeout(&addr, Duration::from_secs(1)).is_ok()
+                        })
+                    })
+                    .unwrap_or(false)
+            }
+            None => false,
+        }
     }
 }
 
@@ -238,22 +288,45 @@ fn net_reader(
 
 // ─── K1 URI parsing ───────────────────────────────────────────────────────────
 
-/// Parse `K1:<8-hex-ip>/<43-base64url-pubkey>` → `(ip_bytes, pubkey_bytes)`.
+enum K1Uri {
+    /// `K1:<8-hex-ip>/<43-b64url-pubkey>` — direct TCP to device IP.
+    Lan { ip: [u8; 4], device_pk: [u8; 32] },
+    /// `K1:r/<6-char-room-id>/<43-b64url-pubkey>` — routed via kgate relay.
+    Relay {
+        room_id: [u8; 6],
+        device_pk: [u8; 32],
+    },
+}
+
+/// Parse a K1 URI in either LAN or relay format.
 ///
-/// The format is produced by the device's `crypto::qr_payload`.
-fn parse_k1_uri(uri: &str) -> Option<([u8; 4], [u8; 32])> {
-    // Trim so QR-scan results with trailing newlines/spaces parse cleanly.
+/// Both formats have identical byte length after stripping `K1:` (52 chars);
+/// the discriminator is whether the string starts with `r/`.
+fn parse_k1_uri(uri: &str) -> Option<K1Uri> {
     let rest = uri.trim().strip_prefix("K1:")?;
-    // rest = "<8 hex>/<43 b64url>" = exactly 52 chars
     if rest.len() != 52 {
         return None;
     }
-    if rest.as_bytes()[8] != b'/' {
-        return None;
+    if let Some(relay_rest) = rest.strip_prefix("r/") {
+        // Relay: `r/<6-char-room-id>/<43-char-pubkey>` — rest after "r/" = 50 chars
+        if relay_rest.as_bytes().get(6) != Some(&b'/') {
+            return None;
+        }
+        let room_id: [u8; 6] = relay_rest.as_bytes()[..6].try_into().ok()?;
+        let pk = decode_base64url_32(&relay_rest.as_bytes()[7..50])?;
+        Some(K1Uri::Relay {
+            room_id,
+            device_pk: pk,
+        })
+    } else {
+        // LAN: `<8-hex-ip>/<43-char-pubkey>`
+        if rest.as_bytes()[8] != b'/' {
+            return None;
+        }
+        let ip = parse_hex_ip(&rest[..8])?;
+        let pk = decode_base64url_32(&rest.as_bytes()[9..52])?;
+        Some(K1Uri::Lan { ip, device_pk: pk })
     }
-    let ip = parse_hex_ip(&rest[..8])?;
-    let pk = decode_base64url_32(&rest.as_bytes()[9..52])?;
-    Some((ip, pk))
 }
 
 fn parse_hex_ip(s: &str) -> Option<[u8; 4]> {
@@ -381,8 +454,20 @@ mod tests {
 
     #[test]
     fn parse_valid_uri() {
-        let (ip, _pk) = parse_k1_uri(VALID_URI).expect("should parse");
+        let K1Uri::Lan { ip, .. } = parse_k1_uri(VALID_URI).expect("should parse") else {
+            panic!("expected Lan variant");
+        };
         assert_eq!(ip, [192, 168, 3, 178]);
+    }
+
+    #[test]
+    fn parse_valid_relay_uri() {
+        let relay_uri = "K1:r/10CDVa/WoLHNmyWW1OlVT3KoOMS9CTdBM6ILy6Q6ywyxZesnW0";
+        let K1Uri::Relay { room_id, .. } = parse_k1_uri(relay_uri).expect("relay should parse")
+        else {
+            panic!("expected Relay variant");
+        };
+        assert_eq!(&room_id, b"10CDVa");
     }
 
     #[test]
