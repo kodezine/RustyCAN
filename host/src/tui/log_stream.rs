@@ -31,10 +31,17 @@ use crate::canopen::sdo::SdoDirection;
 /// # Errors
 /// Returns an error if the config file cannot be read/parsed, the session
 /// fails to start, or a terminal I/O error occurs.
-pub fn stream(config_path: &Path, _http_port: u16) -> io::Result<()> {
+pub fn stream(config_path: &Path, http_port: u16) -> io::Result<()> {
     let session_cfg = crate::gui::load_session_config(config_path, None)
         .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+    stream_session(session_cfg, http_port)
+}
 
+/// Like [`stream`] but takes a pre-built [`SessionConfig`] (e.g. from `--qr-image`).
+pub fn stream_session(
+    session_cfg: crate::session::SessionConfig,
+    _http_port: u16,
+) -> io::Result<()> {
     let baud = session_cfg.baud;
     let (rx, _cmd_tx, _sniff_rx, node_labels, log_path, _startup_notice) =
         crate::session::start(session_cfg)

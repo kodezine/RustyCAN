@@ -38,6 +38,7 @@ getrandom = "0.4.3"
 # QR code decode for K1 URI import (scan-to-activate, issue #117).
 rqrr = "0.10.1"
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp"] }
+arboard = "3"
 futures-lite = "2.6.1"
 # Reusable sniffer (headless model + egui view), shared with the dev harness.
 sniffer-core = { path = "../crates/sniffer-core" }
