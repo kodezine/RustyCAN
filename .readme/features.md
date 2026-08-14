@@ -5,7 +5,7 @@
 | Feature | Details |
 |---|---|
 | 🖥️ **Native GUI** | egui/eframe window — no terminal required |
-| 🔌 **Adapter selection** | Choose Summit, KCAN Dongle (USB), Apex, SocketCAN (Linux), or KCan-Net (encrypted TCP) from the Connect screen |
+| 🔌 **Adapter selection** | Choose Summit, KCAN Dongle (USB), Apex, SocketCAN (Linux), or KCanNet (encrypted TCP) from the Connect screen |
 | 🔧 **KCAN Dongle** | Two targets: STM32H753ZI Nucleo (USB FS, 12 Mb/s) and STM32H743XI H743I-EVAL MB1246 Rev E (USB HS via ULPI, 480 Mb/s); Embassy firmware; custom 80-byte USB protocol with hardware timestamps |
 | 🔌 **Apex USB-CAN** | SYS TEC USB-CANmodul family via a cross-platform userspace `nusb` driver (macOS/Linux/Windows); clean-room protocol; boots the device from its bootloader (including the 0x1122 generation) into CAN mode. On Linux, prefer the SocketCAN kernel driver for firmware/bulk downloads — `nusb` is monitoring-grade ([SOUPANOM008](../reqs/soupanom/SOUPANOM008.md)) |
 | ⏱️ **Hardware timestamps** | KCAN frames carry 100 ns-precision timestamps latched at frame SOF by FDCAN RXTS hardware; logged as `hw_ts_ns` in JSONL |

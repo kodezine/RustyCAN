@@ -856,7 +856,7 @@ fn adapter_display_name(kind: &AdapterKind) -> &'static str {
         AdapterKind::KCan { .. } => "KCAN Dongle",
         AdapterKind::SocketCan => "SocketCAN",
         AdapterKind::Apex { .. } => "Apex",
-        AdapterKind::KCanNet { .. } => "KCan-Net",
+        AdapterKind::KCanNet { .. } => "KCanNet",
     }
 }
 

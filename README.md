@@ -43,7 +43,7 @@ The GUI window opens immediately. See [Building from Source](.readme/building.md
 
 - 🖥️ **Native GUI** — egui/eframe window, no terminal required
 - 💻 **CLI Modes** — `--tui` for a full-screen terminal UI; `--log-to-stdout` to stream events to a pipe or file
-- 🔌 **Multi-adapter support** — Summit, KCAN Dongle (STM32H753ZI), Apex USB-CAN, SocketCAN on Linux, or **KCan-Net** (encrypted TCP — scan the device QR code to connect over LAN without a USB cable)
+- 🔌 **Multi-adapter support** — Summit, KCAN Dongle (STM32H753ZI), Apex USB-CAN, SocketCAN on Linux, or **KCanNet** (encrypted TCP — scan the device QR code to connect over LAN without a USB cable)
 - ⏱️ **Hardware timestamps** — 100 ns-precision timestamps latched at frame SOF by FDCAN RXTS hardware (KCAN only)
 - 💓 **NMT monitoring & control** — Live node states with broadcast/per-node commands
 - 📊 **PDO & SDO decoding** — Live signal values with EDS support (optional)
