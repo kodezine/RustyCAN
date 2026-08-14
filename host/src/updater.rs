@@ -98,15 +98,15 @@ fn platform_asset_name(tag: &str) -> Option<String> {
 /// Intended to be called from a background thread; never blocks the UI.
 pub fn check_for_app_update() -> Option<AppUpdateRelease> {
     let resp = ureq::get("https://api.github.com/repos/kodezine/RustyCAN/releases/latest")
-        .set(
+        .header(
             "User-Agent",
             concat!("RustyCAN/", env!("CARGO_PKG_VERSION")),
         )
-        .set("Accept", "application/vnd.github+json")
+        .header("Accept", "application/vnd.github+json")
         .call()
         .ok()?;
 
-    let body: serde_json::Value = resp.into_json().ok()?;
+    let body: serde_json::Value = resp.into_body().read_json().ok()?;
     let tag = body["tag_name"].as_str()?;
     let remote = parse_semver_tag(tag)?;
 
@@ -163,17 +163,17 @@ pub fn download_update(
 
     let dest = std::env::temp_dir().join(&release.asset_name);
 
-    let resp = ureq::get(&release.download_url)
-        .set(
+    let mut resp = ureq::get(&release.download_url)
+        .header(
             "User-Agent",
             concat!("RustyCAN/", env!("CARGO_PKG_VERSION")),
         )
         .call()
         .map_err(|e| format!("Download failed: {e}"))?;
 
-    let content_length: Option<u64> = resp.header("Content-Length").and_then(|v| v.parse().ok());
+    let content_length: Option<u64> = resp.body_mut().content_length();
 
-    let mut reader = resp.into_reader();
+    let mut reader = resp.into_body().into_reader();
     let mut buf = [0u8; 65536];
     let mut file =
         std::fs::File::create(&dest).map_err(|e| format!("Cannot create temp file: {e}"))?;
