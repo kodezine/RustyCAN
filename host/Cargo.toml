@@ -44,7 +44,7 @@ futures-lite = "2.6.1"
 sniffer-core = { path = "../crates/sniffer-core" }
 sniffer-egui = { path = "../crates/sniffer-egui" }
 # Lightweight blocking HTTP client — used for background GitHub release check
-ureq = { version = "2", features = ["tls", "json"] }
+ureq = { version = "3", features = ["native-tls", "json"] }
 # Terminal UI (TUI mode)
 ratatui = "0.30"
 crossterm = "0.29"

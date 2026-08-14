@@ -83,13 +83,15 @@ impl SseServer {
         // browser page cannot trigger a cross-origin shutdown via a simple GET
         // (non-simple headers force a CORS pre-flight, which the server does
         // not allow, so the browser blocks such requests).
-        let old_instance_found = ureq::AgentBuilder::new()
-            .timeout(std::time::Duration::from_millis(300))
-            .build()
-            .get(&format!("http://127.0.0.1:{port}/shutdown"))
-            .set("X-RustyCAN-Shutdown", "1")
-            .call()
-            .is_ok();
+        let old_instance_found = ureq::Agent::new_with_config(
+            ureq::Agent::config_builder()
+                .timeout_global(Some(std::time::Duration::from_millis(300)))
+                .build(),
+        )
+        .get(&format!("http://127.0.0.1:{port}/shutdown"))
+        .header("X-RustyCAN-Shutdown", "1")
+        .call()
+        .is_ok();
         if old_instance_found {
             // Give the old process time to call ExitProcess and release the port.
             std::thread::sleep(std::time::Duration::from_millis(600));
