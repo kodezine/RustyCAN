@@ -34,7 +34,10 @@ rusb = { version = "0.9", features = ["vendored"] }
 ed25519-dalek = { version = "3", features = ["rand_core"] }
 sha2 = "0.11"
 kcan-protocol = { path = "../kcan-protocol", features = ["std", "crypto"] }
-getrandom = "0.2"
+getrandom = "0.4.3"
+# QR code decode for K1 URI import (scan-to-activate, issue #117).
+rqrr = "0.10.1"
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp"] }
 futures-lite = "2.6.1"
 # Reusable sniffer (headless model + egui view), shared with the dev harness.
 sniffer-core = { path = "../crates/sniffer-core" }

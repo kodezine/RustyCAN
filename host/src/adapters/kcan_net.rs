@@ -86,7 +86,7 @@ impl KCanNetAdapter {
 
         // Generate host ephemeral keypair from OS entropy (host = initiator, prefix=1).
         let mut entropy = [0u8; 32];
-        getrandom::getrandom(&mut entropy).map_err(|e| AdapterError::Io(format!("rng: {e}")))?;
+        getrandom::fill(&mut entropy).map_err(|e| AdapterError::Io(format!("rng: {e}")))?;
         let mut layer = SoftwareEncryptionLayer::from_entropy(entropy, true);
         let our_pk = layer.our_public_key();
 
