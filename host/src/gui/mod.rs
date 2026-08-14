@@ -71,9 +71,6 @@ use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
 use std::time::{Instant, SystemTime};
 
-use eframe::egui::{self, vec2, Button, Color32};
-use rfd::FileDialog;
-
 use crate::adapters::{kcan, AdapterKind};
 use crate::app::{apply_event, AppState, CanEvent};
 use crate::canopen::nmt::{NmtCommand, NmtState};
@@ -84,6 +81,8 @@ use crate::canopen::sdo::{
 use crate::eds;
 use crate::http_server::SseServer;
 use crate::session::{self, CanCommand, SessionConfig, SniffTap};
+use eframe::egui::{self, vec2, Button, Color32};
+use rfd::FileDialog;
 
 mod plot_view;
 
@@ -370,6 +369,8 @@ struct ConnectForm {
     kcan_devices: Vec<(String, String)>,
     /// Selected KCAN device serial (empty = auto-select first).
     kcan_serial: String,
+    /// K1 URI for KCanNet adapter (relay or LAN); populated by QR import or manual entry.
+    kcannet_uri: String,
     /// DBC files to load for signal decoding.
     dbc_files: Vec<DbcEntry>,
     /// Index of the DBC file awaiting remove-confirmation, if any.
@@ -414,6 +415,7 @@ impl Clone for ConnectForm {
             adapter_kind: self.adapter_kind.clone(),
             kcan_devices: self.kcan_devices.clone(),
             kcan_serial: self.kcan_serial.clone(),
+            kcannet_uri: self.kcannet_uri.clone(),
             dbc_files: self.dbc_files.clone(),
             confirm_remove_dbc: self.confirm_remove_dbc,
             adapter_notice: self.adapter_notice.clone(),
@@ -501,6 +503,9 @@ struct PersistedConfig {
     text_log: bool,
     adapter_kind: AdapterKind,
     kcan_serial: String,
+    /// K1 URI for KCanNet — persisted so the user doesn't re-scan on every launch.
+    #[serde(default)]
+    kcannet_uri: String,
     dbc_files: Vec<DbcEntry>,
     /// Port for the live HTML dashboard (`http://127.0.0.1:<port>/`).
     /// Omitting this field uses 7878. The `--http-port` CLI flag overrides it.
@@ -597,9 +602,20 @@ impl PersistedConfig {
             last_probe: None,
             listen_only: self.listen_only,
             text_log: self.text_log,
-            adapter_kind: self.adapter_kind,
+            adapter_kind: self.adapter_kind.clone(),
             kcan_devices: vec![],
             kcan_serial: self.kcan_serial,
+            // Prefer persisted kcannet_uri; fall back to the URI inside adapter_kind
+            // so configs written without the field (e.g. via --config JSON) still work.
+            kcannet_uri: if self.kcannet_uri.is_empty() {
+                if let AdapterKind::KCanNet { uri } = &self.adapter_kind {
+                    uri.clone()
+                } else {
+                    String::new()
+                }
+            } else {
+                self.kcannet_uri
+            },
             dbc_files: self.dbc_files,
             confirm_remove_dbc: None,
             adapter_notice: None,
@@ -626,6 +642,7 @@ impl From<&ConnectForm> for PersistedConfig {
             text_log: form.text_log,
             adapter_kind: form.adapter_kind.clone(),
             kcan_serial: form.kcan_serial.clone(),
+            kcannet_uri: form.kcannet_uri.clone(),
             dbc_files: form.dbc_files.clone(),
             http_port: None, // not persisted to the app-data config; set via --config file only
             xcp_enabled: form.xcp_enabled,
@@ -659,6 +676,7 @@ impl Default for ConnectForm {
                 adapter_kind: AdapterKind::Summit,
                 kcan_devices: vec![],
                 kcan_serial: String::new(),
+                kcannet_uri: String::new(),
                 dbc_files: vec![],
                 confirm_remove_dbc: None,
                 adapter_notice: None,
@@ -897,6 +915,52 @@ fn try_fallback_adapter(form: &mut ConnectForm) -> bool {
     false
 }
 
+/// Decode a QR code image file and return the first decoded string.
+///
+/// Returns `None` if the file cannot be read, contains no QR code, or decoding
+/// fails.  Multiple QR codes in one image: returns the first one found.
+pub fn decode_qr_image(path: &std::path::Path) -> Option<String> {
+    let img = image::open(path).ok()?.to_luma8();
+    let mut prepared = rqrr::PreparedImage::prepare(img);
+    let grids = prepared.detect_grids();
+    for grid in grids {
+        if let Ok((_, content)) = grid.decode() {
+            return Some(content);
+        }
+    }
+    None
+}
+
+/// Classify a decoded QR string as a K1 URI, a "device active" indicator, or invalid.
+#[derive(PartialEq)]
+enum K1Validation {
+    ValidRelay,
+    ValidLan,
+    DeviceActive, // QR shows www.kodezine.com — session already open
+    Invalid,
+    Empty,
+}
+
+fn validate_k1_uri(s: &str) -> K1Validation {
+    if s.is_empty() {
+        return K1Validation::Empty;
+    }
+    let trimmed = s.trim();
+    if trimmed.starts_with("K1:r/") {
+        return K1Validation::ValidRelay;
+    }
+    if trimmed.starts_with("K1:") && !trimmed.starts_with("K1:r/") {
+        // Could be LAN format or no-IP fallback
+        if trimmed.len() >= 7 {
+            return K1Validation::ValidLan;
+        }
+    }
+    if trimmed.contains("kodezine.com") {
+        return K1Validation::DeviceActive;
+    }
+    K1Validation::Invalid
+}
+
 fn render_connect(
     ui: &mut egui::Ui,
     form: &mut ConnectForm,
@@ -906,6 +970,27 @@ fn render_connect(
     dfu_path: Option<PathBuf>,
     app_update: Arc<Mutex<Option<crate::updater::AppUpdateRelease>>>,
 ) -> Option<Screen> {
+    // ── Drag-and-drop image → QR decode ──────────────────────────────────────
+    // When KCanNet is selected, dropping an image file onto the window decodes
+    // the QR and fills the URI field — same path as the Import button.
+    if matches!(form.adapter_kind, AdapterKind::KCanNet { .. }) {
+        let dropped = ui.input(|i| i.raw.dropped_files.clone());
+        if let Some(file) = dropped.into_iter().next() {
+            let path = file.path();
+            match decode_qr_image(path) {
+                Some(s) => {
+                    form.kcannet_uri = s.trim().to_string();
+                    form.adapter_kind = AdapterKind::KCanNet {
+                        uri: form.kcannet_uri.clone(),
+                    };
+                }
+                None => {
+                    form.adapter_notice = Some("No QR code found in dropped image".into());
+                }
+            }
+        }
+    }
+
     // ── Dongle probe cycle ────────────────────────────────────────────────────
     // 1. Drain any pending probe result.
     if let Some(rx) = &form.probe_rx {
@@ -1149,10 +1234,6 @@ fn render_connect(
                                                 matches!(form.adapter_kind, AdapterKind::SocketCan);
                                             if ui.radio(is_sc, "SocketCAN").clicked() {
                                                 form.adapter_kind = AdapterKind::SocketCan;
-                                                // Reset to a sensible default interface name
-                                                // whenever the current value looks like a Summit
-                                                // channel number (all digits, e.g. "1", "2")
-                                                // rather than a CAN interface name.
                                                 if form.port.is_empty()
                                                     || form
                                                         .port
@@ -1166,6 +1247,16 @@ fn render_connect(
                                                 form.adapter_notice = None;
                                                 form.original_adapter_kind = None;
                                             }
+                                        }
+                                        let is_kcannet =
+                                            matches!(form.adapter_kind, AdapterKind::KCanNet { .. });
+                                        if ui.radio(is_kcannet, "KCanNet").clicked() {
+                                            form.adapter_kind = AdapterKind::KCanNet {
+                                                uri: form.kcannet_uri.clone(),
+                                            };
+                                            form.last_probe = None;
+                                            form.adapter_notice = None;
+                                            form.original_adapter_kind = None;
                                         }
                                     });
                                     ui.end_row();
@@ -1224,6 +1315,58 @@ fn render_connect(
                                                             }
                                                         }
                                                     });
+                                            }
+                                        });
+                                        ui.end_row();
+                                    }
+
+                                    // ── KCanNet URI field + QR import ──────────────
+                                    if matches!(form.adapter_kind, AdapterKind::KCanNet { .. }) {
+                                        ui.label("K1 URI:");
+                                        ui.vertical(|ui| {
+                                            ui.horizontal(|ui| {
+                                                let resp = ui.add(
+                                                    egui::TextEdit::singleline(&mut form.kcannet_uri)
+                                                        .hint_text("K1:r/… or K1:C0A803B2/…")
+                                                        .desired_width(280.0),
+                                                );
+                                                if resp.changed() {
+                                                    form.adapter_kind = AdapterKind::KCanNet {
+                                                        uri: form.kcannet_uri.clone(),
+                                                    };
+                                                }
+                                                if ui.button("📷 Import QR…").clicked() {
+                                                    if let Some(path) = FileDialog::new()
+                                                        .add_filter("Image", &["png", "jpg", "jpeg", "webp"])
+                                                        .pick_file()
+                                                    {
+                                                        match decode_qr_image(&path) {
+                                                            Some(s) => {
+                                                                form.kcannet_uri = s.trim().to_string();
+                                                                form.adapter_kind = AdapterKind::KCanNet {
+                                                                    uri: form.kcannet_uri.clone(),
+                                                                };
+                                                            }
+                                                            None => {
+                                                                form.kcannet_uri = String::new();
+                                                                // show error in the notice area
+                                                                form.adapter_notice = Some("No QR code found in image".into());
+                                                            }
+                                                        }
+                                                    }
+                                                }
+                                            });
+                                            // Live validation hint
+                                            match validate_k1_uri(&form.kcannet_uri) {
+                                                K1Validation::ValidRelay =>
+                                                    { ui.colored_label(Color32::from_rgb(80, 180, 80), "✓ Relay URI"); }
+                                                K1Validation::ValidLan =>
+                                                    { ui.colored_label(Color32::from_rgb(80, 180, 80), "✓ LAN URI"); }
+                                                K1Validation::DeviceActive =>
+                                                    { ui.colored_label(Color32::from_rgb(220, 160, 0), "⚠ Device active — session already open"); }
+                                                K1Validation::Invalid =>
+                                                    { ui.colored_label(Color32::from_rgb(200, 60, 60), "✗ Not a valid K1 URI"); }
+                                                K1Validation::Empty => {}
                                             }
                                         });
                                         ui.end_row();
