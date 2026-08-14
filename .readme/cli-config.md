@@ -104,7 +104,7 @@ KCAN Dongle pinned to a specific serial:
 "adapter_kind": { "KCan": { "serial": "ABC123" } }
 ```
 
-KCan-Net (encrypted TCP, scan device QR for the URI):
+KCanNet (encrypted TCP, scan device QR for the URI):
 ```json
 "adapter_kind": { "KCanNet": { "uri": "K1:C0A803B2/yhRv_Y28dyfXdvgJG4V5XeGNv4NqbVjJqqvy6Y2seig" } }
 ```

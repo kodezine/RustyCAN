@@ -48,7 +48,7 @@ impl KCanNetAdapter {
                     .map_err(|e| AdapterError::Io(format!("connect {addr}: {e}")))?;
                 stream.set_read_timeout(Some(Duration::from_secs(10))).ok();
                 stream.set_write_timeout(Some(Duration::from_secs(10))).ok();
-                let name = format!("KCan-Net {}:{NET_PORT}", std::net::Ipv4Addr::from(ip));
+                let name = format!("KCanNet {}:{NET_PORT}", std::net::Ipv4Addr::from(ip));
                 (stream, device_pk, name)
             }
             K1Uri::Relay { room_id, device_pk } => {
@@ -80,7 +80,7 @@ impl KCanNetAdapter {
                 stream.set_read_timeout(Some(Duration::from_secs(30))).ok();
                 // Announce room_id to kgate — triggers pairing with the waiting device.
                 write_exact(&mut stream, &room_id)?;
-                (stream, device_pk, "KCan-Net relay bore.pub:4444".into())
+                (stream, device_pk, "KCanNet relay bore.pub:4444".into())
             }
         };
 
@@ -124,7 +124,7 @@ impl KCanNetAdapter {
 
         let layer_r = Arc::clone(&layer);
         let reader_handle = std::thread::Builder::new()
-            .name("kcan-net-reader".into())
+            .name("kcannet-reader".into())
             .spawn(move || net_reader(stream, layer_r, frame_tx, error_tx))
             .map_err(|e| AdapterError::Io(format!("spawn reader: {e}")))?;
 
@@ -203,7 +203,7 @@ impl CanAdapter for KCanNetAdapter {
                 Err(mpsc::RecvTimeoutError::Disconnected) => {
                     let reason = self.error_rx.try_recv().unwrap_or_default();
                     if !reason.is_empty() {
-                        eprintln!("kcan-net reader died: {reason}");
+                        eprintln!("kcannet reader died: {reason}");
                     }
                     return Err(AdapterError::Disconnected);
                 }
@@ -266,7 +266,7 @@ fn net_reader(
                             }
                         }
                         Err(_) => {
-                            eprintln!("kcan-net: GCM authentication failed — frame discarded")
+                            eprintln!("kcannet: GCM authentication failed — frame discarded")
                         }
                     }
                     in_off = 0;
