@@ -271,14 +271,15 @@ pub struct SessionConfig {
     ///
     /// Each running RustyCAN process owns exactly one adapter.  Multi-bus
     /// capture requires launching separate instances, each with its own
-    /// `--config` file specifying a different adapter and `baud` rate.
+    /// `--config` file.  Instances may share a baud rate or adapter kind
+    /// provided their identity fields (serial, URI, etc.) differ.
     ///
     /// ## Session identity in the log
     ///
-    /// When a session opens, a `SESSION_START` JSONL event will be written as
-    /// the first log line, carrying the adapter display name, serial/uid_lo,
-    /// firmware version, and baud rate (Issue C, planned).  This makes every
-    /// JSONL file self-describing and enables log correlation across instances.
+    /// When a session opens, a `session_start` JSONL event is written as the
+    /// first log line via `EventLogger::log_session_start`, carrying the adapter
+    /// display name and baud rate.  Expanding it to include serial/uid_lo and
+    /// firmware version is tracked as Issue C.
     ///
     /// Defaults to [`AdapterKind::Summit`] so existing callers are unaffected.
     pub adapter_kind: AdapterKind,
@@ -290,10 +291,10 @@ pub struct SessionConfig {
     pub dbc_paths: Vec<std::path::PathBuf>,
     /// Optional SSE broadcast sender from [`crate::http_server::SseServer`].
     ///
-    /// When `Some`, every JSONL log entry (including the planned `SESSION_START`
-    /// event) is also broadcast to all connected browser clients via the live
-    /// HTTP dashboard.  The dashboard's `GET /info` endpoint (Issue D, planned)
-    /// returns current session state for clients that connect after session open.
+    /// When `Some`, every JSONL log entry (including `session_start`) is also
+    /// broadcast to all connected browser clients via the live HTTP dashboard.
+    /// The dashboard's `GET /info` endpoint (Issue D, planned) will return
+    /// current session state for clients that connect after session open.
     ///
     /// Each RustyCAN instance must use a distinct `http_port` when multiple
     /// instances run simultaneously — the `/shutdown` takeover will otherwise

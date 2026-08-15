@@ -27,9 +27,7 @@
 //! |---------|------------------------|--------|
 //! | KCan USB | `Some(t)` | FDCAN RXTS latched at CAN frame SOF |
 //! | KCanNet | `Some(t)` | Same FDCAN RXTS, frozen before TCP transit |
-//! | Summit, Apex, SocketCAN | `None` | Host wall-clock on USB receipt |
-//!
-//! The UI renders `≈` for host-approximate timestamps.
+//! | Summit, Apex, SocketCAN | `None` | Host wall-clock on frame receipt |
 //!
 //! # Adding an adapter
 //!
@@ -72,17 +70,18 @@ pub mod apex;
 /// KCanNet timestamps are therefore as accurate as KCanUsb timestamps.
 ///
 /// For all other adapters (Summit, Apex, SocketCAN) the field is `None`;
-/// the session layer falls back to a host wall-clock timestamp on USB receipt.
-/// These are subject to USB polling jitter and OS scheduling latency (~1–50 ms).
+/// the session layer falls back to a host wall-clock timestamp on frame receipt.
+/// These are subject to OS scheduling latency (~1–50 ms).
 /// `SO_TIMESTAMPING` on SocketCAN is not pursued — the gain is marginal and
 /// does not close the gap to FDCAN SOF-latched accuracy.
 ///
 /// The `TsRolloverTracker` in `session` reconstructs a monotonic `u64` from
-/// the 16-bit RXTS (wraps at ~6.55 ms) for each adapter independently.
+/// the 32-bit `timestamp_100ns` counter (wraps at ~429 s) for each adapter
+/// independently.
 pub struct ReceivedFrame {
     pub frame: CanFrame,
     /// `Some`: FDCAN SOF-latched, 100 ns resolution (KCan USB and Net only).
-    /// `None`: host wall-clock on USB receipt (Summit, Apex, SocketCAN).
+    /// `None`: host wall-clock on frame receipt (Summit, Apex, SocketCAN).
     pub hardware_timestamp_ns: Option<u64>,
     /// Source CAN channel: 0 = FDCAN1, 1 = FDCAN2.  Always 0 for single-channel adapters.
     pub channel: u8,
@@ -202,7 +201,7 @@ pub trait CanAdapter {
     fn send(&mut self, frame: &CanFrame) -> Result<(), AdapterError>;
 
     /// Human-readable adapter name for log messages, UI display, and the
-    /// `SESSION_START` JSONL event (planned, Issue C).
+    /// `session_start` JSONL event written by `EventLogger::log_session_start`.
     fn name(&self) -> &str;
 
     /// Firmware version reported by the device during open, if available.

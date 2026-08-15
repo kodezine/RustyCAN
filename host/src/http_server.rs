@@ -36,11 +36,12 @@
 //!
 //! # Session identity in the dashboard
 //!
-//! The SSE stream carries all JSONL log events, including the planned
-//! `SESSION_START` event (Issue C) which the dashboard JavaScript will use to
-//! populate a sticky header showing the adapter name, serial, baud rate, and
-//! firmware version.  Browser tabs that connect after session open receive the
-//! identity immediately via `GET /info` rather than waiting for the next event.
+//! The SSE stream carries all JSONL log events.  The existing `session_start`
+//! event (emitted by `EventLogger::log_session_start` at session open) already
+//! carries the adapter name and baud rate.  Expanding it to include serial,
+//! firmware version, and a dedicated sticky-header update in the dashboard JS
+//! is tracked as Issue C.  Browser tabs that connect after session open will
+//! receive the identity via `GET /info` once Issue D lands.
 
 use std::convert::Infallible;
 use std::net::SocketAddr;
