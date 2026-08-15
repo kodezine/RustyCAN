@@ -11,14 +11,37 @@
 //!
 //! # Endpoints
 //!
-//! | Path       | Description                                              |
-//! |------------|----------------------------------------------------------|
+//! | Path             | Description                                           |
+//! |------------------|-------------------------------------------------------|
 //! | `GET /`          | Serves the embedded dashboard HTML page               |
 //! | `GET /logo.png`  | Serves the embedded app icon (256 × 256 PNG)          |
 //! | `GET /events`    | SSE stream — one JSONL event per `data:` message      |
+//! | `GET /info`      | Current session state as JSON (planned, Issue D)      |
+//! | `GET /shutdown`  | Graceful process exit (requires `X-RustyCAN-Shutdown`) |
 //!
 //! The server binds exclusively to `127.0.0.1` so it is never reachable
 //! from outside the local machine.  HTTPS is unnecessary on loopback.
+//!
+//! # Multi-instance deployments
+//!
+//! Each simultaneously-running RustyCAN instance **must use a distinct port**.
+//! Set `http_port` in each instance's config file, or pass `--http-port` on the
+//! CLI.  The `/shutdown` takeover mechanism (see [`SseServer::start`]) sends a
+//! graceful exit to any existing instance on the same port before binding.
+//! When two instances accidentally share a port, the second kills the first.
+//!
+//! The planned `GET /info` endpoint will let the takeover logic check whether
+//! an active session is running before sending `/shutdown`, preventing silent
+//! session termination.
+//!
+//! # Session identity in the dashboard
+//!
+//! The SSE stream carries all JSONL log events.  The existing `session_start`
+//! event (emitted by `EventLogger::log_session_start` at session open) already
+//! carries the adapter name and baud rate.  Expanding it to include serial,
+//! firmware version, and a dedicated sticky-header update in the dashboard JS
+//! is tracked as Issue C.  Browser tabs that connect after session open will
+//! receive the identity via `GET /info` once Issue D lands.
 
 use std::convert::Infallible;
 use std::net::SocketAddr;

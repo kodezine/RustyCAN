@@ -36,7 +36,14 @@ pub trait CanAdapterFactory: Send + Sync {
     /// Open a live adapter with the collected connection parameters.
     fn open(&self, params: &AdapterParams) -> Result<Box<dyn CanAdapter>, AdapterError>;
 
-    /// Best-effort presence check for greying out unavailable options.
+    /// Presence check for the connect-form adapter list.
+    ///
+    /// Returns `true` if the adapter is detected (e.g. USB enumerated or
+    /// SocketCAN interface present in `/sys/class/net`).  Returns `false` when
+    /// absent.  This is a reachability check only — it does not detect whether
+    /// another process has already claimed the adapter.  This will be replaced
+    /// by `AdapterAvailability` (`Available / InUse / Absent`) when the
+    /// three-state probe lands (Issue B).
     fn probe(&self, params: &AdapterParams) -> bool;
 }
 
