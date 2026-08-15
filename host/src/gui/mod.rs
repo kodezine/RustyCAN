@@ -884,7 +884,7 @@ struct AdapterAvailability {
     kcan: bool,
     kcan_devices: Vec<(String, String)>,
     apex: bool,
-    /// Always false on non-Linux; kernel interface name if found.
+    /// Always false on non-Linux; true when a SocketCAN interface is detected.
     socketcan: bool,
     /// True if the relay/LAN address from the KCanNet URI is reachable.
     kcannet: bool,
@@ -905,7 +905,13 @@ fn adapter_display_name(kind: &AdapterKind) -> &'static str {
 fn selected_is_available(kind: &AdapterKind, avail: &AdapterAvailability) -> bool {
     match kind {
         AdapterKind::Summit => avail.summit,
-        AdapterKind::KCan { .. } => avail.kcan,
+        AdapterKind::KCan { serial } => match serial {
+            None => avail.kcan,
+            Some(s) => avail
+                .kcan_devices
+                .iter()
+                .any(|(dev_serial, _)| dev_serial == s),
+        },
         AdapterKind::Apex { .. } => avail.apex,
         AdapterKind::SocketCan => avail.socketcan,
         AdapterKind::KCanNet { .. } => avail.kcannet,
@@ -1316,10 +1322,11 @@ fn render_connect(
                                             .show_ui(ui, |ui| {
                                                 sniffer_egui::apply_compact_text(ui);
 
-                                                // Summit — only when detected
-                                                if form.adapter_avail.summit {
+                                                // Summit — always shown; dot reflects availability
+                                                {
+                                                    let (d, c) = avail_dot(form.adapter_avail.summit);
                                                     let is_sel = matches!(form.adapter_kind, AdapterKind::Summit);
-                                                    if ui.selectable_label(is_sel, egui::RichText::new("● Summit").color(Color32::from_rgb(80, 200, 80))).clicked() {
+                                                    if ui.selectable_label(is_sel, egui::RichText::new(format!("{d} Summit")).color(c)).clicked() {
                                                         form.adapter_kind = AdapterKind::Summit;
                                                         form.last_probe = None;
                                                         form.adapter_notice = None;
@@ -1327,15 +1334,16 @@ fn render_connect(
                                                     }
                                                 }
 
-                                                // KCAN Dongle — only when detected
-                                                if form.adapter_avail.kcan {
+                                                // KCAN Dongle — always shown; dot reflects availability
+                                                {
+                                                    let (d, c) = avail_dot(form.adapter_avail.kcan);
                                                     let is_sel = matches!(form.adapter_kind, AdapterKind::KCan { .. });
                                                     let kcan_label = if form.adapter_avail.kcan_devices.len() == 1 {
-                                                        format!("● KCAN Dongle \u{2605} [{}]", form.adapter_avail.kcan_devices[0].0)
+                                                        format!("{d} KCAN Dongle \u{2605} [{}]", form.adapter_avail.kcan_devices[0].0)
                                                     } else {
-                                                        "● KCAN Dongle \u{2605}".to_string()
+                                                        format!("{d} KCAN Dongle \u{2605}")
                                                     };
-                                                    if ui.selectable_label(is_sel, egui::RichText::new(kcan_label).color(Color32::from_rgb(80, 200, 80))).clicked() {
+                                                    if ui.selectable_label(is_sel, egui::RichText::new(kcan_label).color(c)).clicked() {
                                                         let serial = if form.kcan_serial.is_empty() { None } else { Some(form.kcan_serial.clone()) };
                                                         form.adapter_kind = AdapterKind::KCan { serial };
                                                         form.last_probe = None;
@@ -1344,10 +1352,11 @@ fn render_connect(
                                                     }
                                                 }
 
-                                                // Apex — only when detected
-                                                if form.adapter_avail.apex {
+                                                // Apex — always shown; dot reflects availability
+                                                {
+                                                    let (d, c) = avail_dot(form.adapter_avail.apex);
                                                     let is_sel = matches!(form.adapter_kind, AdapterKind::Apex { .. });
-                                                    if ui.selectable_label(is_sel, egui::RichText::new("● Apex").color(Color32::from_rgb(80, 200, 80))).clicked() {
+                                                    if ui.selectable_label(is_sel, egui::RichText::new(format!("{d} Apex")).color(c)).clicked() {
                                                         form.adapter_kind = AdapterKind::Apex { serial: None };
                                                         form.last_probe = None;
                                                         form.adapter_notice = None;
@@ -1355,11 +1364,12 @@ fn render_connect(
                                                     }
                                                 }
 
-                                                // SocketCAN — Linux only, only when available
+                                                // SocketCAN — always shown; disabled "Linux only" on non-Linux
                                                 #[cfg(target_os = "linux")]
-                                                if form.adapter_avail.socketcan {
+                                                {
+                                                    let (d, c) = avail_dot(form.adapter_avail.socketcan);
                                                     let is_sel = matches!(form.adapter_kind, AdapterKind::SocketCan);
-                                                    if ui.selectable_label(is_sel, egui::RichText::new("● SocketCAN").color(Color32::from_rgb(80, 200, 80))).clicked() {
+                                                    if ui.selectable_label(is_sel, egui::RichText::new(format!("{d} SocketCAN")).color(c)).clicked() {
                                                         form.adapter_kind = AdapterKind::SocketCan;
                                                         if form.port.is_empty() || form.port.trim().chars().all(|c| c.is_ascii_digit()) {
                                                             form.port = "can0".into();
@@ -1369,6 +1379,11 @@ fn render_connect(
                                                         form.original_adapter_kind = None;
                                                     }
                                                 }
+                                                #[cfg(not(target_os = "linux"))]
+                                                ui.add_enabled_ui(false, |ui| {
+                                                    let is_sel = matches!(form.adapter_kind, AdapterKind::SocketCan);
+                                                    let _ = ui.selectable_label(is_sel, egui::RichText::new("○ SocketCAN (Linux only)").color(Color32::from_gray(100)));
+                                                });
 
                                                 // KCanNet — always shown; dot reflects reachability
                                                 let (d, c) = avail_dot(form.adapter_avail.kcannet);

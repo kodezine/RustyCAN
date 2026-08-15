@@ -75,9 +75,9 @@ impl KCanNetAdapter {
                 let mut stream = connected
                     .ok_or_else(|| AdapterError::Io(format!("connect relay: {last_err}")))?;
                 stream.set_write_timeout(Some(Duration::from_secs(10))).ok();
-                // No read timeout: read_exact returns EAGAIN on timeout which is a hard
-                // error; TCP reset will arrive if the peer drops.
-                stream.set_read_timeout(None).ok();
+                // 30s covers kgate pairing + ECDH over relay; device should already be
+                // registered (it connects at boot), so typical latency is <1s.
+                stream.set_read_timeout(Some(Duration::from_secs(30))).ok();
                 // Announce room_id to kgate — triggers pairing with the waiting device.
                 write_exact(&mut stream, &room_id)?;
                 (
