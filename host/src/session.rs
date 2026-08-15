@@ -265,7 +265,20 @@ pub struct SessionConfig {
     pub block_end_timeout_ms: u64,
     /// Default block size for block transfers (1-127 segments per block).
     pub block_size: u8,
-    /// Which adapter backend to use.
+    /// Which adapter backend to use for this session.
+    ///
+    /// ## One instance, one adapter
+    ///
+    /// Each running RustyCAN process owns exactly one adapter.  Multi-bus
+    /// capture requires launching separate instances, each with its own
+    /// `--config` file specifying a different adapter and `baud` rate.
+    ///
+    /// ## Session identity in the log
+    ///
+    /// When a session opens, a `SESSION_START` JSONL event will be written as
+    /// the first log line, carrying the adapter display name, serial/uid_lo,
+    /// firmware version, and baud rate (Issue C, planned).  This makes every
+    /// JSONL file self-describing and enables log correlation across instances.
     ///
     /// Defaults to [`AdapterKind::Summit`] so existing callers are unaffected.
     pub adapter_kind: AdapterKind,
@@ -277,9 +290,14 @@ pub struct SessionConfig {
     pub dbc_paths: Vec<std::path::PathBuf>,
     /// Optional SSE broadcast sender from [`crate::http_server::SseServer`].
     ///
-    /// When `Some`, every JSONL log entry is also broadcast to all connected
-    /// browser clients via the live HTTP dashboard at `http://localhost:7878/`.
-    /// Pass `Some(server.tx.clone())` from the GUI after starting the server.
+    /// When `Some`, every JSONL log entry (including the planned `SESSION_START`
+    /// event) is also broadcast to all connected browser clients via the live
+    /// HTTP dashboard.  The dashboard's `GET /info` endpoint (Issue D, planned)
+    /// returns current session state for clients that connect after session open.
+    ///
+    /// Each RustyCAN instance must use a distinct `http_port` when multiple
+    /// instances run simultaneously — the `/shutdown` takeover will otherwise
+    /// kill the already-running instance.
     pub sse_tx: Option<tokio::sync::broadcast::Sender<String>>,
     /// Optional XCP-on-CAN configuration. When `Some`, frames on the configured
     /// CRO/DTO identifiers are decoded as XCP (taking precedence over the

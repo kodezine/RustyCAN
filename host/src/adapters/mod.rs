@@ -1,14 +1,41 @@
 //! CAN adapter abstraction for RustyCAN.
 //!
-//! Provides a single trait [`CanAdapter`] that both the Summit and the
-//! KCAN dongle implement.  The session layer only sees this trait — it has no
-//! knowledge of which physical hardware is in use.
+//! Provides a single trait [`CanAdapter`] that every hardware backend
+//! implements.  The session layer only sees this trait — it has no knowledge of
+//! which physical hardware is in use.
+//!
+//! # One instance, one adapter
+//!
+//! Each running RustyCAN process owns **exactly one** adapter for the lifetime
+//! of a session.  Multi-bus capture requires multiple RustyCAN instances, each
+//! launched with its own `--config` file.  Adapter ownership is enforced:
+//!
+//! - **USB adapters** (KCan, Apex): OS-level exclusive claim via `nusb`.
+//! - **Summit**: `CAN_Initialize()` returns an error if already opened.
+//! - **KCanNet**: kgate's 1-to-1 room pairing prevents a second host from
+//!   stealing an active session (ADR-0019 in the rustyepd repository).
+//! - **SocketCAN**: application-level PID lockfile (planned, Issue E).
+//!
+//! The connect UI reflects three probe states: `Available`, `InUse`, `Absent`
+//! (`registry::AdapterAvailability`, planned — Issue B).
+//!
+//! # Timestamp accuracy
+//!
+//! Two tiers exist; the distinction is visible in [`ReceivedFrame`]:
+//!
+//! | Adapter | `hardware_timestamp_ns` | Origin |
+//! |---------|------------------------|--------|
+//! | KCan USB | `Some(t)` | FDCAN RXTS latched at CAN frame SOF |
+//! | KCanNet | `Some(t)` | Same FDCAN RXTS, frozen before TCP transit |
+//! | Summit, Apex, SocketCAN | `None` | Host wall-clock on USB receipt |
+//!
+//! The UI renders `≈` for host-approximate timestamps.
 //!
 //! # Adding an adapter
 //!
 //! 1. Create a new submodule (e.g. `my_adapter.rs`).
 //! 2. Implement [`CanAdapter`] for your type.
-//! 3. Add a variant to [`AdapterKind`].
+//! 3. Add a variant to [`AdapterKind`] with all identity fields in the variant.
 //! 4. Handle it in [`open_adapter`].
 
 use std::fmt;
@@ -36,20 +63,32 @@ pub mod apex;
 
 /// A CAN frame together with an optional hardware timestamp.
 ///
-/// For the KCAN dongle, `hardware_timestamp_ns` holds the FDCAN RXTS value
-/// latched at frame SOF (100 ns resolution, embassy 10 MHz tick rate).
-/// The host `TsRolloverTracker` in session extends this to a monotonic u64.
+/// ## Timestamp accuracy
 ///
-/// For Summit, the field is `None` (host timestamps on USB receipt).
+/// `hardware_timestamp_ns` is `Some` only for KCAN adapters (USB and Net).
+/// It holds the FDCAN RXTS value latched at CAN frame SOF (100 ns resolution,
+/// embassy 10 MHz tick rate).  The value is frozen in firmware before the frame
+/// enters any transport path, so **network relay latency does not affect it**.
+/// KCanNet timestamps are therefore as accurate as KCanUsb timestamps.
+///
+/// For all other adapters (Summit, Apex, SocketCAN) the field is `None`;
+/// the session layer falls back to a host wall-clock timestamp on USB receipt.
+/// These are subject to USB polling jitter and OS scheduling latency (~1–50 ms).
+/// `SO_TIMESTAMPING` on SocketCAN is not pursued — the gain is marginal and
+/// does not close the gap to FDCAN SOF-latched accuracy.
+///
+/// The `TsRolloverTracker` in `session` reconstructs a monotonic `u64` from
+/// the 16-bit RXTS (wraps at ~6.55 ms) for each adapter independently.
 pub struct ReceivedFrame {
     pub frame: CanFrame,
-    /// Nanoseconds since dongle bus-on, latched at frame SOF.  `None` for Summit.
+    /// `Some`: FDCAN SOF-latched, 100 ns resolution (KCan USB and Net only).
+    /// `None`: host wall-clock on USB receipt (Summit, Apex, SocketCAN).
     pub hardware_timestamp_ns: Option<u64>,
-    /// Source CAN channel: 0 = FDCAN1, 1 = FDCAN2.  Always 0 for Summit.
+    /// Source CAN channel: 0 = FDCAN1, 1 = FDCAN2.  Always 0 for single-channel adapters.
     pub channel: u8,
-    /// `true` when this is a TX echo returned by the dongle after a successful
-    /// frame transmission.  The `hardware_timestamp_ns` is the moment the last
-    /// bit left the bus.  Always `false` for Summit (no echo mechanism).
+    /// `true` when this is a TX echo confirming a successful transmission.
+    /// `hardware_timestamp_ns` is then the moment the last bit left the bus.
+    /// Only KCAN adapters produce TX echoes; Summit, Apex, and SocketCAN do not.
     pub is_tx_echo: bool,
 }
 
@@ -89,35 +128,65 @@ impl fmt::Display for AdapterError {
 }
 
 /// Selects which adapter backend to use when opening a session.
+///
+/// Each variant carries **all identity fields needed to open the adapter**.
+/// The top-level `SessionConfig::port` field is a legacy alias for Summit
+/// channel and SocketCAN interface name; it will be retired in favour of
+/// variant-local fields (Issue A in the action plan).
+///
+/// ## Exclusivity
+///
+/// A given physical adapter may be owned by at most one running RustyCAN
+/// instance at a time.  For USB variants this is enforced by the OS (nusb
+/// exclusive claim).  For KCanNet it is enforced by kgate's 1-to-1 room
+/// pairing.  For SocketCAN an application-level PID lockfile is planned.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub enum AdapterKind {
-    /// Summit dongle accessed via `host-can` / libPCBUSB.
+    /// Summit PCAN-USB dongle accessed via `host-can` / libPCBUSB.
     ///
-    /// `port` is the channel number string: `"1"` for PCAN_USBBUS1, etc.
+    /// macOS and Windows only.  On Linux, Summit hardware appears as a
+    /// SocketCAN interface via the `peak_usb` kernel driver — use `SocketCan`
+    /// on Linux instead.
+    ///
+    /// `port` (top-level `SessionConfig` field) is the channel number:
+    /// `"1"` for PCAN_USBBUS1, etc.  This will move into the variant
+    /// as `Summit { channel: String }` (Issue A).
     Summit,
-    /// KCAN dongle connected over USB.
+    /// KCAN dongle connected over USB.  Hardware timestamp source: FDCAN RXTS
+    /// latched at CAN frame SOF (100 ns, `hardware_timestamp_ns: Some`).
     ///
     /// `serial` optionally pins a specific dongle by its USB serial string.
     /// When `None`, the first KCAN device found is used.
     KCan { serial: Option<String> },
-    /// Linux kernel SocketCAN interface (e.g. `can0` from the `peak_usb` driver).
+    /// Linux kernel SocketCAN interface (e.g. `can0` from the `peak_usb` or
+    /// `gs_usb` driver).  Host-approximate timestamps (`hardware_timestamp_ns:
+    /// None`).
     ///
-    /// `port` holds the interface name (`"can0"`, `"can1"`, …).  The interface
-    /// must already exist; bring it up with:
-    /// ```sh
-    /// sudo ip link set can0 up type can bitrate 250000
-    /// ```
+    /// `port` (top-level `SessionConfig` field) holds the interface name
+    /// (`"can0"`, `"can1"`, …).  This will move into the variant as
+    /// `SocketCan { iface: String }` (Issue A).
+    ///
+    /// On Linux, Summit and Apex hardware may appear here via their kernel
+    /// drivers.  The connect UI merges those into their respective adapter
+    /// entries to avoid showing the same device twice.
     SocketCan,
-    /// Apex USB-CAN device accessed via a cross-platform userspace
-    /// USB driver (nusb).  See issue #103.
+    /// Apex USB-CAN device, cross-platform userspace USB driver (nusb).
+    /// Host-approximate timestamps (`hardware_timestamp_ns: None`).
+    ///
+    /// On Linux, if the kernel has bound a driver (e.g. `gs_usb`) to the Apex
+    /// device, nusb cannot claim it.  Use `SocketCan` in that case.
+    /// `apex::find_socketcan_interface()` detects which path applies.
     ///
     /// `serial` optionally pins a specific module by its USB serial string.
     /// When `None`, the first Apex device found is used.
     Apex { serial: Option<String> },
     /// KCAN-over-TCP with X25519 + AES-256-GCM session encryption.
+    /// Hardware timestamp source: same FDCAN RXTS as KCan USB — frozen in
+    /// firmware before entering the TCP stack (`hardware_timestamp_ns: Some`).
     ///
-    /// `uri` is the `K1:<8-hex-ip>/<43-base64url-pubkey>` string scanned from
-    /// the device's e-paper QR code.
+    /// `uri` is the `K1:<8-hex-ip>/<43-base64url-pubkey>` or
+    /// `K1:r/<6-char-room-id>/<43-base64url-pubkey>` string scanned from
+    /// the device's e-paper QR code (ADR-0017 in rustyepd).
     KCanNet { uri: String },
 }
 
@@ -132,7 +201,8 @@ pub trait CanAdapter {
     /// Transmit a CAN frame.
     fn send(&mut self, frame: &CanFrame) -> Result<(), AdapterError>;
 
-    /// Human-readable adapter name for log messages and UI display.
+    /// Human-readable adapter name for log messages, UI display, and the
+    /// `SESSION_START` JSONL event (planned, Issue C).
     fn name(&self) -> &str;
 
     /// Firmware version reported by the device during open, if available.

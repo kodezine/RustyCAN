@@ -1,10 +1,29 @@
 //! KCAN-over-TCP adapter with X25519 + AES-256-GCM session encryption.
 //!
 //! Scan the device's e-paper QR code to obtain the K1 URI
-//! (`K1:<8-hex-ip>/<43-base64url-pubkey>`), then pass it to [`KCanNetAdapter::open`].
-//! The adapter parses the URI, dials TCP port 3333, and performs the ECDH
-//! handshake before exchanging 108-byte
-//! [`EncryptedKCanFrame`]s for the life of the connection.
+//! (`K1:<8-hex-ip>/<43-base64url-pubkey>` for LAN direct, or
+//! `K1:r/<6-char-room-id>/<43-base64url-pubkey>` for relay via kgate),
+//! then pass it to [`KCanNetAdapter::open`].  The adapter parses the URI,
+//! connects (direct or via kgate), and performs the ECDH handshake before
+//! exchanging 108-byte [`EncryptedKCanFrame`]s for the life of the connection.
+//!
+//! # Timestamp accuracy
+//!
+//! `ReceivedFrame::hardware_timestamp_ns` is `Some` for every frame delivered
+//! by this adapter.  The FDCAN RXTS value is latched at CAN frame SOF in the
+//! device firmware and embedded in `KCanFrame` before the frame enters the TCP
+//! stack.  Network transit latency and kgate relay round-trip time do not
+//! affect the timestamp.  KCanNet is timestamp-equivalent to KCan USB
+//! (see ADR-0020 in the rustyepd repository).
+//!
+//! # Session exclusivity
+//!
+//! kgate's 1-to-1 room pairing ensures at most one host is piped to the device
+//! at a time.  A second connection attempt after pairing is complete becomes a
+//! new "first client" and waits up to 300 s for a peer that never arrives.
+//! The device's panel transitions to `ACTIVE` (showing `www.kodezine.com`) once
+//! the ECDH handshake succeeds, preventing a concurrent second scan-to-connect
+//! (ADR-0018/0019 in the rustyepd repository).
 
 use std::io::{Read, Write};
 use std::net::{TcpStream, ToSocketAddrs};
