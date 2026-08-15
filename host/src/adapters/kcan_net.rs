@@ -54,7 +54,7 @@ impl KCanNetAdapter {
             K1Uri::Relay { room_id, device_pk } => {
                 // Resolve and connect — try every resolved address so an IPv6-first
                 // result doesn't silently fail when an IPv4 address would succeed.
-                let addrs: Vec<_> = "bore.pub:4444"
+                let addrs: Vec<_> = "kgate.kodezine.com:4444"
                     .to_socket_addrs()
                     .map_err(|e| AdapterError::Io(format!("relay DNS: {e}")))?
                     .collect();
@@ -80,7 +80,11 @@ impl KCanNetAdapter {
                 stream.set_read_timeout(Some(Duration::from_secs(30))).ok();
                 // Announce room_id to kgate — triggers pairing with the waiting device.
                 write_exact(&mut stream, &room_id)?;
-                (stream, device_pk, "KCanNet relay bore.pub:4444".into())
+                (
+                    stream,
+                    device_pk,
+                    "KCanNet relay kgate.kodezine.com:4444".into(),
+                )
             }
         };
 
@@ -154,7 +158,7 @@ impl KCanNetAdapter {
             }
             Some(K1Uri::Relay { .. }) => {
                 // Try all resolved addresses, same as open().
-                "bore.pub:4444"
+                "kgate.kodezine.com:4444"
                     .to_socket_addrs()
                     .ok()
                     .map(|mut addrs| {

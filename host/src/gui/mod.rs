@@ -355,10 +355,12 @@ struct ConnectForm {
     confirm_remove: Option<usize>,
     /// Whether the dongle probe reported success.
     dongle_connected: bool,
-    /// One-shot channel receiving the result of the latest probe.
-    probe_rx: Option<mpsc::Receiver<bool>>,
+    /// One-shot channel receiving the result of the latest all-adapter probe.
+    probe_rx: Option<mpsc::Receiver<AdapterAvailability>>,
     /// When the most recent probe was launched.
     last_probe: Option<Instant>,
+    /// Per-adapter availability from the most recent all-adapter probe.
+    adapter_avail: AdapterAvailability,
     /// If true, no CAN frames are transmitted (commands are silently dropped).
     listen_only: bool,
     /// If true, also write a plain-text `.log` file alongside the JSONL file.
@@ -412,6 +414,7 @@ impl Clone for ConnectForm {
             // start its own probe cycle on the next render frame.
             probe_rx: None,
             last_probe: None,
+            adapter_avail: self.adapter_avail.clone(),
             listen_only: self.listen_only,
             text_log: self.text_log,
             adapter_kind: self.adapter_kind.clone(),
@@ -603,6 +606,7 @@ impl PersistedConfig {
             dongle_connected: false,
             probe_rx: None,
             last_probe: None,
+            adapter_avail: AdapterAvailability::default(),
             listen_only: self.listen_only,
             text_log: self.text_log,
             adapter_kind: self.adapter_kind.clone(),
@@ -675,6 +679,7 @@ impl Default for ConnectForm {
                 dongle_connected: false,
                 probe_rx: None,
                 last_probe: None,
+                adapter_avail: AdapterAvailability::default(),
                 listen_only: false,
                 text_log: false,
                 adapter_kind: AdapterKind::Summit,
@@ -872,6 +877,19 @@ const BAUD_OPTIONS: &[&str] = &[
 /// How often to re-probe the dongle (seconds).
 const PROBE_INTERVAL_SECS: u64 = 2;
 
+/// Availability state for all adapter types, refreshed every probe cycle.
+#[derive(Debug, Clone, Default)]
+struct AdapterAvailability {
+    summit: bool,
+    kcan: bool,
+    kcan_devices: Vec<(String, String)>,
+    apex: bool,
+    /// Always false on non-Linux; true when a SocketCAN interface is detected.
+    socketcan: bool,
+    /// True if the relay/LAN address from the KCanNet URI is reachable.
+    kcannet: bool,
+}
+
 /// Return a human-readable display name for an adapter kind.
 fn adapter_display_name(kind: &AdapterKind) -> &'static str {
     match kind {
@@ -883,6 +901,23 @@ fn adapter_display_name(kind: &AdapterKind) -> &'static str {
     }
 }
 
+/// Returns true if the currently selected adapter is available in the probe result.
+fn selected_is_available(kind: &AdapterKind, avail: &AdapterAvailability) -> bool {
+    match kind {
+        AdapterKind::Summit => avail.summit,
+        AdapterKind::KCan { serial } => match serial {
+            None => avail.kcan,
+            Some(s) => avail
+                .kcan_devices
+                .iter()
+                .any(|(dev_serial, _)| dev_serial == s),
+        },
+        AdapterKind::Apex { .. } => avail.apex,
+        AdapterKind::SocketCan => avail.socketcan,
+        AdapterKind::KCanNet { .. } => avail.kcannet,
+    }
+}
+
 /// Try to find an available adapter when the configured one is not found.
 /// Returns true if a fallback adapter was found and switched to.
 fn try_fallback_adapter(form: &mut ConnectForm) -> bool {
@@ -891,10 +926,7 @@ fn try_fallback_adapter(form: &mut ConnectForm) -> bool {
         form.original_adapter_kind = Some(form.adapter_kind.clone());
     }
 
-    let port = form.port.trim();
-    let baud: u32 = form.baud.trim().parse().unwrap_or(250_000);
-
-    // Try other adapter types
+    // Try other adapter types using already-probed availability — no extra network call.
     let fallbacks: Vec<AdapterKind> = match &form.adapter_kind {
         AdapterKind::Summit => vec![AdapterKind::KCan { serial: None }],
         AdapterKind::KCan { .. } => vec![AdapterKind::Summit],
@@ -904,10 +936,9 @@ fn try_fallback_adapter(form: &mut ConnectForm) -> bool {
     };
 
     for fallback_kind in fallbacks {
-        if session::probe_adapter_with_kind(&fallback_kind, port, baud) {
+        if selected_is_available(&fallback_kind, &form.adapter_avail) {
             let original_name = adapter_display_name(form.original_adapter_kind.as_ref().unwrap());
             let new_name = adapter_display_name(&fallback_kind);
-
             form.adapter_kind = fallback_kind;
             form.adapter_notice = Some(format!(
                 "{} not found, automatically switched to {}",
@@ -1040,39 +1071,68 @@ fn render_connect(
         }
     }
 
-    // ── Dongle probe cycle ────────────────────────────────────────────────────
-    // 1. Drain any pending probe result.
+    // ── Adapter probe cycle ───────────────────────────────────────────────────
+    // 1. Drain any pending all-adapter probe result.
     if let Some(rx) = &form.probe_rx {
         if let Ok(result) = rx.try_recv() {
-            if result {
-                // Configured adapter found successfully
-                form.dongle_connected = true;
-                form.adapter_notice = None; // Clear any previous notice
+            // Sync kcan_devices from the probe result.
+            form.kcan_devices = result.kcan_devices.clone();
+            form.adapter_avail = result;
+            // Derive dongle_connected for the currently selected adapter.
+            form.dongle_connected = selected_is_available(&form.adapter_kind, &form.adapter_avail);
+            if !form.dongle_connected {
+                // A locally-valid K1 URI is enough to enable Connect; don't block on probe.
+                if matches!(form.adapter_kind, AdapterKind::KCanNet { .. })
+                    && matches!(
+                        validate_k1_uri(&form.kcannet_uri),
+                        K1Validation::ValidRelay | K1Validation::ValidLan
+                    )
+                {
+                    form.dongle_connected = true;
+                } else {
+                    form.dongle_connected = try_fallback_adapter(form);
+                }
             } else {
-                // Configured adapter not found, try fallback
-                form.dongle_connected = try_fallback_adapter(form);
+                form.adapter_notice = None;
             }
             form.probe_rx = None;
         }
     }
-    // 2. For KCAN, refresh the device list every probe cycle.
-    if matches!(form.adapter_kind, AdapterKind::KCan { .. }) {
-        form.kcan_devices = kcan::KCanAdapter::list_devices();
-    }
-    // 3. Launch a new one-shot probe thread if enough time has elapsed.
+    // 2. Launch a new one-shot probe thread if enough time has elapsed.
     let should_probe = form.probe_rx.is_none()
         && form
             .last_probe
             .map(|t| t.elapsed().as_secs() >= PROBE_INTERVAL_SECS)
-            .unwrap_or(true); // never probed yet → probe immediately
+            .unwrap_or(true);
 
     if should_probe {
         let port = form.port.trim().to_string();
         let baud: u32 = form.baud.trim().parse().unwrap_or(250_000);
-        let kind = form.adapter_kind.clone();
-        let (probe_tx, probe_rx) = mpsc::channel::<bool>();
+        let kcannet_uri = form.kcannet_uri.clone();
+        let (probe_tx, probe_rx) = mpsc::channel::<AdapterAvailability>();
         std::thread::spawn(move || {
-            let _ = probe_tx.send(session::probe_adapter_with_kind(&kind, &port, baud));
+            let kcan_devices = kcan::KCanAdapter::list_devices();
+            let avail = AdapterAvailability {
+                summit: session::probe_adapter_with_kind(&AdapterKind::Summit, &port, baud),
+                kcan: !kcan_devices.is_empty(),
+                kcan_devices,
+                apex: session::probe_adapter_with_kind(
+                    &AdapterKind::Apex { serial: None },
+                    &port,
+                    baud,
+                ),
+                #[cfg(target_os = "linux")]
+                socketcan: session::probe_adapter_with_kind(&AdapterKind::SocketCan, &port, baud),
+                #[cfg(not(target_os = "linux"))]
+                socketcan: false,
+                kcannet: !kcannet_uri.is_empty()
+                    && session::probe_adapter_with_kind(
+                        &AdapterKind::KCanNet { uri: kcannet_uri },
+                        &port,
+                        baud,
+                    ),
+            };
+            let _ = probe_tx.send(avail);
         });
         form.probe_rx = Some(probe_rx);
         form.last_probe = Some(Instant::now());
@@ -1243,71 +1303,99 @@ fn render_connect(
                                 .show(ui, |ui| {
                                     // ── Adapter type selector ─────────────────────
                                     ui.label("Adapter:");
-                                    ui.horizontal(|ui| {
-                                        let is_summit =
-                                            matches!(form.adapter_kind, AdapterKind::Summit);
-                                        if ui.radio(is_summit, "Summit").clicked() {
-                                            form.adapter_kind = AdapterKind::Summit;
-                                            form.last_probe = None; // force re-probe
-                                            form.adapter_notice = None; // clear auto-switch notice
-                                            form.original_adapter_kind = None; // reset tracking
-                                        }
-                                        let is_kcan =
-                                            matches!(form.adapter_kind, AdapterKind::KCan { .. });
-                                        if ui.radio(is_kcan, "KCAN Dongle \u{2605}").clicked() {
-                                            let serial = if form.kcan_serial.is_empty() {
-                                                None
+                                    {
+                                        let avail_dot = |avail: bool| -> (&'static str, Color32) {
+                                            if avail {
+                                                ("●", Color32::from_rgb(80, 200, 80))
                                             } else {
-                                                Some(form.kcan_serial.clone())
-                                            };
-                                            form.adapter_kind = AdapterKind::KCan { serial };
-                                            form.last_probe = None;
-                                            form.adapter_notice = None; // clear auto-switch notice
-                                            form.original_adapter_kind = None; // reset tracking
-                                        }
-                                        // Apex USB-CAN — cross-platform userspace
-                                        // USB driver (issue #103). Serial pinning is via
-                                        // config for now; the radio auto-selects the
-                                        // first device found.
-                                        let is_apex =
-                                            matches!(form.adapter_kind, AdapterKind::Apex { .. });
-                                        if ui.radio(is_apex, "Apex").clicked() {
-                                            form.adapter_kind = AdapterKind::Apex { serial: None };
-                                            form.last_probe = None;
-                                            form.adapter_notice = None;
-                                            form.original_adapter_kind = None;
-                                        }
-                                        #[cfg(target_os = "linux")]
-                                        {
-                                            let is_sc =
-                                                matches!(form.adapter_kind, AdapterKind::SocketCan);
-                                            if ui.radio(is_sc, "SocketCAN").clicked() {
-                                                form.adapter_kind = AdapterKind::SocketCan;
-                                                if form.port.is_empty()
-                                                    || form
-                                                        .port
-                                                        .trim()
-                                                        .chars()
-                                                        .all(|c| c.is_ascii_digit())
-                                                {
-                                                    form.port = "can0".into();
-                                                }
-                                                form.last_probe = None;
-                                                form.adapter_notice = None;
-                                                form.original_adapter_kind = None;
+                                                ("○", Color32::from_gray(100))
                                             }
-                                        }
-                                        let is_kcannet =
-                                            matches!(form.adapter_kind, AdapterKind::KCanNet { .. });
-                                        if ui.radio(is_kcannet, "KCanNet").clicked() {
-                                            form.adapter_kind = AdapterKind::KCanNet {
-                                                uri: form.kcannet_uri.clone(),
-                                            };
-                                            form.last_probe = None;
-                                            form.adapter_notice = None;
-                                            form.original_adapter_kind = None;
-                                        }
-                                    });
+                                        };
+                                        let sel_avail = selected_is_available(&form.adapter_kind, &form.adapter_avail);
+                                        let (sel_d, _) = avail_dot(sel_avail);
+                                        let sel_name = match &form.adapter_kind {
+                                            AdapterKind::KCan { .. } => "KCAN Dongle \u{2605}".to_string(),
+                                            _ => adapter_display_name(&form.adapter_kind).to_string(),
+                                        };
+                                        egui::ComboBox::from_id_salt("adapter_combo")
+                                            .selected_text(format!("{sel_d} {sel_name}"))
+                                            .show_ui(ui, |ui| {
+                                                sniffer_egui::apply_compact_text(ui);
+
+                                                // Summit — always shown; dot reflects availability
+                                                {
+                                                    let (d, c) = avail_dot(form.adapter_avail.summit);
+                                                    let is_sel = matches!(form.adapter_kind, AdapterKind::Summit);
+                                                    if ui.selectable_label(is_sel, egui::RichText::new(format!("{d} Summit")).color(c)).clicked() {
+                                                        form.adapter_kind = AdapterKind::Summit;
+                                                        form.last_probe = None;
+                                                        form.adapter_notice = None;
+                                                        form.original_adapter_kind = None;
+                                                    }
+                                                }
+
+                                                // KCAN Dongle — always shown; dot reflects availability
+                                                {
+                                                    let (d, c) = avail_dot(form.adapter_avail.kcan);
+                                                    let is_sel = matches!(form.adapter_kind, AdapterKind::KCan { .. });
+                                                    let kcan_label = if form.adapter_avail.kcan_devices.len() == 1 {
+                                                        format!("{d} KCAN Dongle \u{2605} [{}]", form.adapter_avail.kcan_devices[0].0)
+                                                    } else {
+                                                        format!("{d} KCAN Dongle \u{2605}")
+                                                    };
+                                                    if ui.selectable_label(is_sel, egui::RichText::new(kcan_label).color(c)).clicked() {
+                                                        let serial = if form.kcan_serial.is_empty() { None } else { Some(form.kcan_serial.clone()) };
+                                                        form.adapter_kind = AdapterKind::KCan { serial };
+                                                        form.last_probe = None;
+                                                        form.adapter_notice = None;
+                                                        form.original_adapter_kind = None;
+                                                    }
+                                                }
+
+                                                // Apex — always shown; dot reflects availability
+                                                {
+                                                    let (d, c) = avail_dot(form.adapter_avail.apex);
+                                                    let is_sel = matches!(form.adapter_kind, AdapterKind::Apex { .. });
+                                                    if ui.selectable_label(is_sel, egui::RichText::new(format!("{d} Apex")).color(c)).clicked() {
+                                                        form.adapter_kind = AdapterKind::Apex { serial: None };
+                                                        form.last_probe = None;
+                                                        form.adapter_notice = None;
+                                                        form.original_adapter_kind = None;
+                                                    }
+                                                }
+
+                                                // SocketCAN — always shown; disabled "Linux only" on non-Linux
+                                                #[cfg(target_os = "linux")]
+                                                {
+                                                    let (d, c) = avail_dot(form.adapter_avail.socketcan);
+                                                    let is_sel = matches!(form.adapter_kind, AdapterKind::SocketCan);
+                                                    if ui.selectable_label(is_sel, egui::RichText::new(format!("{d} SocketCAN")).color(c)).clicked() {
+                                                        form.adapter_kind = AdapterKind::SocketCan;
+                                                        if form.port.is_empty() || form.port.trim().chars().all(|c| c.is_ascii_digit()) {
+                                                            form.port = "can0".into();
+                                                        }
+                                                        form.last_probe = None;
+                                                        form.adapter_notice = None;
+                                                        form.original_adapter_kind = None;
+                                                    }
+                                                }
+                                                #[cfg(not(target_os = "linux"))]
+                                                ui.add_enabled_ui(false, |ui| {
+                                                    let is_sel = matches!(form.adapter_kind, AdapterKind::SocketCan);
+                                                    let _ = ui.selectable_label(is_sel, egui::RichText::new("○ SocketCAN (Linux only)").color(Color32::from_gray(100)));
+                                                });
+
+                                                // KCanNet — always shown; dot reflects reachability
+                                                let (d, c) = avail_dot(form.adapter_avail.kcannet);
+                                                let is_sel = matches!(form.adapter_kind, AdapterKind::KCanNet { .. });
+                                                if ui.selectable_label(is_sel, egui::RichText::new(format!("{d} KCanNet")).color(c)).clicked() {
+                                                    form.adapter_kind = AdapterKind::KCanNet { uri: form.kcannet_uri.clone() };
+                                                    form.last_probe = None;
+                                                    form.adapter_notice = None;
+                                                    form.original_adapter_kind = None;
+                                                }
+                                            });
+                                    }
                                     ui.end_row();
 
                                     // ── KCAN device picker (only when KCAN selected) ──
