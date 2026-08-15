@@ -1075,7 +1075,17 @@ fn render_connect(
             // Derive dongle_connected for the currently selected adapter.
             form.dongle_connected = selected_is_available(&form.adapter_kind, &form.adapter_avail);
             if !form.dongle_connected {
-                form.dongle_connected = try_fallback_adapter(form);
+                // A locally-valid K1 URI is enough to enable Connect; don't block on probe.
+                if matches!(form.adapter_kind, AdapterKind::KCanNet { .. })
+                    && matches!(
+                        validate_k1_uri(&form.kcannet_uri),
+                        K1Validation::ValidRelay | K1Validation::ValidLan
+                    )
+                {
+                    form.dongle_connected = true;
+                } else {
+                    form.dongle_connected = try_fallback_adapter(form);
+                }
             } else {
                 form.adapter_notice = None;
             }
@@ -1287,90 +1297,90 @@ fn render_connect(
                                 .show(ui, |ui| {
                                     // ── Adapter type selector ─────────────────────
                                     ui.label("Adapter:");
-                                    ui.horizontal(|ui| {
-                                        let dot = |avail: bool| -> (&'static str, Color32) {
+                                    {
+                                        let avail_dot = |avail: bool| -> (&'static str, Color32) {
                                             if avail {
                                                 ("●", Color32::from_rgb(80, 200, 80))
                                             } else {
                                                 ("○", Color32::from_gray(100))
                                             }
                                         };
-
-                                        // Summit
-                                        let (d, c) = dot(form.adapter_avail.summit);
-                                        ui.colored_label(c, d);
-                                        let is_summit = matches!(form.adapter_kind, AdapterKind::Summit);
-                                        if ui.radio(is_summit, "Summit").clicked() {
-                                            form.adapter_kind = AdapterKind::Summit;
-                                            form.last_probe = None;
-                                            form.adapter_notice = None;
-                                            form.original_adapter_kind = None;
-                                        }
-
-                                        // KCAN Dongle
-                                        let (d, c) = dot(form.adapter_avail.kcan);
-                                        ui.colored_label(c, d);
-                                        let is_kcan = matches!(form.adapter_kind, AdapterKind::KCan { .. });
-                                        let kcan_label = if form.adapter_avail.kcan
-                                            && form.adapter_avail.kcan_devices.len() == 1
-                                        {
-                                            format!("KCAN Dongle \u{2605} [{}]", form.adapter_avail.kcan_devices[0].0)
-                                        } else {
-                                            "KCAN Dongle \u{2605}".into()
+                                        let sel_avail = selected_is_available(&form.adapter_kind, &form.adapter_avail);
+                                        let (sel_d, _) = avail_dot(sel_avail);
+                                        let sel_name = match &form.adapter_kind {
+                                            AdapterKind::KCan { .. } => "KCAN Dongle \u{2605}".to_string(),
+                                            _ => adapter_display_name(&form.adapter_kind).to_string(),
                                         };
-                                        if ui.radio(is_kcan, kcan_label).clicked() {
-                                            let serial = if form.kcan_serial.is_empty() { None } else { Some(form.kcan_serial.clone()) };
-                                            form.adapter_kind = AdapterKind::KCan { serial };
-                                            form.last_probe = None;
-                                            form.adapter_notice = None;
-                                            form.original_adapter_kind = None;
-                                        }
+                                        egui::ComboBox::from_id_salt("adapter_combo")
+                                            .selected_text(format!("{sel_d} {sel_name}"))
+                                            .show_ui(ui, |ui| {
+                                                sniffer_egui::apply_compact_text(ui);
 
-                                        // Apex
-                                        let (d, c) = dot(form.adapter_avail.apex);
-                                        ui.colored_label(c, d);
-                                        let is_apex = matches!(form.adapter_kind, AdapterKind::Apex { .. });
-                                        if ui.radio(is_apex, "Apex").clicked() {
-                                            form.adapter_kind = AdapterKind::Apex { serial: None };
-                                            form.last_probe = None;
-                                            form.adapter_notice = None;
-                                            form.original_adapter_kind = None;
-                                        }
-
-                                        // SocketCAN — Linux only
-                                        #[cfg(target_os = "linux")]
-                                        {
-                                            let (d, c) = dot(form.adapter_avail.socketcan);
-                                            ui.colored_label(c, d);
-                                            let is_sc = matches!(form.adapter_kind, AdapterKind::SocketCan);
-                                            if ui.radio(is_sc, "SocketCAN").clicked() {
-                                                form.adapter_kind = AdapterKind::SocketCan;
-                                                if form.port.is_empty() || form.port.trim().chars().all(|c| c.is_ascii_digit()) {
-                                                    form.port = "can0".into();
+                                                // Summit — only when detected
+                                                if form.adapter_avail.summit {
+                                                    let is_sel = matches!(form.adapter_kind, AdapterKind::Summit);
+                                                    if ui.selectable_label(is_sel, egui::RichText::new("● Summit").color(Color32::from_rgb(80, 200, 80))).clicked() {
+                                                        form.adapter_kind = AdapterKind::Summit;
+                                                        form.last_probe = None;
+                                                        form.adapter_notice = None;
+                                                        form.original_adapter_kind = None;
+                                                    }
                                                 }
-                                                form.last_probe = None;
-                                                form.adapter_notice = None;
-                                                form.original_adapter_kind = None;
-                                            }
-                                        }
-                                        #[cfg(not(target_os = "linux"))]
-                                        {
-                                            // Greyed out on non-Linux with permanent ○
-                                            ui.colored_label(Color32::from_gray(60), "○");
-                                            ui.add_enabled(false, egui::RadioButton::new(false, egui::RichText::new("SocketCAN").color(Color32::from_gray(60))));
-                                        }
 
-                                        // KCanNet
-                                        let (d, c) = dot(form.adapter_avail.kcannet);
-                                        ui.colored_label(c, d);
-                                        let is_kcannet = matches!(form.adapter_kind, AdapterKind::KCanNet { .. });
-                                        if ui.radio(is_kcannet, "KCanNet").clicked() {
-                                            form.adapter_kind = AdapterKind::KCanNet { uri: form.kcannet_uri.clone() };
-                                            form.last_probe = None;
-                                            form.adapter_notice = None;
-                                            form.original_adapter_kind = None;
-                                        }
-                                    });
+                                                // KCAN Dongle — only when detected
+                                                if form.adapter_avail.kcan {
+                                                    let is_sel = matches!(form.adapter_kind, AdapterKind::KCan { .. });
+                                                    let kcan_label = if form.adapter_avail.kcan_devices.len() == 1 {
+                                                        format!("● KCAN Dongle \u{2605} [{}]", form.adapter_avail.kcan_devices[0].0)
+                                                    } else {
+                                                        "● KCAN Dongle \u{2605}".to_string()
+                                                    };
+                                                    if ui.selectable_label(is_sel, egui::RichText::new(kcan_label).color(Color32::from_rgb(80, 200, 80))).clicked() {
+                                                        let serial = if form.kcan_serial.is_empty() { None } else { Some(form.kcan_serial.clone()) };
+                                                        form.adapter_kind = AdapterKind::KCan { serial };
+                                                        form.last_probe = None;
+                                                        form.adapter_notice = None;
+                                                        form.original_adapter_kind = None;
+                                                    }
+                                                }
+
+                                                // Apex — only when detected
+                                                if form.adapter_avail.apex {
+                                                    let is_sel = matches!(form.adapter_kind, AdapterKind::Apex { .. });
+                                                    if ui.selectable_label(is_sel, egui::RichText::new("● Apex").color(Color32::from_rgb(80, 200, 80))).clicked() {
+                                                        form.adapter_kind = AdapterKind::Apex { serial: None };
+                                                        form.last_probe = None;
+                                                        form.adapter_notice = None;
+                                                        form.original_adapter_kind = None;
+                                                    }
+                                                }
+
+                                                // SocketCAN — Linux only, only when available
+                                                #[cfg(target_os = "linux")]
+                                                if form.adapter_avail.socketcan {
+                                                    let is_sel = matches!(form.adapter_kind, AdapterKind::SocketCan);
+                                                    if ui.selectable_label(is_sel, egui::RichText::new("● SocketCAN").color(Color32::from_rgb(80, 200, 80))).clicked() {
+                                                        form.adapter_kind = AdapterKind::SocketCan;
+                                                        if form.port.is_empty() || form.port.trim().chars().all(|c| c.is_ascii_digit()) {
+                                                            form.port = "can0".into();
+                                                        }
+                                                        form.last_probe = None;
+                                                        form.adapter_notice = None;
+                                                        form.original_adapter_kind = None;
+                                                    }
+                                                }
+
+                                                // KCanNet — always shown; dot reflects reachability
+                                                let (d, c) = avail_dot(form.adapter_avail.kcannet);
+                                                let is_sel = matches!(form.adapter_kind, AdapterKind::KCanNet { .. });
+                                                if ui.selectable_label(is_sel, egui::RichText::new(format!("{d} KCanNet")).color(c)).clicked() {
+                                                    form.adapter_kind = AdapterKind::KCanNet { uri: form.kcannet_uri.clone() };
+                                                    form.last_probe = None;
+                                                    form.adapter_notice = None;
+                                                    form.original_adapter_kind = None;
+                                                }
+                                            });
+                                    }
                                     ui.end_row();
 
                                     // ── KCAN device picker (only when KCAN selected) ──
