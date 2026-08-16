@@ -290,14 +290,18 @@ fn main() {
 
     // ── Adapter kind ──────────────────────────────────────────────────────────
     let adapter_kind = match cli.adapter.to_lowercase().as_str() {
-        "summit" => AdapterKind::Summit,
+        "summit" => AdapterKind::Summit {
+            channel: cli.port.clone(),
+        },
         "kcan" => AdapterKind::KCan {
             serial: cli.kcan_serial.clone(),
         },
         // Apex has no dedicated serial flag; bbd uses the first device found.
         "apex" => AdapterKind::Apex { serial: None },
         // SocketCAN interface name is passed via --port (e.g. `--port can0`).
-        "socketcan" => AdapterKind::SocketCan,
+        "socketcan" => AdapterKind::SocketCan {
+            iface: cli.port.clone(),
+        },
         other => {
             eprintln!(
                 "Error: unknown adapter {other:?}. Use 'summit', 'kcan', 'apex', or 'socketcan'."
@@ -321,7 +325,7 @@ fn main() {
     println!("--------------------------------------------------------------------");
 
     // ── Open adapter ──────────────────────────────────────────────────────────
-    let adapter = match open_adapter(&adapter_kind, &cli.port, cli.baud, false) {
+    let adapter = match open_adapter(&adapter_kind, cli.baud, false) {
         Ok(a) => {
             println!("Adapter opened: {}", a.name());
             a

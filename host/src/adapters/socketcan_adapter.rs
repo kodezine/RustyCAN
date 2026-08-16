@@ -15,6 +15,7 @@
 //! Then set `"adapter_kind": "SocketCan"` and `"port": "can0"` in your config.
 
 use std::io::ErrorKind;
+use std::path::PathBuf;
 use std::time::Duration;
 
 use embedded_can::Frame as EmbeddedFrame;
@@ -23,9 +24,73 @@ use socketcan::{CanDataFrame, CanRemoteFrame, CanSocket, Socket, SocketOptions};
 
 use super::{AdapterError, CanAdapter, ReceivedFrame};
 
+// ── PID lockfile (Issue E) ────────────────────────────────────────────────────
+
+/// Holds an exclusive PID lockfile for a SocketCAN interface.
+/// Deleted automatically on drop so reboots and clean exits always release it.
+struct SocketCanLock {
+    path: PathBuf,
+}
+
+impl SocketCanLock {
+    /// Acquire the lock for `iface`, failing with `AdapterError::InUse` if
+    /// another live process already holds it.
+    fn acquire(iface: &str) -> Result<Self, AdapterError> {
+        use std::io::Write as _;
+        let path = PathBuf::from(format!("/tmp/rustycan-{iface}.pid"));
+
+        // Two attempts: initial create, and one retry after removing a stale file.
+        for attempt in 0..=1 {
+            match std::fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(&path)
+            {
+                Ok(mut f) => {
+                    let _ = write!(f, "{}", std::process::id());
+                    return Ok(Self { path });
+                }
+                Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+                    // Check whether the holder is still alive.
+                    if let Ok(contents) = std::fs::read_to_string(&path) {
+                        if let Ok(pid) = contents.trim().parse::<u32>() {
+                            if std::path::Path::new(&format!("/proc/{pid}")).exists() {
+                                return Err(AdapterError::InUse(format!(
+                                    "SocketCAN interface '{iface}' is already held by PID {pid}.\n\
+                                     Stop that RustyCAN instance before starting a new one."
+                                )));
+                            }
+                        }
+                    }
+                    if attempt == 0 {
+                        // Stale lockfile — remove and retry once.
+                        let _ = std::fs::remove_file(&path);
+                    } else {
+                        // Second AlreadyExists: another instance won the race.
+                        return Err(AdapterError::InUse(format!(
+                            "SocketCAN interface '{iface}': lockfile contention."
+                        )));
+                    }
+                }
+                Err(e) => return Err(AdapterError::Io(format!("lockfile: {e}"))),
+            }
+        }
+        unreachable!()
+    }
+}
+
+impl Drop for SocketCanLock {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.path);
+    }
+}
+
 pub struct SocketCanAdapter {
     socket: CanSocket,
     name: String,
+    // Keeps the lockfile alive for the duration of the session.
+    #[cfg(target_os = "linux")]
+    _lock: SocketCanLock,
 }
 
 impl SocketCanAdapter {
@@ -104,6 +169,10 @@ impl SocketCanAdapter {
         }
 
         // ── Open the socket ───────────────────────────────────────────────
+        // Acquire the lockfile before opening the socket (Issue E).
+        #[cfg(target_os = "linux")]
+        let lock = SocketCanLock::acquire(interface)?;
+
         let socket = CanSocket::open(interface).map_err(|e| AdapterError::Io(e.to_string()))?;
 
         // Do not receive echoes of frames we sent ourselves.
@@ -112,7 +181,12 @@ impl SocketCanAdapter {
             .map_err(|e| AdapterError::Io(e.to_string()))?;
 
         let name = format!("SocketCAN ({interface})");
-        Ok(Self { socket, name })
+        Ok(Self {
+            socket,
+            name,
+            #[cfg(target_os = "linux")]
+            _lock: lock,
+        })
     }
 
     /// List all SocketCAN interfaces currently present on the system.

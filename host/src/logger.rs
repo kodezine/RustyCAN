@@ -199,15 +199,25 @@ impl EventLogger {
     /// Records the adapter name, baud rate, and host workstation metadata so
     /// every log file is self-describing. On macOS the metadata is gathered
     /// from `sw_vers` and `sysctl`; degrades gracefully on other platforms.
-    pub fn log_session_start(&mut self, ts: DateTime<Utc>, adapter_name: &str, baud: u32) {
+    pub fn log_session_start(
+        &mut self,
+        ts: DateTime<Utc>,
+        adapter_name: &str,
+        baud: u32,
+        serial: Option<&str>,
+        firmware: Option<(u8, u8, u8)>,
+    ) {
         let host = collect_host_info();
         let ts_str = ts.to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
+        let fw_str = firmware.map(|(maj, min, pat)| format!("{maj}.{min}.{pat}"));
         let entry = json!({
-            "ts":      ts_str,
-            "type":    "session_start",
-            "adapter": adapter_name,
-            "baud":    baud,
-            "host":    host,
+            "ts":       ts_str,
+            "type":     "session_start",
+            "adapter":  adapter_name,
+            "baud":     baud,
+            "serial":   serial,
+            "firmware": fw_str.as_deref(),
+            "host":     host,
         });
         // Plain-text header line — written directly, not via write_text_line
         // which expects a CAN-frame-formatted row.
@@ -218,9 +228,11 @@ impl EventLogger {
                 .to_string();
             let os = host["os"].as_str().unwrap_or("-");
             let model = host["model"].as_str().unwrap_or("-");
+            let ser = serial.unwrap_or("-");
+            let fw = fw_str.as_deref().unwrap_or("-");
             let _ = writeln!(
                 w,
-                "[{ts_local}][session_start    ][---------] adapter=\"{adapter_name}\" baud={baud} os=\"{os}\" model=\"{model}\""
+                "[{ts_local}][session_start    ][---------] adapter=\"{adapter_name}\" serial={ser} fw={fw} baud={baud} os=\"{os}\" model=\"{model}\""
             );
         }
         self.log(entry);
@@ -585,27 +597,34 @@ impl EventLogger {
 }
 
 /// Add a timestamp to a file path before the extension.
-/// Example: "log.jsonl" -> "log_20263003130458.jsonl"
+/// Example: "log.jsonl" -> "log_20263003130458_12345.jsonl"
 ///
 /// This function is public so `session::start` can use it to report the actual
 /// filename that was created.
 pub fn add_timestamp_to_path(path: &Path) -> PathBuf {
     let timestamp = Local::now().format("%Y%m%d%H%M%S").to_string();
+    let pid = std::process::id();
 
     if let Some(stem) = path.file_stem() {
         let stem_str = stem.to_string_lossy();
         if let Some(ext) = path.extension() {
             // Has extension: insert timestamp before extension
-            let new_name = format!("{}_{}.{}", stem_str, timestamp, ext.to_string_lossy());
+            let new_name = format!(
+                "{}_{}_{}.{}",
+                stem_str,
+                timestamp,
+                pid,
+                ext.to_string_lossy()
+            );
             path.with_file_name(new_name)
         } else {
             // No extension: append timestamp
-            let new_name = format!("{}_{}", stem_str, timestamp);
+            let new_name = format!("{}_{}_{}", stem_str, timestamp, pid);
             path.with_file_name(new_name)
         }
     } else {
         // No filename component, just append timestamp (edge case)
-        path.with_file_name(timestamp)
+        path.with_file_name(format!("{}_{}", timestamp, pid))
     }
 }
 

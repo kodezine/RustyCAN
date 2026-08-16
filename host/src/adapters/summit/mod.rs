@@ -56,7 +56,9 @@ impl SummitAdapter {
                 return present;
             }
         }
-        let present = probe_adapter_kind(&AdapterKind::Summit, "", 0);
+        let present = probe_adapter_kind(&AdapterKind::Summit {
+            channel: String::new(),
+        });
         self.last_probe = Some((Instant::now(), present));
         present
     }

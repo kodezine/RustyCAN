@@ -45,12 +45,13 @@
 
 use std::convert::Infallible;
 use std::net::SocketAddr;
+use std::sync::Arc;
 
 use axum::http::header;
 use axum::response::sse::{Event, KeepAlive, Sse};
 use axum::response::{Html, IntoResponse};
 use axum::routing::get;
-use axum::Router;
+use axum::{Extension, Json, Router};
 use tokio::sync::broadcast;
 use tokio_stream::wrappers::BroadcastStream;
 use tokio_stream::StreamExt as _;
@@ -74,20 +75,42 @@ const MESLO_FONT: &[u8] = include_bytes!("../assets/MesloLGSNF-Regular.ttf");
 /// are silently dropped (lagged subscribers do not block the sender).
 const BROADCAST_CAPACITY: usize = 128;
 
+/// Session identity served at `GET /info` for late-joining dashboard tabs.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct SessionInfo {
+    pub adapter_name: String,
+    pub baud: u32,
+    pub serial: Option<String>,
+    pub firmware: Option<String>,
+    pub started_at_utc: String,
+}
+
 // ─── Public API ───────────────────────────────────────────────────────────────
 
 /// Handle to the running SSE HTTP server.
 ///
 /// Clone `tx` and pass it to [`EventLogger::attach_sse`] to wire up live
-/// streaming.  The server runs for the lifetime of this struct (dropping it
-/// does not stop the background thread — it runs until the process exits, which
-/// is fine for a desktop app with one lifetime).
+/// streaming.  Call [`SseServer::set_session_info`] after a session opens so
+/// late-joining browser tabs can get current session state from `GET /info`.
+/// The server runs for the lifetime of this struct (dropping it does not stop
+/// the background thread — it runs until the process exits).
 pub struct SseServer {
     /// Broadcast sender — clone this to publish events from the logger.
     pub tx: broadcast::Sender<String>,
+    session_info: Arc<std::sync::Mutex<Option<SessionInfo>>>,
 }
 
 impl SseServer {
+    /// Populate the `/info` endpoint once a session has started.
+    pub fn set_session_info(&self, info: SessionInfo) {
+        *self.session_info.lock().unwrap() = Some(info);
+    }
+
+    /// Clear session info when the session ends (optional — `/info` returns 204).
+    pub fn clear_session_info(&self) {
+        *self.session_info.lock().unwrap() = None;
+    }
+
     /// Spawn the HTTP server on `127.0.0.1:{port}` in a background thread.
     ///
     /// Returns immediately; the server runs concurrently on a dedicated tokio
@@ -98,6 +121,9 @@ impl SseServer {
     pub fn start(port: u16) -> Self {
         let (tx, _) = broadcast::channel(BROADCAST_CAPACITY);
         let tx_clone = tx.clone();
+        let session_info: Arc<std::sync::Mutex<Option<SessionInfo>>> =
+            Arc::new(std::sync::Mutex::new(None));
+        let info = session_info.clone();
 
         // ── Graceful takeover: shut down any existing instance on this port ──
         // If another RustyCAN is already running, send it /shutdown so it exits
@@ -137,7 +163,9 @@ impl SseServer {
                         .route("/logo.png", get(serve_logo))
                         .route("/font/meslo.ttf", get(serve_font))
                         .route("/events", get(move || sse_handler(tx_clone.clone())))
-                        .route("/shutdown", get(handle_shutdown));
+                        .route("/info", get(serve_info))
+                        .route("/shutdown", get(handle_shutdown))
+                        .layer(Extension(info));
 
                     match tokio::net::TcpListener::bind(addr).await {
                         Ok(listener) => {
@@ -154,7 +182,7 @@ impl SseServer {
             })
             .expect("failed to spawn HTTP server thread");
 
-        SseServer { tx }
+        SseServer { tx, session_info }
     }
 }
 
@@ -202,6 +230,17 @@ async fn sse_handler(
     });
 
     Sse::new(stream).keep_alive(KeepAlive::default())
+}
+
+/// Serve session identity for late-joining dashboard browser tabs.
+/// Returns 204 No Content when no session is currently active.
+async fn serve_info(
+    Extension(info): Extension<Arc<std::sync::Mutex<Option<SessionInfo>>>>,
+) -> impl IntoResponse {
+    match info.lock().unwrap().clone() {
+        Some(si) => Json(si).into_response(),
+        None => axum::http::StatusCode::NO_CONTENT.into_response(),
+    }
 }
 
 /// Shut down this process after sending the HTTP response.
