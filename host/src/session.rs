@@ -343,13 +343,17 @@ pub type SessionResult = Result<
 ///
 /// Opens the adapter, immediately drops it, and returns `true` on success.
 /// Intended for the Connect-screen dongle-detection poll.
-pub fn probe_adapter(port: &str, baud: u32) -> bool {
-    probe_adapter_kind(&AdapterKind::Summit, port, baud)
+pub fn probe_adapter(channel: &str, baud: u32) -> bool {
+    let _ = baud;
+    probe_adapter_kind(&AdapterKind::Summit {
+        channel: channel.to_string(),
+    })
 }
 
 /// Probe a specific adapter kind.
-pub fn probe_adapter_with_kind(kind: &AdapterKind, port: &str, baud: u32) -> bool {
-    probe_adapter_kind(kind, port, baud)
+pub fn probe_adapter_with_kind(kind: &AdapterKind, baud: u32) -> bool {
+    let _ = baud;
+    probe_adapter_kind(kind)
 }
 
 /// Returns `(rx, cmd_tx, node_labels)` on success, or a human-readable error string.
@@ -524,7 +528,7 @@ pub fn start(config: SessionConfig) -> SessionResult {
     let adapter_kind = config.adapter_kind.clone();
 
     thread::spawn(move || {
-        let adapter = match open_adapter(&adapter_kind, &port, baud, listen_only) {
+        let adapter = match open_adapter(&adapter_kind, baud, listen_only) {
             Ok(a) => a,
             Err(e) => {
                 // Send the error to the GUI, then exit the thread cleanly.
@@ -582,7 +586,7 @@ pub fn start(config: SessionConfig) -> SessionResult {
                 return;
             }
 
-            match open_adapter(&adapter_kind, &port, baud, listen_only) {
+            match open_adapter(&adapter_kind, baud, listen_only) {
                 Ok(new_adapter) => {
                     eprintln!("KCAN: dongle reconnected — resuming session");
                     let _ = tx.send(CanEvent::AdapterReconnected);
@@ -1091,7 +1095,13 @@ fn recv_loop(
     baud: u32,
 ) -> bool {
     // Write session header — adapter identity and workstation metadata.
-    logger.log_session_start(chrono::Utc::now(), adapter.name(), baud);
+    logger.log_session_start(
+        chrono::Utc::now(),
+        adapter.name(),
+        baud,
+        adapter.serial(),
+        adapter.firmware_version(),
+    );
 
     // ── Per-node in-flight SDO tracking ──────────────────────────────────────
     /// Internal state for the active SDO transfer on one node.

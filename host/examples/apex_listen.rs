@@ -15,7 +15,7 @@ use rustycan::adapters::{open_adapter, AdapterKind};
 fn main() {
     let baud = 250_000;
     println!("Opening Apex adapter @ {baud} bps (boots from bootloader if needed)...");
-    let mut adapter = match open_adapter(&AdapterKind::Apex { serial: None }, "", baud, false) {
+    let mut adapter = match open_adapter(&AdapterKind::Apex { serial: None }, baud, false) {
         Ok(a) => a,
         Err(e) => {
             eprintln!("open failed: {e}");

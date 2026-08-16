@@ -302,7 +302,7 @@ impl eframe::App for RustyCanApp {
                     ui,
                     form,
                     &self.logo,
-                    self.sse_server.tx.clone(),
+                    &self.sse_server,
                     self.http_port,
                     self.dfu_path.clone(),
                     self.app_update.clone(),
@@ -572,6 +572,21 @@ impl PersistedConfig {
         let json = std::fs::read_to_string(path).ok()?;
         let mut config: PersistedConfig = serde_json::from_str(&json).ok()?;
 
+        // Backward compat: old unit-variant configs store channel/iface in sibling `port`
+        match &config.adapter_kind {
+            AdapterKind::Summit { channel } if channel.is_empty() => {
+                config.adapter_kind = AdapterKind::Summit {
+                    channel: config.port.clone(),
+                };
+            }
+            AdapterKind::SocketCan { iface } if iface.is_empty() => {
+                config.adapter_kind = AdapterKind::SocketCan {
+                    iface: config.port.clone(),
+                };
+            }
+            _ => {}
+        }
+
         // Filter out nodes with non-existent EDS files
         config.nodes.retain(|node| {
             if node.eds_path.trim().is_empty() {
@@ -682,7 +697,9 @@ impl Default for ConnectForm {
                 adapter_avail: AdapterAvailability::default(),
                 listen_only: false,
                 text_log: false,
-                adapter_kind: AdapterKind::Summit,
+                adapter_kind: AdapterKind::Summit {
+                    channel: "1".into(),
+                },
                 kcan_devices: vec![],
                 kcan_serial: String::new(),
                 kcannet_uri: String::new(),
@@ -758,6 +775,15 @@ impl ConnectForm {
                 ));
             }
         }
+        let adapter_kind = match self.adapter_kind.clone() {
+            AdapterKind::Summit { .. } => AdapterKind::Summit {
+                channel: self.port.trim().to_string(),
+            },
+            AdapterKind::SocketCan { .. } => AdapterKind::SocketCan {
+                iface: self.port.trim().to_string(),
+            },
+            other => other,
+        };
         let config = SessionConfig {
             port: self.port.trim().to_string(),
             baud,
@@ -770,7 +796,7 @@ impl ConnectForm {
             block_subblock_timeout_ms: 500,
             block_end_timeout_ms: 1000,
             block_size: 64,
-            adapter_kind: self.adapter_kind.clone(),
+            adapter_kind,
             dbc_paths: self
                 .dbc_files
                 .iter()
@@ -893,9 +919,9 @@ struct AdapterAvailability {
 /// Return a human-readable display name for an adapter kind.
 fn adapter_display_name(kind: &AdapterKind) -> &'static str {
     match kind {
-        AdapterKind::Summit => "Summit",
+        AdapterKind::Summit { .. } => "Summit",
         AdapterKind::KCan { .. } => "KCAN Dongle",
-        AdapterKind::SocketCan => "SocketCAN",
+        AdapterKind::SocketCan { .. } => "SocketCAN",
         AdapterKind::Apex { .. } => "Apex",
         AdapterKind::KCanNet { .. } => "KCanNet",
     }
@@ -904,7 +930,7 @@ fn adapter_display_name(kind: &AdapterKind) -> &'static str {
 /// Returns true if the currently selected adapter is available in the probe result.
 fn selected_is_available(kind: &AdapterKind, avail: &AdapterAvailability) -> bool {
     match kind {
-        AdapterKind::Summit => avail.summit,
+        AdapterKind::Summit { .. } => avail.summit,
         AdapterKind::KCan { serial } => match serial {
             None => avail.kcan,
             Some(s) => avail
@@ -913,7 +939,7 @@ fn selected_is_available(kind: &AdapterKind, avail: &AdapterAvailability) -> boo
                 .any(|(dev_serial, _)| dev_serial == s),
         },
         AdapterKind::Apex { .. } => avail.apex,
-        AdapterKind::SocketCan => avail.socketcan,
+        AdapterKind::SocketCan { .. } => avail.socketcan,
         AdapterKind::KCanNet { .. } => avail.kcannet,
     }
 }
@@ -928,9 +954,11 @@ fn try_fallback_adapter(form: &mut ConnectForm) -> bool {
 
     // Try other adapter types using already-probed availability — no extra network call.
     let fallbacks: Vec<AdapterKind> = match &form.adapter_kind {
-        AdapterKind::Summit => vec![AdapterKind::KCan { serial: None }],
-        AdapterKind::KCan { .. } => vec![AdapterKind::Summit],
-        AdapterKind::SocketCan => vec![],
+        AdapterKind::Summit { .. } => vec![AdapterKind::KCan { serial: None }],
+        AdapterKind::KCan { .. } => vec![AdapterKind::Summit {
+            channel: form.port.clone(),
+        }],
+        AdapterKind::SocketCan { .. } => vec![],
         AdapterKind::Apex { .. } => vec![],
         AdapterKind::KCanNet { .. } => vec![],
     };
@@ -1007,7 +1035,7 @@ fn render_connect(
     ui: &mut egui::Ui,
     form: &mut ConnectForm,
     logo: &egui::TextureHandle,
-    sse_tx: tokio::sync::broadcast::Sender<String>,
+    sse_server: &SseServer,
     http_port: u16,
     dfu_path: Option<PathBuf>,
     app_update: Arc<Mutex<Option<crate::updater::AppUpdateRelease>>>,
@@ -1113,22 +1141,27 @@ fn render_connect(
         std::thread::spawn(move || {
             let kcan_devices = kcan::KCanAdapter::list_devices();
             let avail = AdapterAvailability {
-                summit: session::probe_adapter_with_kind(&AdapterKind::Summit, &port, baud),
-                kcan: !kcan_devices.is_empty(),
-                kcan_devices,
-                apex: session::probe_adapter_with_kind(
-                    &AdapterKind::Apex { serial: None },
-                    &port,
+                summit: session::probe_adapter_with_kind(
+                    &AdapterKind::Summit {
+                        channel: port.clone(),
+                    },
                     baud,
                 ),
+                kcan: !kcan_devices.is_empty(),
+                kcan_devices,
+                apex: session::probe_adapter_with_kind(&AdapterKind::Apex { serial: None }, baud),
                 #[cfg(target_os = "linux")]
-                socketcan: session::probe_adapter_with_kind(&AdapterKind::SocketCan, &port, baud),
+                socketcan: session::probe_adapter_with_kind(
+                    &AdapterKind::SocketCan {
+                        iface: port.clone(),
+                    },
+                    baud,
+                ),
                 #[cfg(not(target_os = "linux"))]
                 socketcan: false,
                 kcannet: !kcannet_uri.is_empty()
                     && session::probe_adapter_with_kind(
                         &AdapterKind::KCanNet { uri: kcannet_uri },
-                        &port,
                         baud,
                     ),
             };
@@ -1206,9 +1239,26 @@ fn render_connect(
                     // adapter comes back up.  On an explicit Disconnect the user
                     // returns to a fresh ConnectForm with auto_connect=false, so
                     // there is no reconnect loop after a deliberate disconnect.
-                    match form.try_connect(sse_tx, dfu_path.clone(), app_update.clone()) {
+                    match form.try_connect(
+                        sse_server.tx.clone(),
+                        dfu_path.clone(),
+                        app_update.clone(),
+                    ) {
                         Ok(view) => {
                             form.auto_connect = false;
+                            let baud = form.baud.trim().parse().unwrap_or(250_000);
+                            let serial = if form.kcan_serial.is_empty() {
+                                None
+                            } else {
+                                Some(form.kcan_serial.clone())
+                            };
+                            sse_server.set_session_info(crate::http_server::SessionInfo {
+                                adapter_name: adapter_display_name(&form.adapter_kind).to_string(),
+                                baud,
+                                serial,
+                                firmware: None,
+                                started_at_utc: chrono::Utc::now().to_rfc3339(),
+                            });
                             transition = Some(Screen::Monitor(Box::new(view)));
                         }
                         Err(e) => {
@@ -1325,9 +1375,9 @@ fn render_connect(
                                                 // Summit — always shown; dot reflects availability
                                                 {
                                                     let (d, c) = avail_dot(form.adapter_avail.summit);
-                                                    let is_sel = matches!(form.adapter_kind, AdapterKind::Summit);
+                                                    let is_sel = matches!(form.adapter_kind, AdapterKind::Summit { .. });
                                                     if ui.selectable_label(is_sel, egui::RichText::new(format!("{d} Summit")).color(c)).clicked() {
-                                                        form.adapter_kind = AdapterKind::Summit;
+                                                        form.adapter_kind = AdapterKind::Summit { channel: form.port.clone() };
                                                         form.last_probe = None;
                                                         form.adapter_notice = None;
                                                         form.original_adapter_kind = None;
@@ -1368,12 +1418,12 @@ fn render_connect(
                                                 #[cfg(target_os = "linux")]
                                                 {
                                                     let (d, c) = avail_dot(form.adapter_avail.socketcan);
-                                                    let is_sel = matches!(form.adapter_kind, AdapterKind::SocketCan);
+                                                    let is_sel = matches!(form.adapter_kind, AdapterKind::SocketCan { .. });
                                                     if ui.selectable_label(is_sel, egui::RichText::new(format!("{d} SocketCAN")).color(c)).clicked() {
-                                                        form.adapter_kind = AdapterKind::SocketCan;
                                                         if form.port.is_empty() || form.port.trim().chars().all(|c| c.is_ascii_digit()) {
                                                             form.port = "can0".into();
                                                         }
+                                                        form.adapter_kind = AdapterKind::SocketCan { iface: form.port.clone() };
                                                         form.last_probe = None;
                                                         form.adapter_notice = None;
                                                         form.original_adapter_kind = None;
@@ -1381,7 +1431,7 @@ fn render_connect(
                                                 }
                                                 #[cfg(not(target_os = "linux"))]
                                                 ui.add_enabled_ui(false, |ui| {
-                                                    let is_sel = matches!(form.adapter_kind, AdapterKind::SocketCan);
+                                                    let is_sel = matches!(form.adapter_kind, AdapterKind::SocketCan { .. });
                                                     let _ = ui.selectable_label(is_sel, egui::RichText::new("○ SocketCAN (Linux only)").color(Color32::from_gray(100)));
                                                 });
 
@@ -1543,8 +1593,8 @@ fn render_connect(
                                     // Port row — shown for Summit (channel number) and SocketCAN (iface name)
                                     let (show_port, port_label, port_hint) = match form.adapter_kind
                                     {
-                                        AdapterKind::Summit => (true, "Port:", "1"),
-                                        AdapterKind::SocketCan => (true, "Interface:", "can0"),
+                                        AdapterKind::Summit { .. } => (true, "Port:", "1"),
+                                        AdapterKind::SocketCan { .. } => (true, "Interface:", "can0"),
                                         _ => (false, "", ""),
                                     };
                                     if show_port {

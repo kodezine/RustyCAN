@@ -40,12 +40,14 @@ pub struct KCanAdapter {
     reader_thread: Option<std::thread::JoinHandle<()>>,
     pub fw_version: (u8, u8, u8),
     name: String,
+    serial_str: String,
     tx_seq: u16,
 }
 
 impl KCanAdapter {
     pub fn open(serial: Option<&str>, baud: u32, listen_only: bool) -> Result<Self, AdapterError> {
         let dev_info = find_device_info(serial)?;
+        let serial_str = dev_info.serial_number().unwrap_or("").to_string();
         let device = dev_info
             .open()
             .wait()
@@ -184,6 +186,7 @@ impl KCanAdapter {
             reader_thread: Some(reader_thread),
             fw_version: (fw_maj, fw_min, fw_pat),
             name,
+            serial_str,
             tx_seq: 0,
         })
     }
@@ -330,6 +333,14 @@ impl CanAdapter for KCanAdapter {
 
     fn firmware_version(&self) -> Option<(u8, u8, u8)> {
         Some(self.fw_version)
+    }
+
+    fn serial(&self) -> Option<&str> {
+        if self.serial_str.is_empty() {
+            None
+        } else {
+            Some(&self.serial_str)
+        }
     }
 
     fn echoes_tx(&self) -> bool {

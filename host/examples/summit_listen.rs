@@ -13,7 +13,13 @@ use rustycan::adapters::{open_adapter, AdapterKind};
 fn main() {
     let baud = 250_000;
     println!("Opening Summit adapter (channel 1) @ {baud} bps, listen-only...");
-    let mut adapter = match open_adapter(&AdapterKind::Summit, "1", baud, true) {
+    let mut adapter = match open_adapter(
+        &AdapterKind::Summit {
+            channel: "1".into(),
+        },
+        baud,
+        true,
+    ) {
         Ok(a) => a,
         Err(e) => {
             eprintln!("open failed: {e}");

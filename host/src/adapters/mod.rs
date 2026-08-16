@@ -110,6 +110,8 @@ pub enum AdapterError {
     /// The USB device was physically disconnected.  The session may attempt
     /// to reconnect rather than terminating.
     Disconnected,
+    /// Another process already holds an exclusive claim on this adapter.
+    InUse(String),
 }
 
 impl fmt::Display for AdapterError {
@@ -122,6 +124,7 @@ impl fmt::Display for AdapterError {
             Self::Protocol(s) => write!(f, "protocol error: {s}"),
             Self::Fatal(s) => write!(f, "fatal error: {s}"),
             Self::Disconnected => write!(f, "USB device disconnected"),
+            Self::InUse(s) => write!(f, "adapter already in use: {s}"),
         }
     }
 }
@@ -129,9 +132,8 @@ impl fmt::Display for AdapterError {
 /// Selects which adapter backend to use when opening a session.
 ///
 /// Each variant carries **all identity fields needed to open the adapter**.
-/// The top-level `SessionConfig::port` field is a legacy alias for Summit
-/// channel and SocketCAN interface name; it will be retired in favour of
-/// variant-local fields (Issue A in the action plan).
+/// `SessionConfig::port` is kept as a serde-only backward-compat field; all
+/// internal code reads channel/iface from the variant directly.
 ///
 /// ## Exclusivity
 ///
@@ -139,18 +141,14 @@ impl fmt::Display for AdapterError {
 /// instance at a time.  For USB variants this is enforced by the OS (nusb
 /// exclusive claim).  For KCanNet it is enforced by kgate's 1-to-1 room
 /// pairing.  For SocketCAN an application-level PID lockfile is planned.
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, serde::Serialize)]
 pub enum AdapterKind {
     /// Summit PCAN-USB dongle accessed via `host-can` / libPCBUSB.
     ///
     /// macOS and Windows only.  On Linux, Summit hardware appears as a
     /// SocketCAN interface via the `peak_usb` kernel driver — use `SocketCan`
     /// on Linux instead.
-    ///
-    /// `port` (top-level `SessionConfig` field) is the channel number:
-    /// `"1"` for PCAN_USBBUS1, etc.  This will move into the variant
-    /// as `Summit { channel: String }` (Issue A).
-    Summit,
+    Summit { channel: String },
     /// KCAN dongle connected over USB.  Hardware timestamp source: FDCAN RXTS
     /// latched at CAN frame SOF (100 ns, `hardware_timestamp_ns: Some`).
     ///
@@ -161,14 +159,10 @@ pub enum AdapterKind {
     /// `gs_usb` driver).  Host-approximate timestamps (`hardware_timestamp_ns:
     /// None`).
     ///
-    /// `port` (top-level `SessionConfig` field) holds the interface name
-    /// (`"can0"`, `"can1"`, …).  This will move into the variant as
-    /// `SocketCan { iface: String }` (Issue A).
-    ///
     /// On Linux, Summit and Apex hardware may appear here via their kernel
     /// drivers.  The connect UI merges those into their respective adapter
     /// entries to avoid showing the same device twice.
-    SocketCan,
+    SocketCan { iface: String },
     /// Apex USB-CAN device, cross-platform userspace USB driver (nusb).
     /// Host-approximate timestamps (`hardware_timestamp_ns: None`).
     ///
@@ -187,6 +181,59 @@ pub enum AdapterKind {
     /// `K1:r/<6-char-room-id>/<43-base64url-pubkey>` string scanned from
     /// the device's e-paper QR code (ADR-0017 in rustyepd).
     KCanNet { uri: String },
+}
+
+// ── Serde backward-compat helper ──────────────────────────────────────────────
+// Old configs serialised Summit/SocketCan as unit-variant strings.
+// New configs use struct variants.  Accept both without a custom Visitor.
+#[derive(serde::Deserialize)]
+#[serde(untagged)]
+enum CompatAdapterKind {
+    Legacy(LegacyUnitKind),
+    Structured(StructuredAdapterKind),
+}
+
+#[derive(serde::Deserialize)]
+enum LegacyUnitKind {
+    Summit,
+    SocketCan,
+}
+
+#[derive(serde::Deserialize)]
+enum StructuredAdapterKind {
+    Summit { channel: String },
+    SocketCan { iface: String },
+    KCan { serial: Option<String> },
+    Apex { serial: Option<String> },
+    KCanNet { uri: String },
+}
+
+impl From<CompatAdapterKind> for AdapterKind {
+    fn from(c: CompatAdapterKind) -> Self {
+        match c {
+            // Old unit-variant strings deserialise with empty channel/iface;
+            // PersistedConfig::load_from fills them from the sibling `port` field.
+            CompatAdapterKind::Legacy(LegacyUnitKind::Summit) => AdapterKind::Summit {
+                channel: String::new(),
+            },
+            CompatAdapterKind::Legacy(LegacyUnitKind::SocketCan) => AdapterKind::SocketCan {
+                iface: String::new(),
+            },
+            CompatAdapterKind::Structured(k) => match k {
+                StructuredAdapterKind::Summit { channel } => AdapterKind::Summit { channel },
+                StructuredAdapterKind::SocketCan { iface } => AdapterKind::SocketCan { iface },
+                StructuredAdapterKind::KCan { serial } => AdapterKind::KCan { serial },
+                StructuredAdapterKind::Apex { serial } => AdapterKind::Apex { serial },
+                StructuredAdapterKind::KCanNet { uri } => AdapterKind::KCanNet { uri },
+            },
+        }
+    }
+}
+
+impl<'de> serde::Deserialize<'de> for AdapterKind {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        Ok(AdapterKind::from(CompatAdapterKind::deserialize(d)?))
+    }
 }
 
 /// Uniform interface for sending and receiving CAN frames.
@@ -212,6 +259,13 @@ pub trait CanAdapter {
         None
     }
 
+    /// USB serial string for this device, if available.
+    ///
+    /// Returns `Some(serial)` for KCAN dongles; `None` for all other adapters.
+    fn serial(&self) -> Option<&str> {
+        None
+    }
+
     /// Whether the adapter reports its own transmitted frames back through
     /// [`Self::recv`] as TX echoes (`ReceivedFrame::is_tx_echo == true`).
     ///
@@ -232,12 +286,12 @@ pub trait CanAdapter {
 /// that will use it — some backends are not `Sync`).
 pub fn open_adapter(
     kind: &AdapterKind,
-    port: &str,
     baud: u32,
     listen_only: bool,
 ) -> Result<Box<dyn CanAdapter>, AdapterError> {
     match kind {
-        AdapterKind::Summit => {
+        AdapterKind::Summit { channel } => {
+            let port = channel.as_str();
             #[cfg(not(target_os = "linux"))]
             {
                 // Prevent libPCBUSB.dylib from ever being dlclose'd.
@@ -307,16 +361,19 @@ pub fn open_adapter(
             let adapter = kcan::KCanAdapter::open(serial.as_deref(), baud, listen_only)?;
             Ok(Box::new(adapter))
         }
-        AdapterKind::SocketCan => {
+        AdapterKind::SocketCan { iface } => {
             #[cfg(target_os = "linux")]
             {
-                let adapter = socketcan_adapter::SocketCanAdapter::open(port)?;
+                let adapter = socketcan_adapter::SocketCanAdapter::open(iface)?;
                 Ok(Box::new(adapter))
             }
             #[cfg(not(target_os = "linux"))]
-            Err(AdapterError::NotFound(
-                "SocketCAN is only available on Linux.".into(),
-            ))
+            {
+                let _ = iface;
+                Err(AdapterError::NotFound(
+                    "SocketCAN is only available on Linux.".into(),
+                ))
+            }
         }
         AdapterKind::Apex { serial } => {
             // On Linux, prefer a kernel driver: if a SocketCAN interface backed
@@ -352,9 +409,9 @@ pub fn open_adapter(
 ///
 /// Instead, detect Summit hardware by scanning USB devices for Summit System's
 /// vendor ID (0x0C72), which is safe to call repeatedly from any thread.
-pub fn probe_adapter_kind(kind: &AdapterKind, _port: &str, _baud: u32) -> bool {
+pub fn probe_adapter_kind(kind: &AdapterKind) -> bool {
     match kind {
-        AdapterKind::Summit => {
+        AdapterKind::Summit { .. } => {
             #[cfg(target_os = "macos")]
             {
                 // nusb::list_devices() on macOS 26 Tahoe triggers a stack
@@ -389,13 +446,16 @@ pub fn probe_adapter_kind(kind: &AdapterKind, _port: &str, _baud: u32) -> bool {
             false
         }
         AdapterKind::KCan { serial } => kcan::KCanAdapter::probe(serial.as_deref()),
-        AdapterKind::SocketCan => {
+        AdapterKind::SocketCan { iface } => {
             #[cfg(target_os = "linux")]
             {
-                socketcan_adapter::SocketCanAdapter::probe(_port)
+                socketcan_adapter::SocketCanAdapter::probe(iface)
             }
             #[cfg(not(target_os = "linux"))]
-            false
+            {
+                let _ = iface;
+                false
+            }
         }
         AdapterKind::Apex { serial } => {
             // Present if either a kernel-driver SocketCAN interface (Linux) or

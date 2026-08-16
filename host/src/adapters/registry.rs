@@ -24,6 +24,17 @@ pub struct AdapterParams {
     pub serial: Option<String>,
 }
 
+/// Three-state adapter availability (Issue B).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AdapterAvailability {
+    /// Detected and not claimed by any other process.
+    Available,
+    /// Detected but already claimed by another running RustyCAN instance.
+    InUse,
+    /// Not detected (device absent or interface down).
+    Absent,
+}
+
 /// A self-describing CAN adapter backend the UI and config can discover at
 /// runtime instead of hardcoding it into an enum + `match`.
 pub trait CanAdapterFactory: Send + Sync {
@@ -36,14 +47,19 @@ pub trait CanAdapterFactory: Send + Sync {
     /// Open a live adapter with the collected connection parameters.
     fn open(&self, params: &AdapterParams) -> Result<Box<dyn CanAdapter>, AdapterError>;
 
-    /// Presence check for the connect-form adapter list.
+    /// Three-state presence check for the connect-form adapter list.
     ///
-    /// Returns `true` if the adapter is detected (e.g. USB enumerated or
-    /// SocketCAN interface present in `/sys/class/net`).  Returns `false` when
-    /// absent.  This is a reachability check only — it does not detect whether
-    /// another process has already claimed the adapter.  This will be replaced
-    /// by `AdapterAvailability` (`Available / InUse / Absent`) when the
-    /// three-state probe lands (Issue B).
+    /// Default delegates to [`Self::probe`] → `Available` / `Absent`.
+    /// Override to add `InUse` detection (SocketCAN does this via lockfile).
+    fn availability(&self, params: &AdapterParams) -> AdapterAvailability {
+        if self.probe(params) {
+            AdapterAvailability::Available
+        } else {
+            AdapterAvailability::Absent
+        }
+    }
+
+    /// Legacy boolean probe; used by the default `availability()` impl.
     fn probe(&self, params: &AdapterParams) -> bool;
 }
 
@@ -98,7 +114,9 @@ impl BuiltinFactory {
     const SUMMIT: Self = Self {
         id: "summit",
         name: "Summit",
-        make_kind: |_| AdapterKind::Summit,
+        make_kind: |p| AdapterKind::Summit {
+            channel: p.port.clone(),
+        },
     };
     const KCAN: Self = Self {
         id: "kcan",
@@ -110,7 +128,9 @@ impl BuiltinFactory {
     const SOCKETCAN: Self = Self {
         id: "socketcan",
         name: "SocketCAN",
-        make_kind: |_| AdapterKind::SocketCan,
+        make_kind: |p| AdapterKind::SocketCan {
+            iface: p.port.clone(),
+        },
     };
     const APEX: Self = Self {
         id: "apex",
@@ -131,10 +151,33 @@ impl CanAdapterFactory for BuiltinFactory {
     }
 
     fn open(&self, p: &AdapterParams) -> Result<Box<dyn CanAdapter>, AdapterError> {
-        open_adapter(&(self.make_kind)(p), &p.port, p.baud, p.listen_only)
+        open_adapter(&(self.make_kind)(p), p.baud, p.listen_only)
+    }
+
+    fn availability(&self, p: &AdapterParams) -> AdapterAvailability {
+        // SocketCAN: check lockfile to detect InUse before falling back to probe.
+        #[cfg(target_os = "linux")]
+        if self.id == "socketcan" {
+            let iface = &p.port;
+            let lock_path = std::path::PathBuf::from(format!("/tmp/rustycan-{iface}.pid"));
+            if lock_path.exists() {
+                if let Ok(contents) = std::fs::read_to_string(&lock_path) {
+                    if let Ok(pid) = contents.trim().parse::<u32>() {
+                        if std::path::Path::new(&format!("/proc/{pid}")).exists() {
+                            return AdapterAvailability::InUse;
+                        }
+                    }
+                }
+            }
+        }
+        if self.probe(p) {
+            AdapterAvailability::Available
+        } else {
+            AdapterAvailability::Absent
+        }
     }
 
     fn probe(&self, p: &AdapterParams) -> bool {
-        probe_adapter_kind(&(self.make_kind)(p), &p.port, p.baud)
+        probe_adapter_kind(&(self.make_kind)(p))
     }
 }
